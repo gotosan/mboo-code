@@ -1,6 +1,17 @@
 spring:
   application:
     name: mboo-code
+  datasource:
+    driver-class-name: org.sqlite.JDBC
+    url: jdbc:sqlite:${user.home}/.mboo/mboo_data.sqlite
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/sqlite/schema.sql
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
 
 # springdoc-openapi项目配置
 springdoc:
@@ -10,7 +21,6 @@ springdoc:
     - group: 'default'
       paths-to-match: '/**'
       packages-to-scan: com.yu.mboocode
-# knife4j的增强配置，不需要增强可以不配
 knife4j:
   enable: true
   setting:

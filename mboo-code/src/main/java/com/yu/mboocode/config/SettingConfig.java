@@ -1,0 +1,55 @@
+package com.yu.mboocode.config;
+
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONException;
+import com.alibaba.fastjson2.JSONWriter;
+import com.yu.mboocode.util.CommonUtil;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+@Configuration
+public class SettingConfig {
+    private static final String SETTING_FILE_NAME = "setting.json";
+
+    @Bean
+    public Setting setting() {
+        Path settingPath = Path.of(CommonUtil.getAppDataDir(), SETTING_FILE_NAME);
+
+        // CommonUtil.getAppDataDir() 目录在启动项目时创建，这里不用考虑不存在
+
+        if (Files.notExists(settingPath)) {
+            writeDefaultSetting(settingPath, Setting.defaultSetting());
+        }
+
+        return readSetting(settingPath);
+    }
+
+    private void writeDefaultSetting(Path settingPath, Setting setting) {
+        try {
+            String json = JSON.toJSONString(setting, JSONWriter.Feature.PrettyFormat);
+            Files.writeString(settingPath, json, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("创建默认配置文件失败: " + settingPath, e);
+        }
+    }
+
+    private Setting readSetting(Path settingPath) {
+        try {
+            String json = Files.readString(settingPath, StandardCharsets.UTF_8);
+            Setting setting = JSON.parseObject(json, Setting.class);
+            if (setting == null) {
+                return Setting.defaultSetting();
+            }
+            return setting;
+        } catch (JSONException e) {
+            throw new IllegalStateException("配置文件格式错误: " + settingPath, e);
+        } catch (IOException e) {
+            throw new IllegalStateException("读取配置文件失败: " + settingPath, e);
+        }
+    }
+}
