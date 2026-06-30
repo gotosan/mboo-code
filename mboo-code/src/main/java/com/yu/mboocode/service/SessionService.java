@@ -7,7 +7,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
-    public void addSession() {
+    public void getOrNewSession() {
 
     }
 }

@@ -24,9 +24,6 @@ public class SessionController {
     @Operation(summary = "聊天")
     @PostMapping("/chat")
     public Flux<ServerSentEvent<String>> chat(@RequestBody ChatReq chatReq) {
-        if (chatReq.sessionId() == null) {
-
-        }
 
 
         ChatRequestParameters chatRequestParameters = OpenAiResponsesChatRequestParameters
