@@ -1,0 +1,49 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.1.0'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.yu'
+version = '0.0.1-SNAPSHOT'
+description = 'mboo-code'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'com.github.xiaoymin:knife4j-openapi3-jakarta-spring-boot-starter:4.5.0'
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testCompileOnly 'org.projectlombok:lombok'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testAnnotationProcessor 'org.projectlombok:lombok'
+
+    implementation("com.alibaba.fastjson2:fastjson2:2.0.62")
+
+    implementation 'dev.langchain4j:langchain4j-open-ai:1.16.3'
+    implementation 'dev.langchain4j:langchain4j:1.16.3'
+    implementation 'dev.langchain4j:langchain4j-reactor:1.16.3-beta26'
+
+    implementation 'com.baomidou:mybatis-plus-spring-boot4-starter:3.5.16'
+    implementation 'org.xerial:sqlite-jdbc:3.53.2.0'
+
+    implementation("cn.hutool:hutool-all:5.8.46")
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging {
+        showStandardStreams = true
+    }
+}
