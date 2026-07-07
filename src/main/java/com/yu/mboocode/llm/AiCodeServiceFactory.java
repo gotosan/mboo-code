@@ -1,6 +1,8 @@
 package com.yu.mboocode.llm;
 
 import com.yu.mboocode.config.Setting;
+import com.yu.mboocode.llm.listener.MyAiServiceCompletedListener;
+import com.yu.mboocode.llm.listener.MyChatModelListener;
 import com.yu.mboocode.llm.tool.WeatherTool;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -10,6 +12,8 @@ import dev.langchain4j.service.AiServices;
 import jakarta.annotation.Resource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
 
 @Configuration
 public class AiCodeServiceFactory {
@@ -24,6 +28,7 @@ public class AiCodeServiceFactory {
                 .apiKey(setting.getApiKey())
                 .baseUrl(setting.getBaseUrl())
                 .modelName("")
+                .listeners(List.of(new MyChatModelListener()))
                 .build();
 
         StreamingChatModel streamingChatModel = OpenAiResponsesStreamingChatModel
@@ -31,13 +36,15 @@ public class AiCodeServiceFactory {
                 .apiKey(setting.getApiKey())
                 .baseUrl(setting.getBaseUrl())
                 .modelName("")
+                .listeners(List.of(new MyChatModelListener()))
                 .build();
 
         return AiServices
                 .builder(AiCodeService.class)
                 .chatModel(chatModel)
                 .streamingChatModel(streamingChatModel)
-                .tools(new WeatherTool())
+                .tools(List.of(new WeatherTool()))
+                .registerListeners(new MyAiServiceCompletedListener())
                 .build();
     }
 }

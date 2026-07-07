@@ -14,6 +14,7 @@ import com.yu.mboocode.session.model.Sessions;
 import com.yu.mboocode.util.DateTimeUtil;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.Triple;
 import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Service;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
+@Slf4j
 public class TurnService {
     @Resource
     private AiCodeService aiCodeService;
@@ -176,6 +178,8 @@ public class TurnService {
 
     @Transactional
     public List<SessionEvent> failTurn(SessionTurn turn, Throwable error, String partialText, long durationMs) {
+        //todo 后续根据错误类型返回对应报错
+        log.error("failTurn turn:{}", turn, error);
         String errorMessage = error.getMessage() == null ? "" : error.getMessage();
         SessionEvent assistantMessageEvent = sessionEventStore.appendSession(
                 turn.transcriptUri(),

@@ -9,6 +9,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
+import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
@@ -21,6 +22,7 @@ import reactor.core.publisher.Flux;
 @Tag(name = "会话")
 @RestController
 @RequestMapping("/session")
+@Slf4j
 public class SessionController {
     @Resource
     private TurnService turnService;
@@ -31,6 +33,10 @@ public class SessionController {
         return Flux.defer(() ->
                 turnService.chatTurn(req.sessionId(), req.userMessage(), LLMUtil.buildChatReq(req.modelName(), req.reasoningEffort()))
                         .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build())
-        );
+        ).onErrorResume(error -> {
+            //todo
+            log.error("错误", error);
+            return Flux.empty();
+        });
     }
 }
