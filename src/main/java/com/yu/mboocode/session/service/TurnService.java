@@ -2,6 +2,8 @@ package com.yu.mboocode.session.service;
 
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.extra.spring.SpringUtil;
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.AiCodeService;
@@ -12,7 +14,9 @@ import com.yu.mboocode.session.model.SessionEvent;
 import com.yu.mboocode.session.model.SessionTurn;
 import com.yu.mboocode.session.model.Sessions;
 import com.yu.mboocode.util.DateTimeUtil;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
+import dev.langchain4j.service.tool.ToolExecution;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.Triple;
@@ -20,6 +24,7 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
 
 import java.util.List;
 import java.util.Map;
@@ -36,53 +41,12 @@ public class TurnService {
     private SessionService sessionService;
 
     public Flux<@NonNull SessionEvent> chatTurn(String sessionId, String userMessage, ChatRequestParameters params) {
-        Triple<SessionTurn, SessionEvent, SessionEvent> triple = startTurn(sessionId, userMessage);
-
-        SessionTurn turn = triple.getLeft();
-        AtomicBoolean turnClosed = new AtomicBoolean(false);
-        long startNano = System.nanoTime();
-        StringBuilder finalText = new StringBuilder();
-
         // 轮次开始和用户消息
-        Flux<@NonNull SessionEvent> turnStartedEvents = Flux.fromIterable(List.of(triple.getMiddle(), triple.getRight()));
+        Triple<SessionTurn, SessionEvent, SessionEvent> triple = SpringUtil.getBean(this.getClass()).startTurn(sessionId, userMessage);
+        // 模型消息、工具调用等
+        Flux<@NonNull SessionEvent> chatStream = chatStream(triple.getLeft(), userMessage, params);
 
-        // 增量消息
-        Flux<@NonNull SessionEvent> assistantTextEvents = aiCodeService.chatStream(userMessage, params)
-                .doOnNext(finalText::append)
-                .map(chunk ->
-                        SessionEvent.builder()
-                                .eventId(IdUtil.getSnowflakeNextIdStr())
-                                .sessionId(turn.sessionId())
-                                .turnId(turn.turnId())
-                                .type(SessionEventType.ASSISTANT_MESSAGE_DELTA)
-                                .source(SessionEventSource.ASSISTANT)
-                                .createdAt(DateTimeUtil.now())
-                                .payload(payload(
-                                        "messageId", turn.assistantMessageId(),
-                                        "text", chunk
-                                ))
-                                .meta(Map.of("runtimeOnly", true))
-                                .build()
-                )
-                .concatWith(Flux.defer(() -> {
-                    if (turnClosed.compareAndSet(false, true)) {
-                        return Flux.fromIterable(completeTurn(turn, finalText.toString(), DateTimeUtil.durationMs(startNano)));
-                    }
-                    return Flux.empty();
-                }))
-                .onErrorResume(error -> {
-                    if (turnClosed.compareAndSet(false, true)) {
-                        return Flux.fromIterable(failTurn(turn, error, finalText.toString(), DateTimeUtil.durationMs(startNano)));
-                    }
-                    return Flux.empty();
-                });
-
-        return turnStartedEvents.concatWith(assistantTextEvents)
-                .doOnCancel(() -> {
-                    if (turnClosed.compareAndSet(false, true)) {
-                        cancelTurn(turn, "client_disconnected", finalText.toString(), DateTimeUtil.durationMs(startNano));
-                    }
-                });
+        return Flux.fromIterable(List.of(triple.getMiddle(), triple.getRight())).concatWith(chatStream);
     }
 
     @Transactional
@@ -146,6 +110,159 @@ public class TurnService {
             payload.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
         }
         return payload;
+    }
+
+    private Flux<@NonNull SessionEvent> chatStream(
+            SessionTurn turn,
+            String userMessage,
+            ChatRequestParameters params
+    ) {
+        AtomicBoolean turnClosed = new AtomicBoolean(false);
+        StringBuffer finalText = new StringBuffer();
+        long startNano = System.nanoTime();
+
+        return Flux.create(sink -> {
+            sink.onCancel(() -> {
+                if (turnClosed.compareAndSet(false, true)) {
+                    SpringUtil.getBean(this.getClass()).cancelTurn(turn, "client_disconnected", finalText.toString(), DateTimeUtil.durationMs(startNano));
+                }
+            });
+
+            try {
+                aiCodeService.chatStream(userMessage, params)
+                        .onPartialResponse(chunk -> { // 文本流
+                            if (isTurnClosed(turnClosed, sink)) {
+                                return;
+                            }
+                            finalText.append(chunk);
+                            emitEvent(sink, SessionEvent.builder()
+                                    .eventId(IdUtil.getSnowflakeNextIdStr())
+                                    .sessionId(turn.sessionId())
+                                    .turnId(turn.turnId())
+                                    .type(SessionEventType.ASSISTANT_MESSAGE_DELTA)
+                                    .source(SessionEventSource.ASSISTANT)
+                                    .createdAt(DateTimeUtil.now())
+                                    .payload(payload(
+                                            "messageId", turn.assistantMessageId(),
+                                            "text", chunk
+                                    ))
+                                    .meta(Map.of("runtimeOnly", true))
+                                    .build());
+                        })
+                        .beforeToolExecution(beforeToolExecution -> { // 工具执行前
+                            if (isTurnClosed(turnClosed, sink)) {
+                                return;
+                            }
+                            ToolExecutionRequest request = beforeToolExecution.request();
+                            String toolCallId = request.id();
+
+                            emitEvent(sink, sessionEventStore.appendSession(
+                                    turn.transcriptUri(),
+                                    turn.sessionId(),
+                                    turn.turnId(),
+                                    SessionEventType.TOOL_CALL_STARTED,
+                                    SessionEventSource.ASSISTANT,
+                                    sessionEventStore.payload(
+                                            "messageId", turn.assistantMessageId(),
+                                            "toolCallId", toolCallId,
+                                            "toolName", request.name(),
+                                            "arguments", request.arguments()
+                                    )));
+                        })
+                        .onToolExecuted(toolExecution -> { //工具执行后
+                            if (isTurnClosed(turnClosed, sink)) {
+                                return;
+                            }
+                            ToolExecutionRequest request = toolExecution.request();
+                            String toolCallId = request.id();
+
+                            boolean failed = toolExecution.hasFailed();
+                            String resultPreview = toolResultPreview(toolExecution);
+
+                            emitEvent(sink, sessionEventStore.appendSession(
+                                    turn.transcriptUri(),
+                                    turn.sessionId(),
+                                    turn.turnId(),
+                                    failed ? SessionEventType.TOOL_CALL_FAILED : SessionEventType.TOOL_CALL_COMPLETED,
+                                    SessionEventSource.SYSTEM,
+                                    sessionEventStore.payload(
+                                            "messageId", turn.assistantMessageId(),
+                                            "toolCallId", toolCallId,
+                                            "toolName", request.name(),
+                                            "arguments", request.arguments(),
+                                            "resultPreview", resultPreview,
+                                            "errorCode", failed ? "TOOL_EXECUTION_FAILED" : null,
+                                            "errorMessage", failed ? resultPreview : null,
+                                            "durationMs", toolExecution.duration().toMillis()
+                                    )
+                            ));
+                        })
+                        .onCompleteResponse(_ -> { // 流完成时
+                            if (turnClosed.compareAndSet(false, true)) {
+                                SpringUtil.getBean(this.getClass()).completeTurn(turn, finalText.toString(), DateTimeUtil.durationMs(startNano)).forEach(event -> emitEvent(sink, event));
+                                if (!sink.isCancelled()) {
+                                    sink.complete();
+                                }
+                            }
+                        })
+                        // 出错时
+                        .onError(error -> failSinkTurn(sink, turn, turnClosed, error, finalText.toString(), DateTimeUtil.durationMs(startNano)))
+                        .start();
+            } catch (Throwable error) {
+                failSinkTurn(sink, turn, turnClosed, error, finalText.toString(), DateTimeUtil.durationMs(startNano));
+            }
+        }, FluxSink.OverflowStrategy.BUFFER);
+    }
+
+    private boolean isTurnClosed(AtomicBoolean turnClosed, FluxSink<@NonNull SessionEvent> sink) {
+        return turnClosed.get() || sink.isCancelled();
+    }
+
+    private void failSinkTurn(FluxSink<@NonNull SessionEvent> sink, SessionTurn turn, AtomicBoolean turnClosed, Throwable error, String partialText, long durationMs) {
+        if (turnClosed.compareAndSet(false, true)) {
+            SpringUtil.getBean(this.getClass()).failTurn(turn, error, partialText, durationMs).forEach(event -> emitEvent(sink, event));
+            if (!sink.isCancelled()) {
+                sink.complete();
+            }
+        }
+    }
+
+    private void emitEvent(FluxSink<@NonNull SessionEvent> sink, SessionEvent event) {
+        if (!sink.isCancelled()) {
+            sink.next(event);
+        }
+    }
+
+    private String toolResultPreview(ToolExecution toolExecution) {
+        //todo 返回结构处理
+        try {
+            Object resultObject = toolExecution.resultObject();
+            if (resultObject instanceof CharSequence text) {
+                return truncateToolText(text.toString());
+            }
+            if (resultObject != null) {
+                return truncateToolText(JSON.toJSONString(resultObject));
+            }
+        } catch (RuntimeException ignored) {
+            // 部分工具只提供文本结果，继续尝试读取 result()。
+        }
+
+        try {
+            return truncateToolText(toolExecution.result());
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    private String truncateToolText(String text) {
+        if (text == null) {
+            return "";
+        }
+        int maxLength = 2000;
+        if (text.length() <= maxLength) {
+            return text;
+        }
+        return text.substring(0, maxLength) + "\n...（结果已截断）";
     }
 
     @Transactional

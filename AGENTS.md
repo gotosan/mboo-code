@@ -11,8 +11,7 @@
 
 ## 代码风格
 - 工具类尽量使用hutool库
-- 业务异常抛com.yu.mboocode.common.exception.ServiceException
-- 部分可以抽象的地方可以询问后抽象
+- 如果复用少，就尽量不要抽单独方法，影响代码阅读
 
 ## 单元测试
 - 仅在我主动要求之后写单元测试

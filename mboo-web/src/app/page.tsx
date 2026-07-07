@@ -7,6 +7,7 @@ import type {
   AssistantMessageState,
   ChatReq,
   SessionEvent,
+  ToolCallStatus,
 } from "@/lib/session-types";
 
 const STORAGE_KEYS = {
@@ -24,9 +25,25 @@ const REASONING_OPTIONS = [
   { value: "high", label: "高" },
 ];
 
+const TOOL_LABELS: Record<string, string> = {
+  getWeather: "查询天气",
+};
+
 type MessageRole = "user" | "assistant" | "system";
 type MessageState = AssistantMessageState | "streaming" | "error" | "info";
 type ConnectionState = "idle" | "running" | "error";
+
+type ToolCallView = {
+  id: string;
+  turnId?: string | null;
+  toolName: string;
+  status: ToolCallStatus;
+  argumentsText: string;
+  resultPreview: string;
+  errorMessage: string;
+  durationMs?: number;
+  createdAt?: string;
+};
 
 type ChatMessage = {
   id: string;
@@ -35,6 +52,7 @@ type ChatMessage = {
   state?: MessageState;
   turnId?: string | null;
   createdAt?: string;
+  toolCalls?: ToolCallView[];
 };
 
 export default function Home() {
@@ -140,6 +158,52 @@ export default function Home() {
     [],
   );
 
+  const upsertToolCall = useCallback((event: SessionEvent) => {
+    const toolCall = toToolCallView(event);
+    const messageId =
+      payloadString(event, "messageId") ||
+      (event.turnId ? `assistant_${event.turnId}` : event.eventId);
+
+    setMessages((current) => {
+      const index = current.findIndex((message) => message.id === messageId);
+
+      if (index < 0) {
+        return [
+          ...current,
+          {
+            id: messageId,
+            role: "assistant",
+            text: "",
+            state: "streaming",
+            turnId: event.turnId,
+            createdAt: event.createdAt,
+            toolCalls: [toolCall],
+          },
+        ];
+      }
+
+      const next = [...current];
+      const existing = next[index];
+      const toolCalls = existing.toolCalls ?? [];
+      const toolIndex = toolCalls.findIndex((item) => item.id === toolCall.id);
+      const nextToolCalls =
+        toolIndex < 0
+          ? [...toolCalls, toolCall]
+          : toolCalls.map((item, itemIndex) =>
+              itemIndex === toolIndex ? { ...item, ...toolCall } : item,
+            );
+
+      next[index] = {
+        ...existing,
+        state: existing.state ?? "streaming",
+        turnId: existing.turnId || event.turnId,
+        createdAt: existing.createdAt || event.createdAt,
+        toolCalls: nextToolCalls,
+      };
+      return next;
+    });
+  }, []);
+
   const markStreamingMessagesInterrupted = useCallback(() => {
     setMessages((current) =>
       current.map((message) => {
@@ -187,6 +251,11 @@ export default function Home() {
         return;
       }
 
+      if (isToolCallEvent(event)) {
+        upsertToolCall(event);
+        return;
+      }
+
       if (event.type === "ASSISTANT_MESSAGE") {
         const assistantState = toAssistantState(payloadString(event, "state"));
         upsertMessage({
@@ -225,6 +294,7 @@ export default function Home() {
       addSystemMessage,
       appendAssistantDelta,
       markStreamingMessagesInterrupted,
+      upsertToolCall,
       upsertMessage,
     ],
   );
@@ -514,7 +584,74 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       <p className="whitespace-pre-wrap break-words text-sm leading-6 text-zinc-900">
         {message.text || " "}
       </p>
+      {message.toolCalls && message.toolCalls.length > 0 ? (
+        <ToolTrace toolCalls={message.toolCalls} />
+      ) : null}
     </article>
+  );
+}
+
+function ToolTrace({ toolCalls }: { toolCalls: ToolCallView[] }) {
+  return (
+    <details className="mt-3 border-t border-zinc-200 pt-3">
+      <summary className="cursor-pointer select-none text-xs font-semibold text-zinc-600">
+        工具调用 · {toolCalls.length}
+      </summary>
+      <div className="mt-3 divide-y divide-zinc-100">
+        {toolCalls.map((toolCall) => {
+          const toolLabel = getToolLabel(toolCall.toolName);
+
+          return (
+            <div key={toolCall.id} className="py-3 first:pt-0 last:pb-0">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-zinc-900">
+                    {toolLabel}
+                  </p>
+                  {toolLabel !== toolCall.toolName ? (
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {toolCall.toolName}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {typeof toolCall.durationMs === "number" ? (
+                    <span className="text-xs text-zinc-500">
+                      {toolCall.durationMs}ms
+                    </span>
+                  ) : null}
+                  <span
+                    className={`rounded-sm px-2 py-1 text-xs ${toolStatusClassName(
+                      toolCall.status,
+                    )}`}
+                  >
+                    {toolStatusLabel(toolCall.status)}
+                  </span>
+                </div>
+              </div>
+
+              {toolCall.argumentsText ? (
+                <pre className="mt-2 max-h-36 overflow-auto rounded-sm bg-zinc-50 p-2 text-xs leading-5 text-zinc-700">
+                  {toolCall.argumentsText}
+                </pre>
+              ) : null}
+
+              {toolCall.resultPreview ? (
+                <pre className="mt-2 max-h-44 overflow-auto rounded-sm bg-zinc-50 p-2 text-xs leading-5 text-zinc-700">
+                  {toolCall.resultPreview}
+                </pre>
+              ) : null}
+
+              {toolCall.errorMessage ? (
+                <p className="mt-2 break-words text-xs leading-5 text-rose-700">
+                  {toolCall.errorMessage}
+                </p>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </details>
   );
 }
 
@@ -556,6 +693,77 @@ function getStatusView(state: ConnectionState, activeTurnId: string | null) {
 function payloadString(event: SessionEvent, key: string) {
   const value = event.payload?.[key];
   return typeof value === "string" ? value : "";
+}
+
+function payloadNumber(event: SessionEvent, key: string) {
+  const value = event.payload?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function payloadDisplayText(event: SessionEvent, key: string) {
+  const value = event.payload?.[key];
+
+  if (value === null || typeof value === "undefined") {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function isToolCallEvent(event: SessionEvent) {
+  return (
+    event.type === "TOOL_CALL_STARTED" ||
+    event.type === "TOOL_CALL_COMPLETED" ||
+    event.type === "TOOL_CALL_FAILED" ||
+    event.type === "TOOL_CALL_UNKNOWN"
+  );
+}
+
+function toToolCallView(event: SessionEvent): ToolCallView {
+  const toolName = payloadString(event, "toolName") || "unknown_tool";
+  return {
+    id: payloadString(event, "toolCallId") || event.eventId,
+    turnId: event.turnId,
+    toolName,
+    status: toToolCallStatus(event.type),
+    argumentsText: payloadDisplayText(event, "arguments"),
+    resultPreview: payloadDisplayText(event, "resultPreview"),
+    errorMessage: payloadString(event, "errorMessage"),
+    durationMs: payloadNumber(event, "durationMs"),
+    createdAt: event.createdAt,
+  };
+}
+
+function getToolLabel(toolName: string) {
+  return TOOL_LABELS[toolName] ?? toolName;
+}
+
+function toToolCallStatus(type: SessionEvent["type"]): ToolCallStatus {
+  if (type === "TOOL_CALL_COMPLETED") {
+    return "completed";
+  }
+
+  if (type === "TOOL_CALL_FAILED") {
+    return "failed";
+  }
+
+  if (type === "TOOL_CALL_UNKNOWN") {
+    return "unknown";
+  }
+
+  return "started";
 }
 
 function toAssistantState(value: string): AssistantMessageState {
@@ -633,4 +841,36 @@ function stateLabel(state: MessageState) {
   }
 
   return "提示";
+}
+
+function toolStatusLabel(status: ToolCallStatus) {
+  if (status === "started") {
+    return "运行中";
+  }
+
+  if (status === "completed") {
+    return "完成";
+  }
+
+  if (status === "failed") {
+    return "失败";
+  }
+
+  return "状态未知";
+}
+
+function toolStatusClassName(status: ToolCallStatus) {
+  if (status === "started") {
+    return "bg-amber-50 text-amber-800";
+  }
+
+  if (status === "completed") {
+    return "bg-emerald-50 text-emerald-800";
+  }
+
+  if (status === "failed") {
+    return "bg-rose-50 text-rose-800";
+  }
+
+  return "bg-zinc-100 text-zinc-700";
 }

@@ -9,7 +9,7 @@
 - 服务重启后识别未完成 turn。
 - 作为后续 agent 构建聊天记忆的事实来源。
 
-当前版本优先简单落地，不记录完整模型输入快照，不落地工具调用事件，也不兼容或迁移旧 JSONL 数据。
+当前版本优先简单落地，不记录完整模型输入快照，不设计具体工具清单和授权闭环，但会落地通用工具调用事件，支撑前端展示 agent 执行过程。
 
 ## 核心概念
 
@@ -84,6 +84,10 @@ public enum EventType {
     TURN_SUPERSEDED,
 
     USER_MESSAGE,
+    TOOL_CALL_STARTED,
+    TOOL_CALL_COMPLETED,
+    TOOL_CALL_FAILED,
+    TOOL_CALL_UNKNOWN,
     ASSISTANT_MESSAGE_DELTA,
     ASSISTANT_MESSAGE
 }
@@ -183,6 +187,40 @@ public class AssistantTextDeltaPayload {
 - `client_disconnected`
 - `model_error`
 
+### 工具调用
+
+工具事件作为独立事件写入 JSONL，并通过 SSE 推给前端。第一版只定义通用事件协议，不在这里规定具体工具列表、敏感操作授权和工具参数 schema。
+
+后端只输出稳定的 `toolName`，前端根据 `toolName` 控制展示文案、图标和国际化，不在事件 payload 中额外保存 `displayName`。
+
+开始：
+
+```json
+{
+  "messageId": "msg_...",
+  "toolCallId": "call_...",
+  "toolName": "getWeather",
+  "arguments": "{\"city\":\"杭州\"}"
+}
+```
+
+完成：
+
+```json
+{
+  "messageId": "msg_...",
+  "toolCallId": "call_...",
+  "toolName": "getWeather",
+  "arguments": "{\"city\":\"杭州\"}",
+  "resultPreview": "杭州当前天气：...",
+  "errorCode": null,
+  "errorMessage": null,
+  "durationMs": 1234
+}
+```
+
+失败时使用 `TOOL_CALL_FAILED`，`errorCode` 和 `errorMessage` 记录失败摘要。服务恢复或回放时如果发现 `TOOL_CALL_STARTED` 没有对应的 completed/failed/unknown，可以追加 `TOOL_CALL_UNKNOWN` 表示结果不可确认。
+
 ## 流式文本策略
 
 assistant 的流式文本增量只通过 SSE 推给前端，并在后端内存中累积，不作为 JSONL 主事件持久化。
@@ -191,9 +229,11 @@ assistant 的流式文本增量只通过 SSE 推给前端，并在后端内存�
 
 1. 写入 `TURN_STARTED` 和 `USER_MESSAGE`。
 2. 模型流式返回增量时，后端通过 SSE 固定事件名 `session_event` 发送 `SessionEvent`，前端按 `data.type=ASSISTANT_MESSAGE_DELTA` 处理文本增量。
-3. 后端用内存 buffer 累积已流出的文本。
-4. 模型正常完成时写入 `ASSISTANT_MESSAGE state=completed`。
-5. 用户主动停止、客户端断开或出现可捕获错误时写入 `ASSISTANT_MESSAGE state=interrupted`。
+3. 模型准备执行工具时写入并推送 `TOOL_CALL_STARTED`。
+4. 工具执行结束时写入并推送 `TOOL_CALL_COMPLETED` 或 `TOOL_CALL_FAILED`。
+5. 后端用内存 buffer 累积已流出的文本。
+6. 模型正常完成时写入 `ASSISTANT_MESSAGE state=completed`。
+7. 用户主动停止、客户端断开或出现可捕获错误时写入 `ASSISTANT_MESSAGE state=interrupted`。
 
 如果模型没有返回任何文本增量但正常结束，前端应以最终的 `ASSISTANT_MESSAGE` 创建或更新助手消息。
 
@@ -220,11 +260,10 @@ assistant 的流式文本增量只通过 SSE 推给前端，并在后端内存�
 
 ## 后续扩展
 
-当前版本不落地工具调用、上下文快照或完整模型调用事件。后续需要更强审计和工具恢复能力时，可以追加：
+当前版本不落地上下文快照或完整模型调用事件。后续需要更强审计和恢复能力时，可以追加：
 
-- `TOOL_CALL`：记录 agent 实际接受并执行的工具名和参数。
-- `TOOL_RESULT`：记录工具返回给模型的内容、成功状态、错误信息和耗时。
 - `CONTEXT_SNAPSHOT_CREATED`：记录某次真正发给模型的完整上下文。
+- `APPROVAL_REQUIRED` / `APPROVAL_RESOLVED`：记录敏感工具调用的用户授权过程。
 
 这些扩展应保持独立事件，不塞进 `ASSISTANT_MESSAGE`。
 
@@ -257,7 +296,7 @@ session.snapshot.json
 - `eventId` 使用雪花 ID，负责唯一、去重、分页游标和索引查询。
 - 当前版本不记录完整模型输入快照，只保留用户消息和最终助手消息作为会话记忆基础。
 - `modelInput` 只作为运行时内存上下文，不写入 JSONL。
-- 工具调用参数和工具结果未来会独立建模，不塞进 `ASSISTANT_MESSAGE`。
+- 工具调用参数和工具结果使用独立工具事件建模，不塞进 `ASSISTANT_MESSAGE`。
 - 旧 JSONL 数据不再做兼容读取或迁移，按新版事件结构重新生成。
 - assistant 流式增量不逐条写入 JSONL，只通过 SSE 推给前端，并在后端内存中暂存。
 - 服务硬崩溃时，尚未落盘的内存文本可以丢失，恢复逻辑基于最近一个完整 JSONL 事件继续。

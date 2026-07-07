@@ -6,11 +6,17 @@ export type SessionEventType =
   | "TURN_SUPERSEDED"
   | "USER_MESSAGE"
   | "ASSISTANT_MESSAGE"
+  | "TOOL_CALL_STARTED"
+  | "TOOL_CALL_COMPLETED"
+  | "TOOL_CALL_FAILED"
+  | "TOOL_CALL_UNKNOWN"
   | "ASSISTANT_MESSAGE_DELTA";
 
 export type SessionEventSource = "USER" | "ASSISTANT" | "SYSTEM";
 
 export type AssistantMessageState = "completed" | "interrupted";
+
+export type ToolCallStatus = "started" | "completed" | "failed" | "unknown";
 
 export type ChatReq = {
   modelName: string;
