@@ -11,10 +11,10 @@ public enum SessionEventType {
     TURN_SUPERSEDED, //turn 已被新 turn 替换
     USER_MESSAGE, //用户消息
     ASSISTANT_MESSAGE, //助手消息
+
     TOOL_CALL_STARTED, //工具调用已开始
     TOOL_CALL_COMPLETED, //工具调用已完成
     TOOL_CALL_FAILED, //工具调用失败
-    TOOL_CALL_UNKNOWN, //工具调用状态未知
 
     //以下为运行时事件，不写入 JSONL
     ASSISTANT_MESSAGE_DELTA, //助手文本增量，运行时事件
