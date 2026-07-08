@@ -13,7 +13,7 @@ LangChain4j AI Service 已经接入现有 `WeatherTool`，并且 `TokenStream` �
 ## 决策
 
 - `AiCodeService.chatStream` 返回 `TokenStream`，由业务层订阅回调并转换为统一 `SessionEvent`。
-- 新增 `TOOL_CALL_STARTED`、`TOOL_CALL_COMPLETED`、`TOOL_CALL_FAILED`、`TOOL_CALL_UNKNOWN`。
+- 新增 `TOOL_CALL_STARTED`、`TOOL_CALL_COMPLETED`、`TOOL_CALL_FAILED`。
 - 工具事件独立写入 JSONL，不塞进 `ASSISTANT_MESSAGE`。
 - 前端把工具事件按 `turnId + toolCallId` 归并为助手消息内的可折叠工具轨迹。
 - 本阶段不新增具体 code agent 工具列表，不新增 `APPROVAL_REQUIRED` / `APPROVAL_RESOLVED` 和授权接口。

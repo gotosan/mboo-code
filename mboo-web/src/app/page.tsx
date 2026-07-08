@@ -726,8 +726,7 @@ function isToolCallEvent(event: SessionEvent) {
   return (
     event.type === "TOOL_CALL_STARTED" ||
     event.type === "TOOL_CALL_COMPLETED" ||
-    event.type === "TOOL_CALL_FAILED" ||
-    event.type === "TOOL_CALL_UNKNOWN"
+    event.type === "TOOL_CALL_FAILED"
   );
 }
 
@@ -757,10 +756,6 @@ function toToolCallStatus(type: SessionEvent["type"]): ToolCallStatus {
 
   if (type === "TOOL_CALL_FAILED") {
     return "failed";
-  }
-
-  if (type === "TOOL_CALL_UNKNOWN") {
-    return "unknown";
   }
 
   return "started";
@@ -856,7 +851,7 @@ function toolStatusLabel(status: ToolCallStatus) {
     return "失败";
   }
 
-  return "状态未知";
+  return "运行中";
 }
 
 function toolStatusClassName(status: ToolCallStatus) {
@@ -872,5 +867,5 @@ function toolStatusClassName(status: ToolCallStatus) {
     return "bg-rose-50 text-rose-800";
   }
 
-  return "bg-zinc-100 text-zinc-700";
+  return "bg-amber-50 text-amber-800";
 }

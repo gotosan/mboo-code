@@ -87,7 +87,6 @@ public enum EventType {
     TOOL_CALL_STARTED,
     TOOL_CALL_COMPLETED,
     TOOL_CALL_FAILED,
-    TOOL_CALL_UNKNOWN,
     ASSISTANT_MESSAGE_DELTA,
     ASSISTANT_MESSAGE
 }
@@ -219,7 +218,7 @@ public class AssistantTextDeltaPayload {
 }
 ```
 
-失败时使用 `TOOL_CALL_FAILED`，`errorCode` 和 `errorMessage` 记录失败摘要。服务恢复或回放时如果发现 `TOOL_CALL_STARTED` 没有对应的 completed/failed/unknown，可以追加 `TOOL_CALL_UNKNOWN` 表示结果不可确认。
+失败时使用 `TOOL_CALL_FAILED`，`errorCode` 和 `errorMessage` 记录失败摘要。服务恢复或回放时如果发现 `TOOL_CALL_STARTED` 没有对应的 completed/failed，本阶段暂不追加额外事件，后续再补充不可确认状态的处理。
 
 ## 流式文本策略
 

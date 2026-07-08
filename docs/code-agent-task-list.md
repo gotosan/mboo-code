@@ -85,7 +85,6 @@
   - `MODEL_CALL_FAILED`
   - `TOOL_CALL_STARTED`
   - `TOOL_CALL_COMPLETED`
-  - `TOOL_CALL_UNKNOWN`
 - 新增 `EventStore`：
   - 追加写入 JSONL。
   - 按文件行顺序 replay。
@@ -142,7 +141,7 @@
 - 工具执行前后都必须写事件：
   - 执行前写 `TOOL_CALL_STARTED`。
   - 执行后写 `TOOL_CALL_COMPLETED`。
-  - 服务恢复时发现 started 但没有 completed 的工具，写 `TOOL_CALL_UNKNOWN`。
+  - 服务恢复时发现 started 但没有 completed 的工具，本阶段先按未完成状态处理，后续再补充不可确认状态事件。
 
 ### 7. 第一批工具
 
@@ -241,7 +240,7 @@
 - 服务启动或请求继续执行时，读取 JSONL。
 - 找到最后一个未完成 turn。
 - 检查是否有 `TOOL_CALL_STARTED` 但没有 `TOOL_CALL_COMPLETED`。
-- 对这些工具写入 `TOOL_CALL_UNKNOWN`。
+- 本阶段先不为这些工具补写额外事件，只在恢复逻辑中识别为结果未确认。
 - 由 agent 根据上下文判断继续、重试、失败或请求用户确认。
 - 不自动重试有副作用的工具。
 
