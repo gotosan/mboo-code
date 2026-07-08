@@ -4,7 +4,6 @@ import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.extra.spring.SpringUtil;
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.AiCodeService;
 import com.yu.mboocode.session.enums.SessionEventSource;
@@ -13,6 +12,17 @@ import com.yu.mboocode.session.mapper.SessionEventStore;
 import com.yu.mboocode.session.model.SessionEvent;
 import com.yu.mboocode.session.model.SessionTurn;
 import com.yu.mboocode.session.model.Sessions;
+import com.yu.mboocode.session.payload.AssistantMessageDeltaPayload;
+import com.yu.mboocode.session.payload.AssistantMessagePayload;
+import com.yu.mboocode.session.payload.SessionEventPayload;
+import com.yu.mboocode.session.payload.ToolCallCompletedPayload;
+import com.yu.mboocode.session.payload.ToolCallFailedPayload;
+import com.yu.mboocode.session.payload.ToolCallStartedPayload;
+import com.yu.mboocode.session.payload.TurnCancelledPayload;
+import com.yu.mboocode.session.payload.TurnCompletedPayload;
+import com.yu.mboocode.session.payload.TurnFailedPayload;
+import com.yu.mboocode.session.payload.TurnStartedPayload;
+import com.yu.mboocode.session.payload.UserMessagePayload;
 import com.yu.mboocode.util.DateTimeUtil;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
@@ -73,10 +83,10 @@ public class TurnService {
                     turnId,
                     SessionEventType.TURN_STARTED,
                     SessionEventSource.SYSTEM,
-                    sessionEventStore.payload(
-                            "trigger", "user",
-                            "userMessageId", userMessageId
-                    )
+                    TurnStartedPayload.builder()
+                            .trigger("user")
+                            .userMessageId(userMessageId)
+                            .build()
             );
             userMessageEvent = sessionEventStore.appendSession(
                     session.getTranscriptUri(),
@@ -84,11 +94,10 @@ public class TurnService {
                     turnId,
                     SessionEventType.USER_MESSAGE,
                     SessionEventSource.USER,
-                    sessionEventStore.payload(
-                            "messageId", userMessageId,
-                            "text", userMessage,
-                            "attachments", List.of()
-                    )
+                    UserMessagePayload.builder()
+                            .messageId(userMessageId)
+                            .text(userMessage)
+                            .build()
             );
         } catch (RuntimeException e) {
             sessionService.clearActiveTurn(session.getId()); //错误时清理当前活跃轮次
@@ -102,14 +111,6 @@ public class TurnService {
                 userMessageId,
                 assistantMessageId
         ), turnStartedEvent, userMessageEvent);
-    }
-
-    private JSONObject payload(Object... keyValues) {
-        JSONObject payload = new JSONObject();
-        for (int i = 0; i + 1 < keyValues.length; i += 2) {
-            payload.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
-        }
-        return payload;
     }
 
     private Flux<@NonNull SessionEvent> chatStream(
@@ -142,10 +143,10 @@ public class TurnService {
                                     .type(SessionEventType.ASSISTANT_MESSAGE_DELTA)
                                     .source(SessionEventSource.ASSISTANT)
                                     .createdAt(DateTimeUtil.now())
-                                    .payload(payload(
-                                            "messageId", turn.assistantMessageId(),
-                                            "text", chunk
-                                    ))
+                                    .payload(AssistantMessageDeltaPayload.builder()
+                                            .messageId(turn.assistantMessageId())
+                                            .text(chunk)
+                                            .build())
                                     .meta(Map.of("runtimeOnly", true))
                                     .build());
                         })
@@ -162,12 +163,12 @@ public class TurnService {
                                     turn.turnId(),
                                     SessionEventType.TOOL_CALL_STARTED,
                                     SessionEventSource.ASSISTANT,
-                                    sessionEventStore.payload(
-                                            "messageId", turn.assistantMessageId(),
-                                            "toolCallId", toolCallId,
-                                            "toolName", request.name(),
-                                            "arguments", request.arguments()
-                                    )));
+                                    ToolCallStartedPayload.builder()
+                                            .messageId(turn.assistantMessageId())
+                                            .toolCallId(toolCallId)
+                                            .toolName(request.name())
+                                            .arguments(request.arguments())
+                                            .build()));
                         })
                         .onToolExecuted(toolExecution -> { //工具执行后
                             if (isTurnClosed(turnClosed, sink)) {
@@ -178,23 +179,39 @@ public class TurnService {
 
                             boolean failed = toolExecution.hasFailed();
                             String resultPreview = toolResultPreview(toolExecution);
+                            SessionEventType eventType;
+                            SessionEventPayload payload;
+                            if (failed) {
+                                eventType = SessionEventType.TOOL_CALL_FAILED;
+                                payload = ToolCallFailedPayload.builder()
+                                        .messageId(turn.assistantMessageId())
+                                        .toolCallId(toolCallId)
+                                        .toolName(request.name())
+                                        .arguments(request.arguments())
+                                        .resultPreview(resultPreview)
+                                        .errorCode("TOOL_EXECUTION_FAILED")
+                                        .errorMessage(resultPreview)
+                                        .durationMs(toolExecution.duration().toMillis())
+                                        .build();
+                            } else {
+                                eventType = SessionEventType.TOOL_CALL_COMPLETED;
+                                payload = ToolCallCompletedPayload.builder()
+                                        .messageId(turn.assistantMessageId())
+                                        .toolCallId(toolCallId)
+                                        .toolName(request.name())
+                                        .arguments(request.arguments())
+                                        .resultPreview(resultPreview)
+                                        .durationMs(toolExecution.duration().toMillis())
+                                        .build();
+                            }
 
                             emitEvent(sink, sessionEventStore.appendSession(
                                     turn.transcriptUri(),
                                     turn.sessionId(),
                                     turn.turnId(),
-                                    failed ? SessionEventType.TOOL_CALL_FAILED : SessionEventType.TOOL_CALL_COMPLETED,
+                                    eventType,
                                     SessionEventSource.SYSTEM,
-                                    sessionEventStore.payload(
-                                            "messageId", turn.assistantMessageId(),
-                                            "toolCallId", toolCallId,
-                                            "toolName", request.name(),
-                                            "arguments", request.arguments(),
-                                            "resultPreview", resultPreview,
-                                            "errorCode", failed ? "TOOL_EXECUTION_FAILED" : null,
-                                            "errorMessage", failed ? resultPreview : null,
-                                            "durationMs", toolExecution.duration().toMillis()
-                                    )
+                                    payload
                             ));
                         })
                         .onCompleteResponse(_ -> { // 流完成时
@@ -273,13 +290,13 @@ public class TurnService {
                 turn.turnId(),
                 SessionEventType.ASSISTANT_MESSAGE,
                 SessionEventSource.ASSISTANT,
-                sessionEventStore.payload(
-                        "messageId", turn.assistantMessageId(),
-                        "state", "completed",
-                        "text", finalText,
-                        "finishReason", "stop",
-                        "durationMs", durationMs
-                )
+                AssistantMessagePayload.builder()
+                        .messageId(turn.assistantMessageId())
+                        .state("completed")
+                        .text(finalText)
+                        .finishReason("stop")
+                        .durationMs(durationMs)
+                        .build()
         );
         SessionEvent turnCompletedEvent = sessionEventStore.appendSession(
                 turn.transcriptUri(),
@@ -287,7 +304,9 @@ public class TurnService {
                 turn.turnId(),
                 SessionEventType.TURN_COMPLETED,
                 SessionEventSource.SYSTEM,
-                sessionEventStore.payload("durationMs", durationMs)
+                TurnCompletedPayload.builder()
+                        .durationMs(durationMs)
+                        .build()
         );
         sessionService.clearActiveTurn(turn.sessionId());
         return List.of(assistantMessageEvent, turnCompletedEvent);
@@ -304,14 +323,14 @@ public class TurnService {
                 turn.turnId(),
                 SessionEventType.ASSISTANT_MESSAGE,
                 SessionEventSource.ASSISTANT,
-                sessionEventStore.payload(
-                        "messageId", turn.assistantMessageId(),
-                        "state", "interrupted",
-                        "text", partialText,
-                        "reason", "model_error",
-                        "errorMessage", errorMessage,
-                        "durationMs", durationMs
-                )
+                AssistantMessagePayload.builder()
+                        .messageId(turn.assistantMessageId())
+                        .state("interrupted")
+                        .text(partialText)
+                        .reason("model_error")
+                        .errorMessage(errorMessage)
+                        .durationMs(durationMs)
+                        .build()
         );
         SessionEvent turnFailedEvent = sessionEventStore.appendSession(
                 turn.transcriptUri(),
@@ -319,11 +338,11 @@ public class TurnService {
                 turn.turnId(),
                 SessionEventType.TURN_FAILED,
                 SessionEventSource.SYSTEM,
-                sessionEventStore.payload(
-                        "errorCode", error.getClass().getSimpleName(),
-                        "errorMessage", errorMessage,
-                        "durationMs", durationMs
-                )
+                TurnFailedPayload.builder()
+                        .errorCode(error.getClass().getSimpleName())
+                        .errorMessage(errorMessage)
+                        .durationMs(durationMs)
+                        .build()
         );
         sessionService.clearActiveTurn(turn.sessionId());
         return List.of(assistantMessageEvent, turnFailedEvent);
@@ -337,14 +356,13 @@ public class TurnService {
                 turn.turnId(),
                 SessionEventType.ASSISTANT_MESSAGE,
                 SessionEventSource.ASSISTANT,
-                sessionEventStore.payload(
-                        "messageId", turn.assistantMessageId(),
-                        "state", "interrupted",
-                        "text", partialText,
-                        "reason", reason,
-                        "errorMessage", null,
-                        "durationMs", durationMs
-                )
+                AssistantMessagePayload.builder()
+                        .messageId(turn.assistantMessageId())
+                        .state("interrupted")
+                        .text(partialText)
+                        .reason(reason)
+                        .durationMs(durationMs)
+                        .build()
         );
         SessionEvent turnCancelledEvent = sessionEventStore.appendSession(
                 turn.transcriptUri(),
@@ -352,10 +370,10 @@ public class TurnService {
                 turn.turnId(),
                 SessionEventType.TURN_CANCELLED,
                 SessionEventSource.SYSTEM,
-                sessionEventStore.payload(
-                        "reason", reason,
-                        "durationMs", durationMs
-                )
+                TurnCancelledPayload.builder()
+                        .reason(reason)
+                        .durationMs(durationMs)
+                        .build()
         );
         sessionService.clearActiveTurn(turn.sessionId());
         return List.of(assistantMessageEvent, turnCancelledEvent);

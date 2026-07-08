@@ -1,8 +1,8 @@
 package com.yu.mboocode.session.model;
 
-import com.alibaba.fastjson2.JSONObject;
 import com.yu.mboocode.session.enums.SessionEventSource;
 import com.yu.mboocode.session.enums.SessionEventType;
+import com.yu.mboocode.session.payload.SessionEventPayload;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Builder;
 import lombok.Data;
@@ -35,7 +35,7 @@ public class SessionEvent {
     private String createdAt;
 
     @Schema(description = "事件主体，结构由事件类型决定")
-    private JSONObject payload;
+    private SessionEventPayload payload;
 
     @Schema(description = "事件扩展元数据")
     private Map<String, Object> meta;

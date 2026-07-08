@@ -52,7 +52,7 @@ public class SessionEvent {
 
     private OffsetDateTime createdAt;
 
-    private JsonNode payload;
+    private SessionEventPayload payload;
 
     private Map<String, Object> meta;
 }
@@ -132,7 +132,6 @@ public class TurnSupersededPayload {
 public class UserMessagePayload {
     private String messageId;
     private String text;
-    private List<AttachmentRef> attachments;
 }
 ```
 

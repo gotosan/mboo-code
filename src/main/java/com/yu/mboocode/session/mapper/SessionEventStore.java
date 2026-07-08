@@ -9,6 +9,9 @@ import com.yu.mboocode.session.dto.ConversationMessage;
 import com.yu.mboocode.session.enums.SessionEventSource;
 import com.yu.mboocode.session.enums.SessionEventType;
 import com.yu.mboocode.session.model.SessionEvent;
+ import com.yu.mboocode.session.payload.AssistantMessagePayload;
+import com.yu.mboocode.session.payload.SessionEventPayload;
+import com.yu.mboocode.session.payload.UserMessagePayload;
 import com.yu.mboocode.util.CommonUtil;
 import com.yu.mboocode.util.DateTimeUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +26,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -58,12 +62,13 @@ public class SessionEventStore {
             String turnId,
             SessionEventType type,
             SessionEventSource source,
-            JSONObject payload
+            SessionEventPayload payload
     ) {
         Path path = resolveTranscriptPath(transcriptUri);
         try {
             Files.createDirectories(path.getParent());
             repairJsonlLastLine(path);
+            type.validatePayload(payload);
 
             SessionEvent event = SessionEvent.builder()
                     .eventId(IdUtil.getSnowflakeNextIdStr())
@@ -72,7 +77,7 @@ public class SessionEventStore {
                     .type(type)
                     .source(source)
                     .createdAt(DateTimeUtil.now())
-                    .payload(payload == null ? new JSONObject() : payload)
+                    .payload(payload)
                     .meta(Collections.emptyMap())
                     .build();
 
@@ -105,7 +110,7 @@ public class SessionEventStore {
                     continue;
                 }
                 try {
-                    events.add(JSON.parseObject(line, SessionEvent.class));
+                    events.add(parseEventLine(line));
                 } catch (JSONException e) {
                     if (i == lines.size() - 1) { //最后一行错误不处理，后续写入会处理掉
                         break;
@@ -129,13 +134,16 @@ public class SessionEventStore {
     public List<ConversationMessage> replayConversation(String transcriptUri) {
         return readSession(transcriptUri).stream().filter(event -> event.getPayload() != null).map(event ->
                         switch (event.getType()) {
-                            case SessionEventType.USER_MESSAGE ->
-                                    new ConversationMessage("user", event.getPayload().getString("text"));
+                            case SessionEventType.USER_MESSAGE -> {
+                                UserMessagePayload payload = (UserMessagePayload) event.getPayload();
+                                yield new ConversationMessage("user", payload.getText());
+                            }
                             case SessionEventType.ASSISTANT_MESSAGE -> {
-                                if (!Objects.equals(event.getPayload().getString("state"), "completed")) {
+                                AssistantMessagePayload payload = (AssistantMessagePayload) event.getPayload();
+                                if (!Objects.equals(payload.getState(), "completed")) {
                                     yield null;
                                 }
-                                yield new ConversationMessage("assistant", event.getPayload().getString("text"));
+                                yield new ConversationMessage("assistant", payload.getText());
                             }
                             default -> null;
                         })
@@ -143,14 +151,51 @@ public class SessionEventStore {
     }
 
     /**
-     * 快速构造事件 payload，避免调用方重复创建 JSONObject。
+     * 先读取事件类型，再用类型绑定的 payload 类反序列化事件主体。
      */
-    public JSONObject payload(Object... keyValues) {
-        JSONObject payload = new JSONObject();
-        for (int i = 0; i + 1 < keyValues.length; i += 2) {
-            payload.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
+    @SuppressWarnings("unchecked")
+    private SessionEvent parseEventLine(String line) {
+        JSONObject json = JSON.parseObject(line);
+        String typeName = json.getString("type");
+        if (typeName == null) {
+            throw new JSONException("事件类型不能为空");
         }
-        return payload;
+
+        SessionEventType type;
+        try {
+            type = SessionEventType.valueOf(typeName);
+        } catch (IllegalArgumentException e) {
+            throw new JSONException("未知事件类型: " + typeName);
+        }
+
+        SessionEventSource source;
+        try {
+            source = SessionEventSource.valueOf(json.getString("source"));
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new JSONException("未知事件来源: " + json.getString("source"));
+        }
+
+        JSONObject payloadJson = json.getJSONObject("payload");
+        SessionEventPayload payload = payloadJson == null
+                ? JSON.parseObject("{}", type.getPayloadClass())
+                : payloadJson.toJavaObject(type.getPayloadClass());
+        try {
+            type.validatePayload(payload);
+        } catch (IllegalArgumentException e) {
+            throw new JSONException(e.getMessage());
+        }
+
+        Map<String, Object> meta = json.getObject("meta", Map.class);
+        return SessionEvent.builder()
+                .eventId(json.getString("eventId"))
+                .sessionId(json.getString("sessionId"))
+                .turnId(json.getString("turnId"))
+                .type(type)
+                .source(source)
+                .createdAt(json.getString("createdAt"))
+                .payload(payload)
+                .meta(meta == null ? Collections.emptyMap() : meta)
+                .build();
     }
 
     // 修复 JSONL 日志文件最后一行可能的损坏
@@ -170,7 +215,7 @@ public class SessionEventStore {
         }
 
         try {
-            JSON.parseObject(lastLine, SessionEvent.class);
+            parseEventLine(lastLine);
         } catch (JSONException e) {
             List<String> validLines = lines.subList(0, lines.size() - 1);
             Files.write(path, validLines, StandardCharsets.UTF_8);

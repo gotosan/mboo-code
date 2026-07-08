@@ -55,6 +55,13 @@ type ChatMessage = {
   toolCalls?: ToolCallView[];
 };
 
+type ToolCallEvent = Extract<
+  SessionEvent,
+  {
+    type: "TOOL_CALL_STARTED" | "TOOL_CALL_COMPLETED" | "TOOL_CALL_FAILED";
+  }
+>;
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -158,10 +165,10 @@ export default function Home() {
     [],
   );
 
-  const upsertToolCall = useCallback((event: SessionEvent) => {
+  const upsertToolCall = useCallback((event: ToolCallEvent) => {
     const toolCall = toToolCallView(event);
     const messageId =
-      payloadString(event, "messageId") ||
+      event.payload.messageId ||
       (event.turnId ? `assistant_${event.turnId}` : event.eventId);
 
     setMessages((current) => {
@@ -236,9 +243,9 @@ export default function Home() {
 
       if (event.type === "USER_MESSAGE") {
         upsertMessage({
-          id: payloadString(event, "messageId") || event.eventId,
+          id: event.payload.messageId || event.eventId,
           role: "user",
-          text: payloadString(event, "text"),
+          text: event.payload.text,
           turnId: event.turnId,
           createdAt: event.createdAt,
         });
@@ -246,8 +253,8 @@ export default function Home() {
       }
 
       if (event.type === "ASSISTANT_MESSAGE_DELTA") {
-        const messageId = payloadString(event, "messageId") || event.eventId;
-        appendAssistantDelta(messageId, payloadString(event, "text"), event);
+        const messageId = event.payload.messageId || event.eventId;
+        appendAssistantDelta(messageId, event.payload.text, event);
         return;
       }
 
@@ -257,12 +264,11 @@ export default function Home() {
       }
 
       if (event.type === "ASSISTANT_MESSAGE") {
-        const assistantState = toAssistantState(payloadString(event, "state"));
         upsertMessage({
-          id: payloadString(event, "messageId") || event.eventId,
+          id: event.payload.messageId || event.eventId,
           role: "assistant",
-          text: payloadString(event, "text"),
-          state: assistantState,
+          text: event.payload.text,
+          state: event.payload.state,
           turnId: event.turnId,
           createdAt: event.createdAt,
         });
@@ -283,7 +289,7 @@ export default function Home() {
       }
 
       if (event.type === "TURN_FAILED") {
-        const message = payloadString(event, "errorMessage") || "本轮会话执行失败";
+        const message = event.payload.errorMessage || "本轮会话执行失败";
         setConnectionState("error");
         setErrorMessage(message);
         setActiveTurnId(null);
@@ -690,19 +696,7 @@ function getStatusView(state: ConnectionState, activeTurnId: string | null) {
   };
 }
 
-function payloadString(event: SessionEvent, key: string) {
-  const value = event.payload?.[key];
-  return typeof value === "string" ? value : "";
-}
-
-function payloadNumber(event: SessionEvent, key: string) {
-  const value = event.payload?.[key];
-  return typeof value === "number" ? value : undefined;
-}
-
-function payloadDisplayText(event: SessionEvent, key: string) {
-  const value = event.payload?.[key];
-
+function payloadDisplayText(value: unknown) {
   if (value === null || typeof value === "undefined") {
     return "";
   }
@@ -722,7 +716,7 @@ function payloadDisplayText(event: SessionEvent, key: string) {
   }
 }
 
-function isToolCallEvent(event: SessionEvent) {
+function isToolCallEvent(event: SessionEvent): event is ToolCallEvent {
   return (
     event.type === "TOOL_CALL_STARTED" ||
     event.type === "TOOL_CALL_COMPLETED" ||
@@ -730,17 +724,25 @@ function isToolCallEvent(event: SessionEvent) {
   );
 }
 
-function toToolCallView(event: SessionEvent): ToolCallView {
-  const toolName = payloadString(event, "toolName") || "unknown_tool";
+function toToolCallView(event: ToolCallEvent): ToolCallView {
+  const { payload } = event;
+  const toolName = payload.toolName || "unknown_tool";
   return {
-    id: payloadString(event, "toolCallId") || event.eventId,
+    id: payload.toolCallId || event.eventId,
     turnId: event.turnId,
     toolName,
     status: toToolCallStatus(event.type),
-    argumentsText: payloadDisplayText(event, "arguments"),
-    resultPreview: payloadDisplayText(event, "resultPreview"),
-    errorMessage: payloadString(event, "errorMessage"),
-    durationMs: payloadNumber(event, "durationMs"),
+    argumentsText: payloadDisplayText(payload.arguments),
+    resultPreview:
+      event.type === "TOOL_CALL_STARTED"
+        ? ""
+        : payloadDisplayText(event.payload.resultPreview),
+    errorMessage:
+      event.type === "TOOL_CALL_STARTED"
+        ? ""
+        : event.payload.errorMessage || "",
+    durationMs:
+      event.type === "TOOL_CALL_STARTED" ? undefined : event.payload.durationMs,
     createdAt: event.createdAt,
   };
 }
@@ -749,7 +751,7 @@ function getToolLabel(toolName: string) {
   return TOOL_LABELS[toolName] ?? toolName;
 }
 
-function toToolCallStatus(type: SessionEvent["type"]): ToolCallStatus {
+function toToolCallStatus(type: ToolCallEvent["type"]): ToolCallStatus {
   if (type === "TOOL_CALL_COMPLETED") {
     return "completed";
   }
@@ -759,10 +761,6 @@ function toToolCallStatus(type: SessionEvent["type"]): ToolCallStatus {
   }
 
   return "started";
-}
-
-function toAssistantState(value: string): AssistantMessageState {
-  return value === "interrupted" ? "interrupted" : "completed";
 }
 
 async function readErrorMessage(response: Response) {
