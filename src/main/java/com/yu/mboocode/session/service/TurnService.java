@@ -6,23 +6,14 @@ import cn.hutool.extra.spring.SpringUtil;
 import com.alibaba.fastjson2.JSON;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.AiCodeService;
+import com.yu.mboocode.session.dto.ActiveTurnRuntime;
 import com.yu.mboocode.session.enums.SessionEventSource;
 import com.yu.mboocode.session.enums.SessionEventType;
 import com.yu.mboocode.session.mapper.SessionEventStore;
 import com.yu.mboocode.session.model.SessionEvent;
 import com.yu.mboocode.session.model.SessionTurn;
 import com.yu.mboocode.session.model.Sessions;
-import com.yu.mboocode.session.payload.AssistantMessageDeltaPayload;
-import com.yu.mboocode.session.payload.AssistantMessagePayload;
-import com.yu.mboocode.session.payload.SessionEventPayload;
-import com.yu.mboocode.session.payload.ToolCallCompletedPayload;
-import com.yu.mboocode.session.payload.ToolCallFailedPayload;
-import com.yu.mboocode.session.payload.ToolCallStartedPayload;
-import com.yu.mboocode.session.payload.TurnCancelledPayload;
-import com.yu.mboocode.session.payload.TurnCompletedPayload;
-import com.yu.mboocode.session.payload.TurnFailedPayload;
-import com.yu.mboocode.session.payload.TurnStartedPayload;
-import com.yu.mboocode.session.payload.UserMessagePayload;
+import com.yu.mboocode.session.payload.*;
 import com.yu.mboocode.util.DateTimeUtil;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
@@ -36,8 +27,10 @@ import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
@@ -49,6 +42,8 @@ public class TurnService {
     private SessionEventStore sessionEventStore;
     @Resource
     private SessionService sessionService;
+
+    private final ConcurrentMap<String, ActiveTurnRuntime> activeTurns = new ConcurrentHashMap<>();
 
     public Flux<@NonNull SessionEvent> chatTurn(String sessionId, String userMessage, ChatRequestParameters params) {
         // 轮次开始和用户消息
@@ -123,16 +118,16 @@ public class TurnService {
         long startNano = System.nanoTime();
 
         return Flux.create(sink -> {
+            ActiveTurnRuntime runtime = new ActiveTurnRuntime(turn, turnClosed, finalText, startNano, sink);
+            activeTurns.put(turn.sessionId(), runtime);
             sink.onCancel(() -> {
-                if (turnClosed.compareAndSet(false, true)) {
-                    SpringUtil.getBean(this.getClass()).cancelTurn(turn, "client_disconnected", finalText.toString(), DateTimeUtil.durationMs(startNano));
-                }
+                cancelRuntime(runtime, "client_disconnected");
             });
 
             try {
                 aiCodeService.chatStream(userMessage, params)
                         .onPartialResponse(chunk -> { // 文本流
-                            if (isTurnClosed(turnClosed, sink)) {
+                            if (isTurnClosed(runtime)) {
                                 return;
                             }
                             finalText.append(chunk);
@@ -147,11 +142,11 @@ public class TurnService {
                                             .messageId(turn.assistantMessageId())
                                             .text(chunk)
                                             .build())
-                                    .meta(Map.of("runtimeOnly", true))
+                                    .meta(Collections.emptyMap())
                                     .build());
                         })
                         .beforeToolExecution(beforeToolExecution -> { // 工具执行前
-                            if (isTurnClosed(turnClosed, sink)) {
+                            if (isTurnClosed(runtime)) {
                                 return;
                             }
                             ToolExecutionRequest request = beforeToolExecution.request();
@@ -171,7 +166,7 @@ public class TurnService {
                                             .build()));
                         })
                         .onToolExecuted(toolExecution -> { //工具执行后
-                            if (isTurnClosed(turnClosed, sink)) {
+                            if (isTurnClosed(runtime)) {
                                 return;
                             }
                             ToolExecutionRequest request = toolExecution.request();
@@ -216,9 +211,13 @@ public class TurnService {
                         })
                         .onCompleteResponse(_ -> { // 流完成时
                             if (turnClosed.compareAndSet(false, true)) {
-                                SpringUtil.getBean(this.getClass()).completeTurn(turn, finalText.toString(), DateTimeUtil.durationMs(startNano)).forEach(event -> emitEvent(sink, event));
-                                if (!sink.isCancelled()) {
-                                    sink.complete();
+                                try {
+                                    SpringUtil.getBean(this.getClass()).completeTurn(turn, finalText.toString(), DateTimeUtil.durationMs(startNano)).forEach(event -> emitEvent(sink, event));
+                                    if (!sink.isCancelled()) {
+                                        sink.complete();
+                                    }
+                                } finally {
+                                    activeTurns.remove(turn.sessionId(), runtime);
                                 }
                             }
                         })
@@ -231,17 +230,61 @@ public class TurnService {
         }, FluxSink.OverflowStrategy.BUFFER);
     }
 
-    private boolean isTurnClosed(AtomicBoolean turnClosed, FluxSink<@NonNull SessionEvent> sink) {
-        return turnClosed.get() || sink.isCancelled();
+    public boolean cancelActiveTurn(String sessionId, String reason) {
+        if (StrUtil.isBlank(sessionId)) {
+            return false;
+        }
+
+        ActiveTurnRuntime runtime = activeTurns.get(sessionId);
+        if (runtime != null) {
+            return cancelRuntime(runtime, reason);
+        }
+
+        Sessions session = sessionService.getById(sessionId);
+        if (session != null && StrUtil.isNotBlank(session.getActiveTurnId())) {
+            sessionService.clearActiveTurn(sessionId);
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isTurnClosed(ActiveTurnRuntime runtime) {
+        return runtime.turnClosed().get() || runtime.sink().isCancelled();
     }
 
     private void failSinkTurn(FluxSink<@NonNull SessionEvent> sink, SessionTurn turn, AtomicBoolean turnClosed, Throwable error, String partialText, long durationMs) {
         if (turnClosed.compareAndSet(false, true)) {
-            SpringUtil.getBean(this.getClass()).failTurn(turn, error, partialText, durationMs).forEach(event -> emitEvent(sink, event));
-            if (!sink.isCancelled()) {
-                sink.complete();
+            try {
+                SpringUtil.getBean(this.getClass()).failTurn(turn, error, partialText, durationMs).forEach(event -> emitEvent(sink, event));
+                if (!sink.isCancelled()) {
+                    sink.complete();
+                }
+            } finally {
+                activeTurns.remove(turn.sessionId());
             }
         }
+    }
+
+    private boolean cancelRuntime(ActiveTurnRuntime runtime, String reason) {
+        SessionTurn turn = runtime.turn();
+        if (runtime.turnClosed().compareAndSet(false, true)) {
+            try {
+                SpringUtil.getBean(this.getClass()).cancelTurn(
+                        turn,
+                        reason,
+                        runtime.finalText().toString(),
+                        DateTimeUtil.durationMs(runtime.startNano())
+                ).forEach(event -> emitEvent(runtime.sink(), event));
+                if (!runtime.sink().isCancelled()) {
+                    runtime.sink().complete();
+                }
+            } finally {
+                activeTurns.remove(turn.sessionId(), runtime);
+            }
+            return true;
+        }
+        activeTurns.remove(turn.sessionId(), runtime);
+        return false;
     }
 
     private void emitEvent(FluxSink<@NonNull SessionEvent> sink, SessionEvent event) {

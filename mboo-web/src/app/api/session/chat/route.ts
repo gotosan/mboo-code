@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE_URL = "http://localhost:8080";
+import { getApiBaseUrl, parseUpstreamErrorMessage } from "@/lib/backend-api";
 
 export const dynamic = "force-dynamic";
 
@@ -11,10 +11,7 @@ export async function POST(request: Request) {
     return Response.json({ message: "请求体不是有效 JSON" }, { status: 400 });
   }
 
-  const apiBaseUrl = (process.env.MBOO_API_BASE_URL || DEFAULT_API_BASE_URL).replace(
-    /\/+$/,
-    "",
-  );
+  const apiBaseUrl = getApiBaseUrl();
 
   try {
     const upstream = await fetch(`${apiBaseUrl}/session/chat`, {
@@ -61,22 +58,4 @@ export async function POST(request: Request) {
       { status: 502 },
     );
   }
-}
-
-function parseUpstreamErrorMessage(text: string) {
-  if (!text.trim()) {
-    return "后端没有返回会话事件流";
-  }
-
-  try {
-    const data = JSON.parse(text) as Record<string, unknown>;
-    const message = data.message || data.msg || data.error || data.exception;
-    if (typeof message === "string" && message.trim()) {
-      return message;
-    }
-  } catch {
-    return text.trim();
-  }
-
-  return text.trim();
 }

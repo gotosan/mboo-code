@@ -55,6 +55,29 @@ type ChatMessage = {
   toolCalls?: ToolCallView[];
 };
 
+type SessionStatus = "active" | "archived" | "deleted";
+
+type SessionInfo = {
+  id: string;
+  title: string;
+  status: SessionStatus;
+  transcriptUri?: string | null;
+  activeTurnId?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  archivedAt?: string | null;
+  deletedAt?: string | null;
+  metadataJson?: string | null;
+};
+
+type ApiResponse<T> = {
+  success?: boolean;
+  data?: T;
+  msg?: string;
+  message?: string;
+  exception?: string;
+};
+
 type ToolCallEvent = Extract<
   SessionEvent,
   {
@@ -64,6 +87,7 @@ type ToolCallEvent = Extract<
 
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [modelName, setModelName] = useState(DEFAULT_MODEL);
@@ -71,14 +95,27 @@ export default function Home() {
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
+  const [sessionMessage, setSessionMessage] = useState("");
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [titleDraft, setTitleDraft] = useState("");
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const currentSessionIdRef = useRef("");
+  const shouldLoadSessionRef = useRef(false);
+  const connectionStateRef = useRef<ConnectionState>("idle");
   const isRunning = connectionState === "running";
 
   useEffect(() => {
-    setSessionId(localStorage.getItem(STORAGE_KEYS.sessionId) ?? "");
+    const storedSessionId = localStorage.getItem(STORAGE_KEYS.sessionId) ?? "";
+    if (storedSessionId) {
+      shouldLoadSessionRef.current = true;
+      currentSessionIdRef.current = storedSessionId;
+      setSessionId(storedSessionId);
+    }
     setModelName(localStorage.getItem(STORAGE_KEYS.modelName) ?? DEFAULT_MODEL);
     setReasoningEffort(
       localStorage.getItem(STORAGE_KEYS.reasoningEffort) ?? "",
@@ -86,8 +123,13 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    currentSessionIdRef.current = sessionId;
     saveLocalValue(STORAGE_KEYS.sessionId, sessionId);
   }, [sessionId]);
+
+  useEffect(() => {
+    connectionStateRef.current = connectionState;
+  }, [connectionState]);
 
   useEffect(() => {
     saveLocalValue(STORAGE_KEYS.modelName, modelName);
@@ -224,8 +266,14 @@ export default function Home() {
 
   const handleSessionEvent = useCallback(
     (event: SessionEvent) => {
-      if (event.sessionId) {
+      const eventSessionId = event.sessionId || "";
+      const currentSessionId = currentSessionIdRef.current;
+
+      if (eventSessionId && !currentSessionId) {
+        currentSessionIdRef.current = eventSessionId;
         setSessionId(event.sessionId);
+      } else if (eventSessionId && eventSessionId !== currentSessionId) {
+        return;
       }
 
       if (event.turnId) {
@@ -305,6 +353,192 @@ export default function Home() {
     ],
   );
 
+  const refreshSessions = useCallback(async () => {
+    setIsLoadingSessions(true);
+    try {
+      const response = await fetch("/api/session/list", { cache: "no-store" });
+      const data = await readApiData<SessionInfo[]>(response);
+      setSessions(data ?? []);
+      setSessionMessage("");
+    } catch (error) {
+      setSessionMessage(toErrorMessage(error));
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }, []);
+
+  const loadSessionEvents = useCallback(async (nextSessionId: string) => {
+    if (!nextSessionId) {
+      return;
+    }
+
+    setIsLoadingHistory(true);
+    try {
+      const response = await fetch(
+        `/api/session/${encodeURIComponent(nextSessionId)}/events`,
+        { cache: "no-store" },
+      );
+      const events = await readApiData<SessionEvent[]>(response);
+      currentSessionIdRef.current = nextSessionId;
+      setSessionId(nextSessionId);
+      setMessages(reduceSessionEventsToMessages(events ?? []));
+      setInput("");
+      setErrorMessage("");
+      setSessionMessage("");
+      setEditingSessionId(null);
+      setConnectionState((current) => (current === "running" ? current : "idle"));
+      if (connectionStateRef.current !== "running") {
+        setActiveTurnId(null);
+      }
+    } catch (error) {
+      setSessionMessage(toErrorMessage(error));
+      setMessages([]);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSessions();
+  }, [refreshSessions]);
+
+  useEffect(() => {
+    if (!sessionId || !shouldLoadSessionRef.current) {
+      return;
+    }
+
+    shouldLoadSessionRef.current = false;
+    void loadSessionEvents(sessionId);
+  }, [loadSessionEvents, sessionId]);
+
+  const openSession = useCallback(
+    async (nextSessionId: string) => {
+      if (!nextSessionId || nextSessionId === currentSessionIdRef.current) {
+        return;
+      }
+
+      shouldLoadSessionRef.current = false;
+      currentSessionIdRef.current = nextSessionId;
+      setSessionId(nextSessionId);
+      await loadSessionEvents(nextSessionId);
+    },
+    [loadSessionEvents],
+  );
+
+  const beginRenameSession = useCallback((session: SessionInfo) => {
+    setEditingSessionId(session.id);
+    setTitleDraft(session.title || "新会话");
+    setSessionMessage("");
+  }, []);
+
+  const submitRenameSession = useCallback(async () => {
+    const targetSessionId = editingSessionId;
+    const title = titleDraft.trim();
+    if (!targetSessionId) {
+      return;
+    }
+    if (!title) {
+      setSessionMessage("会话标题不能为空");
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `/api/session/${encodeURIComponent(targetSessionId)}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ title }),
+        },
+      );
+      const updated = await readApiData<SessionInfo>(response);
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === targetSessionId ? (updated ?? session) : session,
+        ),
+      );
+      setEditingSessionId(null);
+      setTitleDraft("");
+      setSessionMessage("");
+    } catch (error) {
+      setSessionMessage(toErrorMessage(error));
+    }
+  }, [editingSessionId, titleDraft]);
+
+  const stopRunningForManagement = useCallback(
+    (targetSessionId: string) => {
+      if (targetSessionId !== currentSessionIdRef.current) {
+        return;
+      }
+
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      markStreamingMessagesInterrupted();
+      setActiveTurnId(null);
+      setConnectionState("idle");
+    },
+    [markStreamingMessagesInterrupted],
+  );
+
+  const archiveSession = useCallback(
+    async (target: SessionInfo) => {
+      stopRunningForManagement(target.id);
+      try {
+        const response = await fetch(
+          `/api/session/${encodeURIComponent(target.id)}/archive`,
+          { method: "POST" },
+        );
+        await readApiData<SessionInfo>(response);
+        if (target.id === currentSessionIdRef.current) {
+          currentSessionIdRef.current = "";
+          setSessionId("");
+          setMessages([]);
+          setInput("");
+          setActiveTurnId(null);
+          setConnectionState("idle");
+        }
+        setSessionMessage("");
+        await refreshSessions();
+      } catch (error) {
+        setSessionMessage(toErrorMessage(error));
+      }
+    },
+    [refreshSessions, stopRunningForManagement],
+  );
+
+  const deleteSession = useCallback(
+    async (target: SessionInfo) => {
+      const title = target.title || "新会话";
+      if (!window.confirm(`确定永久删除「${title}」吗？`)) {
+        return;
+      }
+
+      stopRunningForManagement(target.id);
+      try {
+        const response = await fetch(
+          `/api/session/${encodeURIComponent(target.id)}`,
+          { method: "DELETE" },
+        );
+        await readApiData<void>(response);
+        if (target.id === currentSessionIdRef.current) {
+          currentSessionIdRef.current = "";
+          setSessionId("");
+          setMessages([]);
+          setInput("");
+          setActiveTurnId(null);
+          setConnectionState("idle");
+        }
+        setSessionMessage("");
+        await refreshSessions();
+      } catch (error) {
+        setSessionMessage(toErrorMessage(error));
+      }
+    },
+    [refreshSessions, stopRunningForManagement],
+  );
+
   const sendMessage = useCallback(
     async (event?: FormEvent<HTMLFormElement>) => {
       event?.preventDefault();
@@ -312,7 +546,7 @@ export default function Home() {
       const userMessage = input.trim();
       const selectedModelName = modelName.trim();
 
-      if (!userMessage || isRunning) {
+      if (!userMessage || isRunning || isLoadingHistory) {
         return;
       }
 
@@ -367,6 +601,7 @@ export default function Home() {
           abortControllerRef.current = null;
         }
 
+        void refreshSessions();
         setActiveTurnId(null);
         setConnectionState((current) =>
           current === "running" ? "idle" : current,
@@ -377,9 +612,11 @@ export default function Home() {
       addSystemMessage,
       handleSessionEvent,
       input,
+      isLoadingHistory,
       isRunning,
       modelName,
       reasoningEffort,
+      refreshSessions,
       sessionId,
     ],
   );
@@ -395,24 +632,31 @@ export default function Home() {
   const startNewSession = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    currentSessionIdRef.current = "";
     setMessages([]);
     setInput("");
     setSessionId("");
     setErrorMessage("");
+    setSessionMessage("");
     setActiveTurnId(null);
     setConnectionState("idle");
     localStorage.removeItem(STORAGE_KEYS.sessionId);
-  }, []);
+    void refreshSessions();
+  }, [refreshSessions]);
 
   const status = useMemo(
     () => getStatusView(connectionState, activeTurnId),
     [activeTurnId, connectionState],
   );
+  const currentSession = useMemo(
+    () => sessions.find((session) => session.id === sessionId) ?? null,
+    [sessionId, sessions],
+  );
 
   return (
     <main className="min-h-screen bg-zinc-100 text-zinc-950">
       <div className="flex min-h-screen">
-        <aside className="hidden w-72 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950 p-5 text-zinc-50 lg:flex">
+        <aside className="hidden w-80 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950 p-5 text-zinc-50 lg:flex">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase text-emerald-300">
               Mboo Code
@@ -422,7 +666,7 @@ export default function Home() {
             </h1>
           </div>
 
-          <div className="mt-8 space-y-4">
+          <div className="mt-8 space-y-3">
             <StatusPill status={status} />
             <button
               className="h-10 w-full rounded-md border border-zinc-700 px-3 text-sm font-medium text-zinc-100 transition hover:border-emerald-400 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
@@ -434,11 +678,132 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="mt-8 min-w-0 border-t border-zinc-800 pt-5">
+          <div className="mt-6 min-w-0 border-t border-zinc-800 pt-5">
             <p className="text-xs text-zinc-400">Session ID</p>
             <p className="mt-2 break-all font-mono text-xs leading-5 text-zinc-200">
               {sessionId || "未创建"}
             </p>
+          </div>
+
+          <div className="mt-6 flex min-h-0 flex-1 flex-col border-t border-zinc-800 pt-5">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-zinc-100">活跃会话</p>
+              <button
+                className="h-8 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-emerald-400 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoadingSessions}
+                type="button"
+                onClick={() => void refreshSessions()}
+              >
+                刷新
+              </button>
+            </div>
+
+            {sessionMessage ? (
+              <p className="mt-3 rounded-md border border-rose-900/70 bg-rose-950/40 px-3 py-2 text-xs leading-5 text-rose-100">
+                {sessionMessage}
+              </p>
+            ) : null}
+
+            <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+              {isLoadingSessions ? (
+                <p className="rounded-md border border-zinc-800 px-3 py-3 text-sm text-zinc-400">
+                  正在加载会话
+                </p>
+              ) : sessions.length === 0 ? (
+                <p className="rounded-md border border-dashed border-zinc-800 px-3 py-6 text-center text-sm text-zinc-500">
+                  暂无活跃会话
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {sessions.map((session) => {
+                    const selected = session.id === sessionId;
+                    const editing = editingSessionId === session.id;
+
+                    return (
+                      <div
+                        key={session.id}
+                        className={`rounded-md border p-2 transition ${
+                          selected
+                            ? "border-emerald-500 bg-emerald-950/30"
+                            : "border-zinc-800 bg-zinc-900/70"
+                        }`}
+                      >
+                        {editing ? (
+                          <div className="space-y-2">
+                            <input
+                              className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 text-sm text-zinc-100 outline-none transition focus:border-emerald-400"
+                              maxLength={80}
+                              value={titleDraft}
+                              onChange={(event) =>
+                                setTitleDraft(event.target.value)
+                              }
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                className="h-8 flex-1 rounded-md bg-emerald-600 px-2 text-xs font-medium text-white transition hover:bg-emerald-500"
+                                type="button"
+                                onClick={() => void submitRenameSession()}
+                              >
+                                保存
+                              </button>
+                              <button
+                                className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-zinc-500"
+                                type="button"
+                                onClick={() => {
+                                  setEditingSessionId(null);
+                                  setTitleDraft("");
+                                }}
+                              >
+                                取消
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              className="block w-full min-w-0 text-left"
+                              disabled={isLoadingHistory}
+                              type="button"
+                              onClick={() => void openSession(session.id)}
+                            >
+                              <span className="block truncate text-sm font-medium text-zinc-100">
+                                {session.title || "新会话"}
+                              </span>
+                              <span className="mt-1 block truncate text-xs text-zinc-500">
+                                {formatSessionTime(session.updatedAt)}
+                              </span>
+                            </button>
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-emerald-500 hover:text-emerald-200"
+                                type="button"
+                                onClick={() => beginRenameSession(session)}
+                              >
+                                重命名
+                              </button>
+                              <button
+                                className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-amber-400 hover:text-amber-100"
+                                type="button"
+                                onClick={() => void archiveSession(session)}
+                              >
+                                归档
+                              </button>
+                              <button
+                                className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-rose-400 hover:text-rose-100"
+                                type="button"
+                                onClick={() => void deleteSession(session)}
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </aside>
 
@@ -450,8 +815,11 @@ export default function Home() {
                   Mboo Code
                 </p>
                 <h2 className="mt-1 text-xl font-semibold tracking-normal text-zinc-950">
-                  会话工作台
+                  {currentSession?.title || "会话工作台"}
                 </h2>
+                <p className="mt-1 break-all text-xs text-zinc-500">
+                  {sessionId ? `Session ID：${sessionId}` : "未打开会话"}
+                </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <StatusPill status={status} />
@@ -498,10 +866,26 @@ export default function Home() {
                 {errorMessage}
               </p>
             ) : null}
+            {sessionMessage ? (
+              <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 lg:hidden">
+                {sessionMessage}
+              </p>
+            ) : null}
           </header>
 
           <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-            {messages.length === 0 ? (
+            {isLoadingHistory ? (
+              <div className="mx-auto flex min-h-[360px] max-w-2xl items-center justify-center rounded-md border border-dashed border-zinc-300 bg-white text-center">
+                <div className="px-6">
+                  <p className="text-lg font-semibold text-zinc-900">
+                    正在回显会话
+                  </p>
+                  <p className="mt-2 text-sm text-zinc-500">
+                    正在读取历史事件
+                  </p>
+                </div>
+              </div>
+            ) : messages.length === 0 ? (
               <div className="mx-auto flex min-h-[360px] max-w-2xl items-center justify-center rounded-md border border-dashed border-zinc-300 bg-white text-center">
                 <div className="px-6">
                   <p className="text-lg font-semibold text-zinc-900">
@@ -529,7 +913,7 @@ export default function Home() {
             <div className="mx-auto flex max-w-4xl flex-col gap-3">
               <textarea
                 className="min-h-28 resize-none rounded-md border border-zinc-300 bg-white px-3 py-3 text-sm leading-6 text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                disabled={isRunning}
+                disabled={isRunning || isLoadingHistory}
                 placeholder="输入消息"
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
@@ -550,7 +934,7 @@ export default function Home() {
                   ) : null}
                   <button
                     className="h-10 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-500"
-                    disabled={isRunning || !input.trim()}
+                    disabled={isRunning || isLoadingHistory || !input.trim()}
                     type="submit"
                   >
                     {isRunning ? "发送中" : "发送"}
@@ -763,6 +1147,165 @@ function toToolCallStatus(type: ToolCallEvent["type"]): ToolCallStatus {
   return "started";
 }
 
+function reduceSessionEventsToMessages(events: SessionEvent[]) {
+  const hiddenTurnIds = new Set<string>();
+  for (const event of events) {
+    if (
+      event.type === "TURN_SUPERSEDED" &&
+      event.turnId &&
+      event.payload.hiddenInNormalView
+    ) {
+      hiddenTurnIds.add(event.turnId);
+    }
+  }
+
+  const seenEventIds = new Set<string>();
+  let messages: ChatMessage[] = [];
+
+  for (const event of events) {
+    if (seenEventIds.has(event.eventId)) {
+      continue;
+    }
+    seenEventIds.add(event.eventId);
+
+    if (event.turnId && hiddenTurnIds.has(event.turnId)) {
+      continue;
+    }
+
+    if (event.type === "USER_MESSAGE") {
+      messages = upsertMessageSnapshot(messages, {
+        id: event.payload.messageId || event.eventId,
+        role: "user",
+        text: event.payload.text,
+        turnId: event.turnId,
+        createdAt: event.createdAt,
+      });
+      continue;
+    }
+
+    if (isToolCallEvent(event)) {
+      messages = upsertToolCallSnapshot(messages, event);
+      continue;
+    }
+
+    if (event.type === "ASSISTANT_MESSAGE") {
+      messages = upsertMessageSnapshot(messages, {
+        id: event.payload.messageId || event.eventId,
+        role: "assistant",
+        text: event.payload.text,
+        state: event.payload.state,
+        turnId: event.turnId,
+        createdAt: event.createdAt,
+      });
+      continue;
+    }
+
+    if (event.type === "TURN_FAILED") {
+      messages = [
+        ...messages,
+        {
+          id: `system_${event.eventId}`,
+          role: "system",
+          text: event.payload.errorMessage || "本轮会话执行失败",
+          state: "error",
+          turnId: event.turnId,
+          createdAt: event.createdAt,
+        },
+      ];
+    }
+  }
+
+  return messages;
+}
+
+function upsertMessageSnapshot(
+  messages: ChatMessage[],
+  message: ChatMessage,
+): ChatMessage[] {
+  const index = messages.findIndex((item) => item.id === message.id);
+  if (index < 0) {
+    return [...messages, message];
+  }
+
+  const next = [...messages];
+  next[index] = { ...next[index], ...message };
+  return next;
+}
+
+function upsertToolCallSnapshot(
+  messages: ChatMessage[],
+  event: ToolCallEvent,
+): ChatMessage[] {
+  const toolCall = toToolCallView(event);
+  const messageId =
+    event.payload.messageId ||
+    (event.turnId ? `assistant_${event.turnId}` : event.eventId);
+  const index = messages.findIndex((message) => message.id === messageId);
+
+  if (index < 0) {
+    return [
+      ...messages,
+      {
+        id: messageId,
+        role: "assistant" as const,
+        text: "",
+        state: "streaming" as const,
+        turnId: event.turnId,
+        createdAt: event.createdAt,
+        toolCalls: [toolCall],
+      },
+    ];
+  }
+
+  const next = [...messages];
+  const existing = next[index];
+  const toolCalls = existing.toolCalls ?? [];
+  const toolIndex = toolCalls.findIndex((item) => item.id === toolCall.id);
+  const nextToolCalls =
+    toolIndex < 0
+      ? [...toolCalls, toolCall]
+      : toolCalls.map((item, itemIndex) =>
+          itemIndex === toolIndex ? { ...item, ...toolCall } : item,
+        );
+
+  next[index] = {
+    ...existing,
+    state: existing.state ?? "streaming",
+    turnId: existing.turnId || event.turnId,
+    createdAt: existing.createdAt || event.createdAt,
+    toolCalls: nextToolCalls,
+  };
+  return next;
+}
+
+async function readApiData<T>(response: Response) {
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  const text = await response.text().catch(() => "");
+  if (!text.trim()) {
+    return undefined as T;
+  }
+
+  let body: ApiResponse<T>;
+  try {
+    body = JSON.parse(text) as ApiResponse<T>;
+  } catch {
+    throw new Error(text.trim());
+  }
+
+  if (body.success === false) {
+    throw new Error(body.msg || body.message || body.exception || "请求失败");
+  }
+
+  if ("data" in body) {
+    return body.data as T;
+  }
+
+  return body as T;
+}
+
 async function readErrorMessage(response: Response) {
   const fallback = `请求失败（${response.status}）`;
   const text = await response.text().catch(() => "");
@@ -802,6 +1345,24 @@ function createLocalId(prefix: string) {
     return `${prefix}_${crypto.randomUUID()}`;
   }
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function formatSessionTime(value?: string | null) {
+  if (!value) {
+    return "时间未知";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function roleLabel(role: MessageRole) {

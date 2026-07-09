@@ -129,6 +129,27 @@ public class SessionEventStore {
     }
 
     /**
+     * 永久删除会话主 JSONL 文件，并尝试清理空的会话目录。
+     */
+    public void deleteTranscript(String transcriptUri) {
+        Path path = resolveTranscriptPath(transcriptUri);
+        try {
+            Files.deleteIfExists(path);
+            Path parent = path.getParent();
+            if (parent != null && Files.exists(parent)) {
+                try (var children = Files.list(parent)) {
+                    if (children.findAny().isEmpty()) {
+                        Files.deleteIfExists(parent);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            log.error("删除会话事件文件失败 path:{}", path, e);
+            throw new ServiceException("删除会话事件文件失败");
+        }
+    }
+
+    /**
      * 从事件日志中还原普通聊天历史，用于临时构建多轮模型输入。
      */
     public List<ConversationMessage> replayConversation(String transcriptUri) {

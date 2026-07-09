@@ -34,6 +34,7 @@ public class Sessions {
     private String createdAt;
 
     @Schema(description = "会话最近更新时间")
+    @TableField(fill = FieldFill.INSERT_UPDATE)
     private String updatedAt;
 
     @Schema(description = "会话归档时间")
