@@ -125,7 +125,7 @@ public class TurnService {
             });
 
             try {
-                aiCodeService.chatStream(userMessage, params)
+                aiCodeService.chatStream(turn.sessionId(), userMessage, params)
                         .onPartialResponse(chunk -> { // 文本流
                             if (isTurnClosed(runtime)) {
                                 return;
