@@ -22,6 +22,7 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify(body),
       cache: "no-store",
+      signal: request.signal,
     });
 
     const contentType = upstream.headers.get("Content-Type") || "";

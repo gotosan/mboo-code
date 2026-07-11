@@ -84,6 +84,12 @@ public class SessionController {
         return R.ok();
     }
 
+    @Operation(summary = "取消当前运行中的会话轮次")
+    @PostMapping("/{sessionId}/cancel")
+    public R<Boolean> cancel(@PathVariable String sessionId) {
+        return R.ok(turnService.cancelActiveTurn(sessionId, "user_cancelled"));
+    }
+
     @Operation(summary = "聊天")
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<@NonNull ServerSentEvent<@NonNull SessionEvent>> chat(@Valid @RequestBody ChatReq req) {

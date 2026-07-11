@@ -17,6 +17,7 @@ import com.yu.mboocode.session.payload.*;
 import com.yu.mboocode.util.DateTimeUtil;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
+import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.service.tool.ToolExecution;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 @Slf4j
@@ -118,7 +120,7 @@ public class TurnService {
         long startNano = System.nanoTime();
 
         return Flux.create(sink -> {
-            ActiveTurnRuntime runtime = new ActiveTurnRuntime(turn, turnClosed, finalText, startNano, sink);
+            ActiveTurnRuntime runtime = new ActiveTurnRuntime(turn, turnClosed, finalText, startNano, new AtomicReference<>(), sink);
             activeTurns.put(turn.sessionId(), runtime);
             sink.onCancel(() -> {
                 cancelRuntime(runtime, "client_disconnected");
@@ -126,10 +128,12 @@ public class TurnService {
 
             try {
                 aiCodeService.chatStream(turn.sessionId(), userMessage, params)
-                        .onPartialResponse(chunk -> { // 文本流
+                        .onPartialResponseWithContext((partialResponse, context) -> { // 文本流
+                            captureStreamingHandle(runtime, context.streamingHandle());
                             if (isTurnClosed(runtime)) {
                                 return;
                             }
+                            String chunk = partialResponse.text();
                             finalText.append(chunk);
                             emitEvent(sink, SessionEvent.builder()
                                     .eventId(IdUtil.getSnowflakeNextIdStr())
@@ -145,6 +149,8 @@ public class TurnService {
                                     .meta(Collections.emptyMap())
                                     .build());
                         })
+                        .onPartialThinkingWithContext((_, context) -> captureStreamingHandle(runtime, context.streamingHandle()))
+                        .onPartialToolCallWithContext((_, context) -> captureStreamingHandle(runtime, context.streamingHandle()))
                         .beforeToolExecution(beforeToolExecution -> { // 工具执行前
                             if (isTurnClosed(runtime)) {
                                 return;
@@ -252,6 +258,28 @@ public class TurnService {
         return runtime.turnClosed().get() || runtime.sink().isCancelled();
     }
 
+    private void captureStreamingHandle(ActiveTurnRuntime runtime, StreamingHandle streamingHandle) {
+        runtime.streamingHandle().set(streamingHandle);
+        // 用户可能在首个流事件到达前已经中断，此时一拿到句柄就要立即停止模型请求。
+        if (isTurnClosed(runtime)) {
+            cancelStreaming(runtime);
+        }
+    }
+
+    private void cancelStreaming(ActiveTurnRuntime runtime) {
+        StreamingHandle streamingHandle = runtime.streamingHandle().get();
+        if (streamingHandle == null) {
+            return;
+        }
+        try {
+            if (!streamingHandle.isCancelled()) {
+                streamingHandle.cancel();
+            }
+        } catch (RuntimeException e) {
+            log.warn("取消模型流失败，sessionId: {}, turnId: {}", runtime.turn().sessionId(), runtime.turn().turnId(), e);
+        }
+    }
+
     private void failSinkTurn(FluxSink<@NonNull SessionEvent> sink, SessionTurn turn, AtomicBoolean turnClosed, Throwable error, String partialText, long durationMs) {
         if (turnClosed.compareAndSet(false, true)) {
             try {
@@ -269,6 +297,7 @@ public class TurnService {
         SessionTurn turn = runtime.turn();
         if (runtime.turnClosed().compareAndSet(false, true)) {
             try {
+                cancelStreaming(runtime);
                 SpringUtil.getBean(this.getClass()).cancelTurn(
                         turn,
                         reason,

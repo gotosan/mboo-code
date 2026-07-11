@@ -482,6 +482,20 @@ export default function Home() {
     [markStreamingMessagesInterrupted],
   );
 
+  const cancelBackendTurn = useCallback((targetSessionId: string) => {
+    if (!targetSessionId) {
+      return;
+    }
+
+    void fetch(`/api/session/${encodeURIComponent(targetSessionId)}/cancel`, {
+      method: "POST",
+    })
+      .then((response) => readApiData<boolean>(response))
+      .catch((error) => {
+        setSessionMessage(`停止后端任务失败：${toErrorMessage(error)}`);
+      });
+  }, []);
+
   const archiveSession = useCallback(
     async (target: SessionInfo) => {
       stopRunningForManagement(target.id);
@@ -622,14 +636,16 @@ export default function Home() {
   );
 
   const stopCurrentRun = useCallback(() => {
+    cancelBackendTurn(currentSessionIdRef.current);
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     markStreamingMessagesInterrupted();
     setActiveTurnId(null);
     setConnectionState("idle");
-  }, [markStreamingMessagesInterrupted]);
+  }, [cancelBackendTurn, markStreamingMessagesInterrupted]);
 
   const startNewSession = useCallback(() => {
+    cancelBackendTurn(currentSessionIdRef.current);
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     currentSessionIdRef.current = "";
@@ -642,7 +658,7 @@ export default function Home() {
     setConnectionState("idle");
     localStorage.removeItem(STORAGE_KEYS.sessionId);
     void refreshSessions();
-  }, [refreshSessions]);
+  }, [cancelBackendTurn, refreshSessions]);
 
   const status = useMemo(
     () => getStatusView(connectionState, activeTurnId),
