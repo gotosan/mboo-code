@@ -16,6 +16,10 @@ import com.yu.mboocode.session.model.Sessions;
 import com.yu.mboocode.session.payload.*;
 import com.yu.mboocode.util.DateTimeUtil;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.memory.ChatMemory;
+import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.service.tool.ToolExecution;
@@ -44,6 +48,8 @@ public class TurnService {
     private SessionEventStore sessionEventStore;
     @Resource
     private SessionService sessionService;
+    @Resource
+    private ChatMemoryProvider chatMemoryProvider;
 
     private final ConcurrentMap<String, ActiveTurnRuntime> activeTurns = new ConcurrentHashMap<>();
 
@@ -120,7 +126,14 @@ public class TurnService {
         long startNano = System.nanoTime();
 
         return Flux.create(sink -> {
-            ActiveTurnRuntime runtime = new ActiveTurnRuntime(turn, turnClosed, finalText, startNano, new AtomicReference<>(), sink);
+            ActiveTurnRuntime runtime = new ActiveTurnRuntime(
+                    turn,
+                    turnClosed,
+                    finalText,
+                    startNano,
+                    new AtomicReference<>(),
+                    sink
+            );
             activeTurns.put(turn.sessionId(), runtime);
             sink.onCancel(() -> {
                 cancelRuntime(runtime, "client_disconnected");
@@ -149,8 +162,10 @@ public class TurnService {
                                     .meta(Collections.emptyMap())
                                     .build());
                         })
-                        .onPartialThinkingWithContext((_, context) -> captureStreamingHandle(runtime, context.streamingHandle()))
-                        .onPartialToolCallWithContext((_, context) -> captureStreamingHandle(runtime, context.streamingHandle()))
+                        .onPartialThinkingWithContext((_, context) ->
+                                captureStreamingHandle(runtime, context.streamingHandle()))
+                        .onPartialToolCallWithContext((_, context) ->
+                                captureStreamingHandle(runtime, context.streamingHandle()))
                         .beforeToolExecution(beforeToolExecution -> { // 工具执行前
                             if (isTurnClosed(runtime)) {
                                 return;
@@ -237,17 +252,27 @@ public class TurnService {
     }
 
     public boolean cancelActiveTurn(String sessionId, String reason) {
+        return cancelActiveTurn(sessionId, null, reason);
+    }
+
+    public boolean cancelActiveTurn(String sessionId, String expectedTurnId, String reason) {
         if (StrUtil.isBlank(sessionId)) {
             return false;
         }
 
         ActiveTurnRuntime runtime = activeTurns.get(sessionId);
         if (runtime != null) {
+            if (StrUtil.isNotBlank(expectedTurnId) && !expectedTurnId.equals(runtime.turn().turnId())) {
+                return false;
+            }
             return cancelRuntime(runtime, reason);
         }
 
         Sessions session = sessionService.getById(sessionId);
         if (session != null && StrUtil.isNotBlank(session.getActiveTurnId())) {
+            if (StrUtil.isNotBlank(expectedTurnId) && !expectedTurnId.equals(session.getActiveTurnId())) {
+                return false;
+            }
             sessionService.clearActiveTurn(sessionId);
             return true;
         }
@@ -277,6 +302,25 @@ public class TurnService {
             }
         } catch (RuntimeException e) {
             log.warn("取消模型流失败，sessionId: {}, turnId: {}", runtime.turn().sessionId(), runtime.turn().turnId(), e);
+        }
+    }
+
+    private void appendInterruptedMemory(String sessionId, String partialText) {
+        if (StrUtil.isBlank(partialText)) {
+            return;
+        }
+
+        try {
+            ChatMemory chatMemory = chatMemoryProvider.get(sessionId);
+            List<ChatMessage> messages = chatMemory.messages();
+            // 完整响应可能已经由 LangChain4j 先写入，最后一条是 AI 消息时不再重复追加部分响应。
+            if (!messages.isEmpty() && messages.get(messages.size() - 1) instanceof AiMessage) {
+                return;
+            }
+            chatMemory.add(AiMessage.from(partialText));
+        } catch (RuntimeException e) {
+            // JSONL 是事实来源，派生记忆写入失败不能阻止 turn 落下取消或失败终态。
+            log.warn("写入中断会话记忆失败，sessionId: {}", sessionId, e);
         }
     }
 
@@ -416,6 +460,7 @@ public class TurnService {
                         .durationMs(durationMs)
                         .build()
         );
+        appendInterruptedMemory(turn.sessionId(), partialText);
         sessionService.clearActiveTurn(turn.sessionId());
         return List.of(assistantMessageEvent, turnFailedEvent);
     }
@@ -447,6 +492,7 @@ public class TurnService {
                         .durationMs(durationMs)
                         .build()
         );
+        appendInterruptedMemory(turn.sessionId(), partialText);
         sessionService.clearActiveTurn(turn.sessionId());
         return List.of(assistantMessageEvent, turnCancelledEvent);
     }

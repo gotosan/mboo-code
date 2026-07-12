@@ -12,12 +12,14 @@ import com.yu.mboocode.session.payload.TurnFailedPayload;
 import com.yu.mboocode.session.payload.TurnStartedPayload;
 import com.yu.mboocode.session.payload.TurnSupersededPayload;
 import com.yu.mboocode.session.payload.UserMessagePayload;
+import lombok.AllArgsConstructor;
 import lombok.Getter;
 
 /**
  * 会话事件类型
  */
 @Getter
+@AllArgsConstructor
 public enum SessionEventType {
     TURN_STARTED(TurnStartedPayload.class), //turn 已开始
     TURN_COMPLETED(TurnCompletedPayload.class), //turn 已完成
@@ -36,10 +38,6 @@ public enum SessionEventType {
     ;
 
     private final Class<? extends SessionEventPayload> payloadClass;
-
-    SessionEventType(Class<? extends SessionEventPayload> payloadClass) {
-        this.payloadClass = payloadClass;
-    }
 
     public void validatePayload(SessionEventPayload payload) {
         if (payload == null) {

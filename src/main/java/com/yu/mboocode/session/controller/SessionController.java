@@ -29,6 +29,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
@@ -86,8 +87,8 @@ public class SessionController {
 
     @Operation(summary = "取消当前运行中的会话轮次")
     @PostMapping("/{sessionId}/cancel")
-    public R<Boolean> cancel(@PathVariable String sessionId) {
-        return R.ok(turnService.cancelActiveTurn(sessionId, "user_cancelled"));
+    public R<Boolean> cancel(@PathVariable String sessionId, @RequestParam(required = false) String turnId) {
+        return R.ok(turnService.cancelActiveTurn(sessionId, turnId, "user_cancelled"));
     }
 
     @Operation(summary = "聊天")

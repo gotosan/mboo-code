@@ -482,14 +482,18 @@ export default function Home() {
     [markStreamingMessagesInterrupted],
   );
 
-  const cancelBackendTurn = useCallback((targetSessionId: string) => {
+  const cancelBackendTurn = useCallback((targetSessionId: string, targetTurnId: string | null) => {
     if (!targetSessionId) {
       return;
     }
 
-    void fetch(`/api/session/${encodeURIComponent(targetSessionId)}/cancel`, {
-      method: "POST",
-    })
+    const query = targetTurnId
+      ? `?turnId=${encodeURIComponent(targetTurnId)}`
+      : "";
+    void fetch(
+      `/api/session/${encodeURIComponent(targetSessionId)}/cancel${query}`,
+      { method: "POST" },
+    )
       .then((response) => readApiData<boolean>(response))
       .catch((error) => {
         setSessionMessage(`停止后端任务失败：${toErrorMessage(error)}`);
@@ -636,16 +640,16 @@ export default function Home() {
   );
 
   const stopCurrentRun = useCallback(() => {
-    cancelBackendTurn(currentSessionIdRef.current);
+    cancelBackendTurn(currentSessionIdRef.current, activeTurnId);
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     markStreamingMessagesInterrupted();
     setActiveTurnId(null);
     setConnectionState("idle");
-  }, [cancelBackendTurn, markStreamingMessagesInterrupted]);
+  }, [activeTurnId, cancelBackendTurn, markStreamingMessagesInterrupted]);
 
   const startNewSession = useCallback(() => {
-    cancelBackendTurn(currentSessionIdRef.current);
+    cancelBackendTurn(currentSessionIdRef.current, activeTurnId);
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     currentSessionIdRef.current = "";
@@ -658,7 +662,7 @@ export default function Home() {
     setConnectionState("idle");
     localStorage.removeItem(STORAGE_KEYS.sessionId);
     void refreshSessions();
-  }, [cancelBackendTurn, refreshSessions]);
+  }, [activeTurnId, cancelBackendTurn, refreshSessions]);
 
   const status = useMemo(
     () => getStatusView(connectionState, activeTurnId),

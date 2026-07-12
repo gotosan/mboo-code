@@ -4,6 +4,7 @@ import com.yu.mboocode.config.Setting;
 import com.yu.mboocode.llm.listener.MyAiServiceCompletedListener;
 import com.yu.mboocode.llm.listener.MyChatModelListener;
 import com.yu.mboocode.llm.tool.WeatherTool;
+import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -20,9 +21,20 @@ import java.util.List;
 public class AiCodeServiceFactory {
     @Resource
     private Setting setting;
+    @Resource
+    private PersistentChatMemoryStore persistentChatMemoryStore;
 
     @Bean
-    public AiCodeService getAiCodeService() {
+    public ChatMemoryProvider chatMemoryProvider() {
+        return memoryId -> MessageWindowChatMemory.builder()
+                .id(memoryId)
+                .maxMessages(10)
+                .chatMemoryStore(persistentChatMemoryStore)
+                .build();
+    }
+
+    @Bean
+    public AiCodeService getAiCodeService(ChatMemoryProvider chatMemoryProvider) {
 
         ChatModel chatModel = OpenAiChatModel
                 .builder()
@@ -45,13 +57,7 @@ public class AiCodeServiceFactory {
                 .builder(AiCodeService.class)
                 .chatModel(chatModel)
                 .streamingChatModel(streamingChatModel)
-                .chatMemoryProvider(memoryId ->
-                        MessageWindowChatMemory.builder()
-                                .id(memoryId)
-                                .maxMessages(10)
-                                .chatMemoryStore(new PersistentChatMemoryStore())
-                                .build()
-                )
+                .chatMemoryProvider(chatMemoryProvider)
                 .tools(List.of(new WeatherTool()))
                 .registerListeners(new MyAiServiceCompletedListener())
                 .build();
