@@ -5,13 +5,10 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONException;
 import com.alibaba.fastjson2.JSONObject;
 import com.yu.mboocode.common.exception.ServiceException;
-import com.yu.mboocode.session.dto.ConversationMessage;
 import com.yu.mboocode.session.enums.SessionEventSource;
 import com.yu.mboocode.session.enums.SessionEventType;
 import com.yu.mboocode.session.model.SessionEvent;
- import com.yu.mboocode.session.payload.AssistantMessagePayload;
 import com.yu.mboocode.session.payload.SessionEventPayload;
-import com.yu.mboocode.session.payload.UserMessagePayload;
 import com.yu.mboocode.util.CommonUtil;
 import com.yu.mboocode.util.DateTimeUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +24,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * 负责会话 JSONL 事件日志的追加写入和顺序回放。
@@ -147,28 +143,6 @@ public class SessionEventStore {
             log.error("删除会话事件文件失败 path:{}", path, e);
             throw new ServiceException("删除会话事件文件失败");
         }
-    }
-
-    /**
-     * 从事件日志中还原普通聊天历史，用于临时构建多轮模型输入。
-     */
-    public List<ConversationMessage> replayConversation(String transcriptUri) {
-        return readSession(transcriptUri).stream().filter(event -> event.getPayload() != null).map(event ->
-                        switch (event.getType()) {
-                            case SessionEventType.USER_MESSAGE -> {
-                                UserMessagePayload payload = (UserMessagePayload) event.getPayload();
-                                yield new ConversationMessage("user", payload.getText());
-                            }
-                            case SessionEventType.ASSISTANT_MESSAGE -> {
-                                AssistantMessagePayload payload = (AssistantMessagePayload) event.getPayload();
-                                if (!Objects.equals(payload.getState(), "completed")) {
-                                    yield null;
-                                }
-                                yield new ConversationMessage("assistant", payload.getText());
-                            }
-                            default -> null;
-                        })
-                .filter(Objects::nonNull).toList();
     }
 
     /**
