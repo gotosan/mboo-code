@@ -14,7 +14,7 @@
 - 压缩使用当前聊天请求选择的模型。
 - 压缩阶段可取消，并通过 SSE 向前端展示状态。
 - 压缩失败时终止当前 turn，返回明确的“压缩上下文失败”错误。
-- 同一 session 切换模型时，使用当前请求模型的上下文配置重新计算预算。
+- 第一版统一按代码常量 `256K` 计算上下文窗口，不区分具体模型。
 - 工具事件沿用现有 JSONL 结构，保存工具参数和截断后的结果预览。
 - 已经输出给用户的助手文本参与后续记忆；被 `TURN_SUPERSEDED` 替换的 turn 不参与记忆。
 
@@ -27,8 +27,7 @@
 - 跨 session 或跨项目的用户长期记忆。
 - 用户查看、编辑、清除或手动重建摘要。
 - 后台预压缩。
-- 从模型供应商接口自动获取上下文窗口。
-- 用户自定义模型上下文窗口。
+- 按模型、供应商或用户配置上下文窗口。
 - 独立的摘要模型配置。
 - 完整保存被截断的工具结果文件。
 - 服务重启后从工具调用中间位置继续执行。
@@ -49,8 +48,7 @@
 
 1. `PersistentChatMemoryStore` 没有持久化。
 2. `AiCodeServiceFactory` 在 `ChatMemoryProvider` 内直接 `new PersistentChatMemoryStore()`，无法统一管理持久化和事务。
-3. 模型名称由用户自由输入，项目没有模型上下文窗口配置。
-4. 当前还没有按 token 预算计算当前用户输入、工具 Schema、工具结果和输出预留。
+3. 当前还没有按 token 预算计算当前用户输入、工具 Schema、工具结果和输出预留。
 
 ## 核心原则
 
@@ -61,16 +59,16 @@
 | 数据 | 存储位置 | 作用 |
 | --- | --- | --- |
 | 完整事件历史 | session JSONL | UI 回放、审计、压缩重建、故障恢复 |
-| 早期历史摘要 | SQLite 摘要表 | 首次触发压缩后才产生，用于表示已经移出 ChatMemory 的早期 turn |
-| 当前模型记忆 | SQLite ChatMemory 表 | 保存近期可直接发送给 LangChain4j 的消息 |
+| 早期历史摘要 | SQLite `mboo_chat_memory.summary_json` | 首次触发压缩后才产生，用于表示已经移出近期上下文的早期 turn |
+| 近期原始消息 | SQLite `mboo_chat_memory.messages_json` | 保存近期可直接发送给 LangChain4j 的消息 |
 | 当前用户消息 | `@UserMessage` 参数 | 每次只传入一次，由 LangChain4j 加入记忆 |
 | 工具定义 | LangChain4j ToolService | 通过 `.tools(...)`、`ToolProvider` 等加入请求参数 |
 
-JSONL 是唯一事实来源。摘要和 ChatMemory 都是派生数据，丢失后允许从 JSONL 重建。
+JSONL 是唯一事实来源。`mboo_chat_memory` 中的摘要和近期消息都是派生数据，丢失后允许从 JSONL 重建。
 
 摘要不是会话创建时生成的数据，也不会在每次请求时重新生成：
 
-- 首次触发压缩前，摘要表中没有该 session 的记录，ChatMemory 保存尚未压缩的原始对话。
+- 首次触发压缩前，`summary_json` 为空，`messages_json` 保存尚未压缩的原始对话。
 - 未达到压缩阈值时，只追加 ChatMemory，不调用摘要模型。
 - 达到压缩阈值时，才把一部分早期 turn 转为摘要，并从 ChatMemory 中移除这些早期原文。
 - 后续再次触发压缩时，使用“旧摘要 + 新进入早期范围的 turn”生成替换旧摘要的新摘要。
@@ -106,28 +104,26 @@ flowchart TD
     A["新 turn 已建立"] --> B["计算当前请求的上下文预算"]
     B --> C{"达到压缩阈值？"}
 
-    C -- "否" --> D["保持现有摘要和 ChatMemory"]
+    C -- "否" --> D["保持现有上下文记录"]
     C -- "是" --> E["ContextCompactionService"]
 
     F["Session JSONL 完整历史"] --> E
-    G["SQLite 旧摘要（可能不存在）"] --> E
-    H["当前模型上下文配置"] --> E
+    X["mboo_chat_memory：可选摘要 + 近期原文"] --> E
+    H["固定 256K 上下文窗口常量"] --> E
     E --> R{"存在可压缩的早期 turn？"}
     R -- "是" --> I["当前模型生成新摘要"]
-    I --> J["事务更新摘要和近期 ChatMemory"]
+    I --> J["事务更新同一行的摘要字段和 messages_json"]
     R -- "否" --> S["清理历史工具消息或判定输入无法容纳"]
 
     D --> K["组装主模型请求"]
-    L["SQLite 已有摘要（可选）"] --> K
-    M["SQLite ChatMemory 近期原文"] --> K
-    J --> L
-    J --> M
+    X --> K
+    J --> X
     S --> K
     N["当前 UserMessage"] --> K
     O["工具定义"] --> K
     K --> P["LangChain4j AiServices"]
-    P --> Q["完成后追加 ChatMemory"]
-    Q --> M
+    P --> Q["完成后只更新 messages_json"]
+    Q --> X
 ```
 
 上图中生成摘要的路径只在达到压缩阈值且确实存在可压缩早期 turn 时执行。未达到阈值时，不调用摘要模型，也不改写已有摘要。达到阈值但没有可压缩早期 turn 时，只能清理不再需要的历史工具协议消息；如果当前输入本身仍然无法容纳，则直接按上下文超限失败。
@@ -135,7 +131,7 @@ flowchart TD
 正常请求不读取全部 JSONL：
 
 1. `ChatMemoryStore` 根据 `sessionId` 读取近期消息。
-2. `SystemMessageTransformer` 根据 `sessionId` 查询已有摘要；首次压缩前查询结果为空，不注入摘要。
+2. `SystemMessageTransformer` 根据 `sessionId` 查询同一行的 `summary_json`；首次压缩前该字段为空，不注入摘要。
 3. LangChain4j 加入当前 `UserMessage` 和工具定义。
 4. 模型完成后 LangChain4j 更新 ChatMemory 快照。
 
@@ -148,8 +144,8 @@ stateDiagram-v2
     state "未压缩" as Uncompressed
     state "已压缩" as Compressed
     [*] --> Uncompressed
-    Uncompressed: 摘要记录不存在
-    Uncompressed: ChatMemory 保存原始对话
+    Uncompressed: summary_json 为空
+    Uncompressed: messages_json 保存原始对话
     Uncompressed --> Uncompressed: 未达到阈值，继续追加原始对话
     Uncompressed --> Compressed: 首次达到阈值，早期 turn 生成摘要
     Compressed: 摘要保存早期历史
@@ -196,42 +192,19 @@ ${appDataDir}/sessions/{sessionId}/session.jsonl
 
 JSONL 中的工具结果截断不影响当前工具循环。LangChain4j 在当前进程内仍使用工具返回的完整结果继续调用模型。
 
-### ChatMemory 表
+### 统一上下文表
 
-新增表：
+新增一个 `mboo_chat_memory` 表，同时保存近期原始消息和早期摘要：
+
+第一版中，一个 session 只有一份当前摘要和一份近期消息快照，两者生命周期一致，并且压缩时必须原子更新，因此不再单独建立摘要表。后续如果需要保留多版摘要、摘要审计或多种摘要策略，再拆分独立表。
 
 ```sql
 CREATE TABLE IF NOT EXISTS mboo_chat_memory (
     memory_id TEXT PRIMARY KEY,
     messages_json TEXT NOT NULL DEFAULT '[]',
-    version INTEGER NOT NULL DEFAULT 1,
-    updated_at TEXT NOT NULL
-);
-```
-
-字段说明：
-
-| 字段 | 说明 |
-| --- | --- |
-| `memory_id` | 使用 session ID。 |
-| `messages_json` | 使用 LangChain4j `ChatMessageSerializer.messagesToJson()` 序列化。 |
-| `version` | 快照版本，用于恢复和并发更新校验。 |
-| `updated_at` | 最近更新时间。 |
-
-该表是模型当前工作记忆，不作为 UI 历史来源。
-
-LangChain4j 工具循环期间，快照可能包含完整工具消息。触发上下文压缩后，快照会被标准化为“摘要之外的近期用户消息和助手消息”，旧工具消息被移除。
-
-### 摘要表
-
-新增表：
-
-```sql
-CREATE TABLE IF NOT EXISTS mboo_session_context_summary (
-    session_id TEXT PRIMARY KEY,
-    summary_json TEXT NOT NULL,
+    summary_json TEXT,
     covered_until_event_id TEXT,
-    model_name TEXT NOT NULL,
+    summary_model_name TEXT,
     version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -242,17 +215,52 @@ CREATE TABLE IF NOT EXISTS mboo_session_context_summary (
 
 | 字段 | 说明 |
 | --- | --- |
-| `session_id` | session ID。 |
-| `summary_json` | 结构化摘要 JSON。 |
+| `memory_id` | 使用 session ID。 |
+| `messages_json` | 近期原始消息，使用 LangChain4j `ChatMessageSerializer.messagesToJson()` 序列化。 |
+| `summary_json` | 早期历史的结构化摘要；首次压缩前为 `NULL`。 |
 | `covered_until_event_id` | 摘要已经覆盖到的最后一个事件 ID。 |
-| `model_name` | 本次生成摘要使用的模型。 |
-| `version` | 摘要版本。 |
-| `created_at` | 首次生成时间。 |
-| `updated_at` | 最近压缩时间。 |
+| `summary_model_name` | 生成当前摘要使用的模型；首次压缩前为 `NULL`。 |
+| `version` | 整行版本，每次更新消息或压缩结果时递增。 |
+| `created_at` | 上下文记录创建时间。 |
+| `updated_at` | 最近一次消息或摘要更新时间。 |
 
 `covered_until_event_id` 以 JSONL 文件顺序解释。`eventId` 用于定位，实际先后仍以文件行顺序为准。
 
-摘要表按需写入：创建 session 时不创建摘要记录。第一次成功完成上下文压缩后才插入记录；没有记录表示该 session 尚未产生摘要。压缩失败或被取消时，不插入也不更新摘要记录。
+该表是模型工作上下文，不作为 UI 历史来源。完整对话仍以 JSONL 为准。
+
+LangChain4j 工具循环期间，`messages_json` 可能包含完整工具消息。触发上下文压缩后，`messages_json` 会被标准化为近期用户消息和助手消息，旧工具协议消息被移除；早期对话的结论保存在同一行的 `summary_json`。
+
+普通 `ChatMemoryStore.updateMessages()` 使用 UPSERT 创建或更新记录，但冲突更新时只能修改 `messages_json`、`version` 和 `updated_at`，必须保留摘要字段：
+
+```sql
+INSERT INTO mboo_chat_memory (
+    memory_id,
+    messages_json,
+    version,
+    created_at,
+    updated_at
+) VALUES (?, ?, 1, ?, ?)
+ON CONFLICT(memory_id) DO UPDATE SET
+    messages_json = excluded.messages_json,
+    version = mboo_chat_memory.version + 1,
+    updated_at = excluded.updated_at;
+```
+
+上下文压缩成功后，在同一条更新中同时写入摘要和近期消息：
+
+```sql
+UPDATE mboo_chat_memory
+SET messages_json = ?,
+    summary_json = ?,
+    covered_until_event_id = ?,
+    summary_model_name = ?,
+    version = version + 1,
+    updated_at = ?
+WHERE memory_id = ?
+  AND version = ?;
+```
+
+首次压缩前，`summary_json`、`covered_until_event_id` 和 `summary_model_name` 均为 `NULL`。压缩失败或被取消时，整行保持不变。
 
 ### 结构化摘要
 
@@ -312,7 +320,7 @@ CREATE TABLE IF NOT EXISTS mboo_session_context_summary (
 - `errorMessage`
 - `durationMs`
 
-摘要模型负责提取“执行了什么、得到什么结论、是否失败”。这些结论只写入摘要表，并通过 SystemMessage 注入后续请求。
+摘要模型负责提取“执行了什么、得到什么结论、是否失败”。这些结论写入 `mboo_chat_memory.summary_json`，并通过 SystemMessage 注入后续请求。
 
 压缩后的 ChatMemory 不保存摘要，也不重建历史 `ToolExecutionRequestMessage` 和 `ToolExecutionResultMessage`，只保留近期 turn 的普通用户消息和助手输出。
 
@@ -324,41 +332,31 @@ CREATE TABLE IF NOT EXISTS mboo_session_context_summary (
 
 ## 模型上下文窗口
 
-### 获取方式
+### 第一版固定值
 
 OpenAI 兼容接口没有统一、可靠的上下文窗口字段。`/models` 通常只保证返回模型标识，不保证返回 context window。
 
-第一版在代码中维护模型配置表，并提供默认回退值：
+第一版暂不实现模型上下文窗口配置和自动探测，直接在压缩预算代码中保留一个 `256K` 常量：
 
 ```java
-public record ModelContextProfile(
-        int contextWindowTokens,
-        int maxOutputTokens
-) {
-}
+private static final int CONTEXT_WINDOW_TOKENS = 256 * 1024;
 ```
 
-解析顺序：
+即：
 
-1. 按当前请求的 `modelName` 查找代码内置配置。
-2. 找不到时使用默认配置。
-
-第一版建议默认值：
-
-```text
-contextWindowTokens = 128000
-maxOutputTokens = 16000
+```java
+CONTEXT_WINDOW_TOKENS = 262_144;
 ```
 
-后续再增加用户按模型配置和请求级覆盖。
+该常量只用于第一版的压缩触发和目标预算计算，不代表所有实际模型都一定支持 256K。模型级配置、供应商查询和用户覆盖后续再处理。
 
 ### 模型切换
 
 同一 session 允许切换模型。
 
-每次新请求都使用当前请求的 `modelName` 解析上下文窗口。如果从大窗口模型切换到小窗口模型，当前记忆可能立即达到硬阈值，此时在调用新模型前同步压缩。
+第一版切换模型时仍统一使用 `CONTEXT_WINDOW_TOKENS`，不根据 `modelName` 重新计算不同窗口。如果实际模型窗口小于 256K，仍可能由供应商返回 context length exceeded，按现有错误流程处理。
 
-摘要本身不绑定后续聊天模型，但摘要表记录生成摘要时使用的 `model_name`，便于排查摘要质量。
+摘要本身不绑定后续聊天模型，但 `mboo_chat_memory.summary_model_name` 记录生成当前摘要时使用的模型，便于排查摘要质量。
 
 ## Token 预算
 
@@ -388,6 +386,7 @@ B = C - O - T - G - S
 建议初始预留：
 
 ```text
+O = 16000
 T = 8000
 G = 16000
 S = 4000
@@ -457,7 +456,7 @@ sequenceDiagram
         alt "存在可压缩早期 turn"
             C->>S: "可选旧摘要 + 本次待压缩的早期 turn"
             S-->>C: "结构化新摘要"
-            C->>C: "事务更新摘要和 ChatMemory"
+            C->>C: "事务更新同一行的摘要字段和 messages_json"
             C-->>F: "CONTEXT_COMPACTION_STATUS completed"
         else "没有可压缩早期 turn"
             C->>C: "清理历史工具消息或判定输入无法容纳"
@@ -471,7 +470,7 @@ sequenceDiagram
 
 ### 压缩候选选择
 
-1. 从摘要表读取可选的旧摘要和 `covered_until_event_id`；第一次压缩时两者都不存在。
+1. 从 `mboo_chat_memory` 读取可选的旧摘要和 `covered_until_event_id`；第一次压缩时两者都为空。
 2. 按 JSONL 文件顺序读取 turn。
 3. 排除当前 turn。
 4. 排除所有被 `TURN_SUPERSEDED` 替换的 turn。
@@ -619,7 +618,7 @@ COMPLETED
 用户在压缩期间取消时：
 
 1. 取消摘要模型流。
-2. 不更新摘要表和 ChatMemory 表。
+2. 不更新 `mboo_chat_memory`。
 3. 写入当前 turn 的取消终态。
 4. 不启动主模型。
 
@@ -631,26 +630,24 @@ COMPLETED
 
 推荐流程：
 
-1. 读取可选的旧摘要及其版本、ChatMemory 和 JSONL。
+1. 读取 `mboo_chat_memory` 当前行及其版本，并读取 JSONL。
 2. 计算压缩候选。
 3. 调用摘要模型。
 4. 校验结构化摘要。
 5. 开启 SQLite 事务。
-6. 校验摘要状态未变化：已有摘要时校验版本，首次压缩时校验记录仍不存在。
-7. 更新摘要表。
-8. 更新 ChatMemory 表。
-9. 提交事务。
+6. 使用 `memory_id + version` 校验整行状态未变化。
+7. 在同一条 SQL 中更新摘要字段、`messages_json` 和版本。
+8. 提交事务。
 
 当前项目一个 session 不允许并发 turn，版本校验主要用于防止未来后台压缩或恢复任务覆盖新状态。
 
-摘要或 ChatMemory 任何一项更新失败时回滚整个事务。
+整行更新失败或版本不匹配时回滚事务，不保留部分压缩结果。
 
 ## 失败处理
 
 ### 摘要模型失败
 
-- 不修改已有摘要；首次压缩时不插入摘要记录。
-- 不修改原 ChatMemory。
+- 不修改 `mboo_chat_memory` 中的摘要和近期消息。
 - 当前 turn 进入现有失败流程。
 - 错误码建议使用 `CONTEXT_COMPACTION_FAILED`。
 - 用户提示：`压缩上下文失败，请重试`。
@@ -661,9 +658,9 @@ COMPLETED
 
 - 不自动重试。
 - 沿用现有模型错误流程。
-- 错误提示补充：`当前模型的上下文窗口配置可能不正确，请切换模型或调整上下文窗口配置`。
+- 错误提示补充：`当前模型的实际上下文窗口可能小于系统暂定的 256K，请缩短输入或切换模型`。
 
-第一版上下文配置写死在代码中，因此提示可以先简化为“请切换到上下文窗口更大的模型”。
+第一版不在运行时修正该常量，也不根据错误自动重试；模型级窗口配置后续再处理。
 
 ### 当前用户输入过大
 
@@ -677,12 +674,14 @@ COMPLETED
 
 ### ChatMemory 丢失或损坏
 
-1. 读取摘要表。
-2. 读取 `covered_until_event_id` 之后的 JSONL。
+1. 读取 `mboo_chat_memory` 中可用的摘要和 `covered_until_event_id`；记录缺失时按尚未压缩处理。
+2. 读取 `covered_until_event_id` 之后的 JSONL；没有覆盖位置时从头读取。
 3. 排除被替换 turn。
 4. 恢复用户消息、完成助手消息和已经输出的中断文本。
 5. 不恢复历史工具协议消息。
-6. 重写 `mboo_chat_memory`。
+6. 修复或重建 `messages_json`；已有摘要字段有效时保持不变。
+
+如果整行记录丢失，则先从完整 JSONL 重建未压缩的 `messages_json`，摘要字段保持为空，再按照正常阈值流程决定是否压缩。
 
 ### 服务在工具调用中崩溃
 
@@ -697,24 +696,10 @@ COMPLETED
 
 ### 删除和归档
 
-- 归档 session：保留 JSONL、摘要和 ChatMemory。
-- 永久删除 session：删除 JSONL、摘要表记录和 ChatMemory 表记录。
+- 归档 session：保留 JSONL 和 `mboo_chat_memory`。
+- 永久删除 session：删除 JSONL 和对应的 `mboo_chat_memory` 记录。
 
 ## 组件设计
-
-### ModelContextProfileRegistry
-
-职责：
-
-- 根据当前 `modelName` 返回上下文窗口和最大输出配置。
-- 未知模型返回默认配置。
-- 后续支持从用户配置覆盖。
-
-建议位置：
-
-```text
-com.yu.mboocode.llm
-```
 
 ### SqliteChatMemoryStore
 
@@ -723,22 +708,11 @@ com.yu.mboocode.llm
 - 实现 LangChain4j `ChatMemoryStore`。
 - 使用 `messagesToJson()` 和 `messagesFromJson()`。
 - 以 session ID 作为 `memoryId`。
+- 普通消息更新只修改 `messages_json`，不覆盖摘要字段。
+- 为压缩服务提供整行查询和基于版本的上下文更新能力。
 - 作为 Spring 单例注入 `ChatMemoryProvider`。
 
 当前 `PersistentChatMemoryStore` 可以调整为该职责，不再由 provider 内部创建新实例。
-
-### SessionContextSummaryStore
-
-职责：
-
-- 查询、保存和删除 session 摘要。
-- 提供版本校验更新。
-
-建议位置：
-
-```text
-com.yu.mboocode.session.mapper
-```
 
 ### SessionConversationReplay
 
@@ -767,7 +741,7 @@ com.yu.mboocode.session.mapper
 - 判断是否需要压缩。
 - 选择压缩候选和近期 turn。
 - 调用摘要模型。
-- 事务更新摘要和 ChatMemory。
+- 事务更新 `mboo_chat_memory` 同一行的摘要字段和近期消息。
 - 推送压缩状态。
 
 ### TurnService
@@ -815,11 +789,10 @@ AiServices.builder(AiCodeService.class)
 
 ### 第一阶段：持久化基础
 
-- 新增 `mboo_chat_memory`。
-- 新增 `mboo_session_context_summary`。
+- 新增统一的 `mboo_chat_memory`，同时保存近期消息和可选摘要。
 - 将 `PersistentChatMemoryStore` 改为 SQLite 实现和 Spring 单例。
 - 删除会话时同步删除派生数据。
-- 增加模型上下文配置注册表和默认值。
+- 在压缩预算代码中增加固定的 `256K` 上下文窗口常量。
 
 ### 第二阶段：同步压缩
 
@@ -841,7 +814,7 @@ AiServices.builder(AiCodeService.class)
 
 - ChatMemory 缺失时从摘要和 JSONL 重建。
 - 服务重启后清理未完成 turn 和孤立工具消息。
-- 验证同一 session 切换大小窗口模型时的压缩行为。
+- 验证固定 `256K` 预算下的压缩和恢复行为。
 
 ## 后续扩展
 
@@ -862,15 +835,15 @@ AiServices.builder(AiCodeService.class)
 | --- | --- |
 | 记忆范围 | session 级。 |
 | 重启恢复 | 需要。 |
-| 新增存储 | 接受新增 ChatMemory 表和摘要表。 |
+| 新增存储 | 只新增 `mboo_chat_memory`，同一行保存近期消息和可选摘要。 |
 | 工具历史 | 沿用当前 JSONL 参数和截断结果预览。 |
 | 压缩时机 | 下一次主模型调用前同步压缩。 |
 | 压缩取消 | 需要支持取消。 |
 | 前端状态 | 需要展示“正在整理上下文”。 |
 | 压缩失败 | 当前 turn 失败，提示压缩上下文失败。 |
 | 摘要模型 | 第一版使用当前请求模型。 |
-| 模型切换 | 按当前请求模型重新计算预算。 |
-| 模型窗口来源 | 第一版代码内置配置，未知模型使用默认值。 |
+| 模型切换 | 第一版不区分模型窗口，统一使用固定常量。 |
+| 模型窗口来源 | 第一版固定为 `256 * 1024 = 262144` token，后续再做配置。 |
 | 超限重试 | 不自动重试，沿用原错误流程并补充提示。 |
 | 用户管理 | 第一版不提供摘要和记忆管理界面。 |
 | 近期上下文 | 至少保留最近 2 个完整 turn，预算内尽量多保留。 |
