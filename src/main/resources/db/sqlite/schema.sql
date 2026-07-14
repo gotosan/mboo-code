@@ -20,3 +20,10 @@ CREATE INDEX IF NOT EXISTS idx_sessions_list
 CREATE INDEX IF NOT EXISTS idx_sessions_active_turn
     ON mboo_sessions(active_turn_id)
     WHERE active_turn_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS mboo_chat_memory (
+                          memory_id TEXT PRIMARY KEY, -- 会话 ID
+                          messages_json TEXT NOT NULL DEFAULT '[]', -- 模型使用的近期聊天消息
+                          summary_text TEXT, -- 早期历史摘要，暂不启用上下文压缩时保持为空
+                          updated_at TEXT NOT NULL -- 会话记忆最近更新时间
+);

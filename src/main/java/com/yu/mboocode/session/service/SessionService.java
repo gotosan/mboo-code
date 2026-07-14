@@ -3,6 +3,7 @@ package com.yu.mboocode.session.service;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.llm.PersistentChatMemoryStore;
 import com.yu.mboocode.session.mapper.SessionEventStore;
 import com.yu.mboocode.session.mapper.SessionsMapper;
 import com.yu.mboocode.session.model.SessionEvent;
@@ -21,6 +22,8 @@ import java.util.Objects;
 public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     @Resource
     private SessionEventStore sessionEventStore;
+    @Resource
+    private PersistentChatMemoryStore persistentChatMemoryStore;
 
     @Transactional
     public Sessions getActiveOrCreateSession(String sessionId, String userMessage) {
@@ -122,6 +125,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         if (StrUtil.isNotBlank(session.getTranscriptUri())) {
             sessionEventStore.deleteTranscript(session.getTranscriptUri());
         }
+        persistentChatMemoryStore.deleteMessages(sessionId);
         removeById(sessionId);
     }
 

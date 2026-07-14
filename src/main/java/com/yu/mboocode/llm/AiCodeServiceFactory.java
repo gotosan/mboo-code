@@ -19,6 +19,8 @@ import java.util.List;
 
 @Configuration
 public class AiCodeServiceFactory {
+    private static final int MAX_MEMORY_MESSAGES = 10_000;
+
     @Resource
     private Setting setting;
     @Resource
@@ -28,7 +30,8 @@ public class AiCodeServiceFactory {
     public ChatMemoryProvider chatMemoryProvider() {
         return memoryId -> MessageWindowChatMemory.builder()
                 .id(memoryId)
-                .maxMessages(10)
+                .maxMessages(MAX_MEMORY_MESSAGES)
+                .alwaysKeepSystemMessageFirst(true)
                 .chatMemoryStore(persistentChatMemoryStore)
                 .build();
     }
