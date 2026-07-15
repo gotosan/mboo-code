@@ -17,11 +17,9 @@ mybatis-plus:
 springdoc:
   api-docs:
     path: /v3/api-docs
+  swagger-ui:
+    path: /doc.html
   group-configs:
-    - group: 'default'
-      paths-to-match: '/**'
+    - group: default
+      paths-to-match: /**
       packages-to-scan: com.yu.mboocode
-knife4j:
-  enable: true
-  setting:
-    language: zh_cn
