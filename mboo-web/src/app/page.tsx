@@ -81,7 +81,7 @@ type ApiResponse<T> = {
 type ToolCallEvent = Extract<
   SessionEvent,
   {
-    type: "TOOL_CALL_STARTED" | "TOOL_CALL_COMPLETED" | "TOOL_CALL_FAILED";
+    type: "TOOL_CALL_STARTED" | "TOOL_CALL_ENDED";
   }
 >;
 
@@ -1073,11 +1073,7 @@ function payloadDisplayText(value: unknown) {
 }
 
 function isToolCallEvent(event: SessionEvent): event is ToolCallEvent {
-  return (
-    event.type === "TOOL_CALL_STARTED" ||
-    event.type === "TOOL_CALL_COMPLETED" ||
-    event.type === "TOOL_CALL_FAILED"
-  );
+  return event.type === "TOOL_CALL_STARTED" || event.type === "TOOL_CALL_ENDED";
 }
 
 function toToolCallView(event: ToolCallEvent): ToolCallView {
@@ -1087,7 +1083,7 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
     id: payload.toolCallId || event.eventId,
     turnId: event.turnId,
     toolName,
-    status: toToolCallStatus(event.type),
+    status: event.type === "TOOL_CALL_STARTED" ? "started" : event.payload.status,
     argumentsText: payloadDisplayText(payload.arguments),
     resultPreview:
       event.type === "TOOL_CALL_STARTED"
@@ -1105,18 +1101,6 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
 
 function getToolLabel(toolName: string) {
   return TOOL_LABELS[toolName] ?? toolName;
-}
-
-function toToolCallStatus(type: ToolCallEvent["type"]): ToolCallStatus {
-  if (type === "TOOL_CALL_COMPLETED") {
-    return "completed";
-  }
-
-  if (type === "TOOL_CALL_FAILED") {
-    return "failed";
-  }
-
-  return "started";
 }
 
 function reduceSessionEventsToMessages(events: SessionEvent[]) {

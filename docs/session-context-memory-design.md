@@ -185,8 +185,7 @@ ${appDataDir}/sessions/{sessionId}/session.jsonl
 工具事件沿用当前逻辑：
 
 - `TOOL_CALL_STARTED` 保存 `toolCallId`、`toolName` 和 `arguments`。
-- `TOOL_CALL_COMPLETED` 保存 `arguments` 和截断后的 `resultPreview`。
-- `TOOL_CALL_FAILED` 保存 `arguments`、截断结果和错误信息。
+- `TOOL_CALL_ENDED` 保存 `status`、`arguments` 和截断后的 `resultPreview`；失败时额外保存错误信息。
 - 工具结果继续最多保留前 2000 个字符。
 - 不增加 artifact、结果哈希或完整工具结果恢复。
 

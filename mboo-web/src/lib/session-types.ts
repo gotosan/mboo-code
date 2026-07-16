@@ -2,8 +2,7 @@ export type SessionEventType =
   | "USER_MESSAGE"
   | "ASSISTANT_MESSAGE"
   | "TOOL_CALL_STARTED"
-  | "TOOL_CALL_COMPLETED"
-  | "TOOL_CALL_FAILED"
+  | "TOOL_CALL_ENDED"
   | "ERROR"
   | "CANCELLED"
   | "ASSISTANT_MESSAGE_DELTA";
@@ -70,22 +69,12 @@ export type ToolCallStartedPayload = {
   arguments: string;
 };
 
-export type ToolCallCompletedPayload = {
+export type ToolCallEndedPayload = {
   messageId: string;
   toolCallId: string;
   toolName: string;
   arguments: string;
-  resultPreview?: string;
-  errorCode?: string;
-  errorMessage?: string;
-  durationMs?: number;
-};
-
-export type ToolCallFailedPayload = {
-  messageId: string;
-  toolCallId: string;
-  toolName: string;
-  arguments: string;
+  status: "completed" | "failed";
   resultPreview?: string;
   errorCode?: string;
   errorMessage?: string;
@@ -97,8 +86,7 @@ export type SessionEventPayload =
   | AssistantMessagePayload
   | AssistantMessageDeltaPayload
   | ToolCallStartedPayload
-  | ToolCallCompletedPayload
-  | ToolCallFailedPayload
+  | ToolCallEndedPayload
   | ErrorPayload
   | CancelledPayload;
 
@@ -106,8 +94,7 @@ export type SessionEvent =
   | SessionEventBase<"USER_MESSAGE", UserMessagePayload>
   | SessionEventBase<"ASSISTANT_MESSAGE", AssistantMessagePayload>
   | SessionEventBase<"TOOL_CALL_STARTED", ToolCallStartedPayload>
-  | SessionEventBase<"TOOL_CALL_COMPLETED", ToolCallCompletedPayload>
-  | SessionEventBase<"TOOL_CALL_FAILED", ToolCallFailedPayload>
+  | SessionEventBase<"TOOL_CALL_ENDED", ToolCallEndedPayload>
   | SessionEventBase<"ERROR", ErrorPayload>
   | SessionEventBase<"CANCELLED", CancelledPayload>
   | SessionEventBase<"ASSISTANT_MESSAGE_DELTA", AssistantMessageDeltaPayload>;

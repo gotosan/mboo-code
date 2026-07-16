@@ -191,37 +191,24 @@ public class TurnService {
                         ToolExecutionRequest request = toolExecution.request();
                         boolean failed = toolExecution.hasFailed();
                         String resultPreview = toolResultPreview(toolExecution);
-                        SessionEventType eventType;
-                        SessionEventPayload payload;
-                        if (failed) {
-                            eventType = SessionEventType.TOOL_CALL_FAILED;
-                            payload = ToolCallFailedPayload.builder()
-                                    .messageId(assistantMessageId)
-                                    .toolCallId(request.id())
-                                    .toolName(request.name())
-                                    .arguments(request.arguments())
-                                    .resultPreview(resultPreview)
-                                    .errorCode("TOOL_EXECUTION_FAILED")
-                                    .errorMessage(resultPreview)
-                                    .durationMs(toolExecution.duration().toMillis())
-                                    .build();
-                        } else {
-                            eventType = SessionEventType.TOOL_CALL_COMPLETED;
-                            payload = ToolCallCompletedPayload.builder()
-                                    .messageId(assistantMessageId)
-                                    .toolCallId(request.id())
-                                    .toolName(request.name())
-                                    .arguments(request.arguments())
-                                    .resultPreview(resultPreview)
-                                    .durationMs(toolExecution.duration().toMillis())
-                                    .build();
-                        }
+                        ToolCallEndedPayload.ToolCallStatus status = failed ? ToolCallEndedPayload.ToolCallStatus.FAILED : ToolCallEndedPayload.ToolCallStatus.COMPLETED;
+                        ToolCallEndedPayload payload = ToolCallEndedPayload.builder()
+                                .messageId(assistantMessageId)
+                                .toolCallId(request.id())
+                                .toolName(request.name())
+                                .arguments(request.arguments())
+                                .status(status)
+                                .resultPreview(resultPreview)
+                                .errorCode(failed ? "TOOL_EXECUTION_FAILED" : null)
+                                .errorMessage(failed ? resultPreview : null)
+                                .durationMs(toolExecution.duration().toMillis())
+                                .build();
 
                         emitEvent(sink, () -> sessionEventStore.appendSession(
                                 sessionTurn.transcriptUri(),
                                 sessionTurn.sessionId(),
                                 sessionTurn.turnId(),
-                                eventType,
+                                SessionEventType.TOOL_CALL_ENDED,
                                 SessionEventSource.SYSTEM,
                                 payload
                         ));
@@ -337,3 +324,4 @@ public class TurnService {
         return text.substring(0, maxLength) + "\n...（结果已截断）";
     }
 }
+

@@ -27,8 +27,7 @@
 | `ASSISTANT_MESSAGE` | `AssistantMessagePayload` | 是 | 助手消息最终快照 |
 | `ASSISTANT_MESSAGE_DELTA` | `AssistantMessageDeltaPayload` | 否 | 助手文本增量，仅通过 SSE 推送 |
 | `TOOL_CALL_STARTED` | `ToolCallStartedPayload` | 是 | 工具调用开始 |
-| `TOOL_CALL_COMPLETED` | `ToolCallCompletedPayload` | 是 | 工具调用成功 |
-| `TOOL_CALL_FAILED` | `ToolCallFailedPayload` | 是 | 工具调用失败 |
+| `TOOL_CALL_ENDED` | `ToolCallEndedPayload` | 是 | 工具调用结束，成功或失败由 payload.status 区分 |
 | `ERROR` | `ErrorPayload` | 是 | 当前 turn 执行失败 |
 | `CANCELLED` | `CancelledPayload` | 是 | SSE 断开导致当前 turn 取消 |
 
@@ -98,7 +97,7 @@
 | `toolName` | `String` | 是 | 稳定工具名称 |
 | `arguments` | `String` | 是 | 工具参数 JSON 字符串 |
 
-完成或失败事件还可以包含 `resultPreview`、`errorCode`、`errorMessage` 和 `durationMs`。`resultPreview` 只用于展示，不是完整工具结果。
+结束事件 `TOOL_CALL_ENDED` 还包含 `status`，以及可选的 `resultPreview`、`errorCode`、`errorMessage` 和 `durationMs`。`status` 取值 `completed` 或 `failed`；`resultPreview` 只用于展示，不是完整工具结果。
 
 ## 6. 典型顺序
 
@@ -107,7 +106,7 @@
 ```text
 USER_MESSAGE
 ASSISTANT_MESSAGE_DELTA（0 到多次，仅 SSE）
-TOOL_CALL_STARTED / TOOL_CALL_COMPLETED / TOOL_CALL_FAILED（0 到多次）
+TOOL_CALL_STARTED / TOOL_CALL_ENDED（0 到多次）
 ASSISTANT_MESSAGE state=completed
 SSE 完成
 ```

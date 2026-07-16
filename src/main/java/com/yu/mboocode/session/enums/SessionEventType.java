@@ -5,8 +5,7 @@ import com.yu.mboocode.session.payload.AssistantMessagePayload;
 import com.yu.mboocode.session.payload.CancelledPayload;
 import com.yu.mboocode.session.payload.ErrorPayload;
 import com.yu.mboocode.session.payload.SessionEventPayload;
-import com.yu.mboocode.session.payload.ToolCallCompletedPayload;
-import com.yu.mboocode.session.payload.ToolCallFailedPayload;
+import com.yu.mboocode.session.payload.ToolCallEndedPayload;
 import com.yu.mboocode.session.payload.ToolCallStartedPayload;
 import com.yu.mboocode.session.payload.UserMessagePayload;
 import lombok.AllArgsConstructor;
@@ -22,8 +21,7 @@ public enum SessionEventType {
     ASSISTANT_MESSAGE(AssistantMessagePayload.class), //助手消息
 
     TOOL_CALL_STARTED(ToolCallStartedPayload.class), //工具调用已开始
-    TOOL_CALL_COMPLETED(ToolCallCompletedPayload.class), //工具调用已完成
-    TOOL_CALL_FAILED(ToolCallFailedPayload.class), //工具调用失败
+    TOOL_CALL_ENDED(ToolCallEndedPayload.class), //工具调用已结束
 
     ERROR(ErrorPayload.class), //会话执行错误
     CANCELLED(CancelledPayload.class), //会话已取消
