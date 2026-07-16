@@ -1,5 +1,7 @@
 package com.yu.mboocode.session.mapper;
 
+import cn.hutool.core.thread.lock.LockUtil;
+import cn.hutool.core.thread.lock.SegmentLock;
 import cn.hutool.core.util.IdUtil;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONException;
@@ -24,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.Lock;
 
 /**
  * 负责会话 JSONL 事件日志的追加写入和顺序回放。
@@ -49,43 +52,46 @@ public class SessionEventStore {
         return Path.of(CommonUtil.getAppDataDir()).resolve(path).normalize();
     }
 
+    private final SegmentLock<Lock> fileLocks = LockUtil.createLazySegmentLock(64); // 64 段够本地单机；会话多可调到 128/256
+
     /**
-     * 追加一条完整事件，事件 ID 使用雪花 ID。
+     * 追加一条完整事件
      */
-    public synchronized SessionEvent appendSession(
-            String transcriptUri,
-            String sessionId,
-            String turnId,
-            SessionEventType type,
-            SessionEventSource source,
-            SessionEventPayload payload
-    ) {
-        Path path = resolveTranscriptPath(transcriptUri);
+    public SessionEvent appendSession(String transcriptUri, SessionEvent sessionEvent) {
+        Lock lock = fileLocks.get(transcriptUri);
+        lock.lock();
         try {
+            Path path = resolveTranscriptPath(transcriptUri);
             Files.createDirectories(path.getParent());
             repairJsonlLastLine(path);
-            type.validatePayload(payload);
-
-            SessionEvent event = SessionEvent.builder()
-                    .eventId(IdUtil.getSnowflakeNextIdStr())
-                    .sessionId(sessionId)
-                    .turnId(turnId)
-                    .type(type)
-                    .source(source)
-                    .createdAt(DateTimeUtil.now())
-                    .payload(payload)
-                    .meta(Collections.emptyMap())
-                    .build();
-
+            sessionEvent.getType().validatePayload(sessionEvent.getPayload());
             try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
-                writer.write(JSON.toJSONString(event));
+                writer.write(JSON.toJSONString(sessionEvent));
                 writer.newLine();
             }
-            return event;
+            return sessionEvent;
         } catch (IOException e) {
-            log.error("写入会话事件失败 path:{}", path, e);
+            log.error("写入会话事件失败 transcriptUri:{}", transcriptUri, e);
             throw new ServiceException("写入会话事件失败");
+        } finally {
+            lock.unlock();
         }
+    }
+
+    /**
+     * 追加一条完整事件
+     */
+    public SessionEvent appendSession(String transcriptUri, String sessionId, String turnId, SessionEventType type, SessionEventSource source, SessionEventPayload payload) {
+        return appendSession(transcriptUri, SessionEvent.builder()
+                .eventId(IdUtil.getSnowflakeNextIdStr())
+                .sessionId(sessionId)
+                .turnId(turnId)
+                .type(type)
+                .source(source)
+                .createdAt(DateTimeUtil.now())
+                .payload(payload)
+                .meta(Collections.emptyMap())
+                .build());
     }
 
     /**

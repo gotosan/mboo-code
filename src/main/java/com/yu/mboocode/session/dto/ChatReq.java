@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotBlank;
 @Schema(description = "聊天请求体")
 public record ChatReq(
         @Schema(description = "模型名称")
+        @NotBlank(message = "模型名称不能为空")
         String modelName,
 
         @Schema(description = "推理深度，仅 provider 支持时生效")

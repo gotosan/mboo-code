@@ -194,6 +194,9 @@ export default function Home() {
 
         const next = [...current];
         const existing = next[index];
+        if (existing.state === "completed" || existing.state === "interrupted") {
+          return current;
+        }
         next[index] = {
           ...existing,
           text: `${existing.text}${text}`,
@@ -280,13 +283,8 @@ export default function Home() {
         setActiveTurnId(event.turnId);
       }
 
-      if (event.type !== "TURN_FAILED") {
+      if (event.type !== "ERROR") {
         setErrorMessage("");
-      }
-
-      if (event.type === "TURN_STARTED") {
-        setConnectionState("running");
-        return;
       }
 
       if (event.type === "USER_MESSAGE") {
@@ -320,23 +318,22 @@ export default function Home() {
           turnId: event.turnId,
           createdAt: event.createdAt,
         });
+        if (event.payload.state === "completed") {
+          setConnectionState("idle");
+          setActiveTurnId(null);
+        }
         return;
       }
 
-      if (event.type === "TURN_COMPLETED") {
-        setConnectionState("idle");
-        setActiveTurnId(null);
-        return;
-      }
-
-      if (event.type === "TURN_CANCELLED") {
+      if (event.type === "CANCELLED") {
         setConnectionState("idle");
         setActiveTurnId(null);
         markStreamingMessagesInterrupted();
+        addSystemMessage("本轮会话已取消", "info");
         return;
       }
 
-      if (event.type === "TURN_FAILED") {
+      if (event.type === "ERROR") {
         const message = event.payload.errorMessage || "本轮会话执行失败";
         setConnectionState("error");
         setErrorMessage(message);
@@ -467,94 +464,36 @@ export default function Home() {
     }
   }, [editingSessionId, titleDraft]);
 
-  const stopRunningForManagement = useCallback(
-    (targetSessionId: string) => {
-      if (targetSessionId !== currentSessionIdRef.current) {
-        return;
-      }
-
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
-      markStreamingMessagesInterrupted();
-      setActiveTurnId(null);
-      setConnectionState("idle");
-    },
-    [markStreamingMessagesInterrupted],
-  );
-
-  const cancelBackendTurn = useCallback((targetSessionId: string, targetTurnId: string | null) => {
-    if (!targetSessionId) {
-      return;
-    }
-
-    const query = targetTurnId
-      ? `?turnId=${encodeURIComponent(targetTurnId)}`
-      : "";
-    void fetch(
-      `/api/session/${encodeURIComponent(targetSessionId)}/cancel${query}`,
-      { method: "POST" },
-    )
-      .then((response) => readApiData<boolean>(response))
-      .catch((error) => {
-        setSessionMessage(`停止后端任务失败：${toErrorMessage(error)}`);
-      });
-  }, []);
-
   const archiveSession = useCallback(
     async (target: SessionInfo) => {
-      stopRunningForManagement(target.id);
       try {
         const response = await fetch(
           `/api/session/${encodeURIComponent(target.id)}/archive`,
           { method: "POST" },
         );
         await readApiData<SessionInfo>(response);
-        if (target.id === currentSessionIdRef.current) {
-          currentSessionIdRef.current = "";
-          setSessionId("");
-          setMessages([]);
-          setInput("");
-          setActiveTurnId(null);
-          setConnectionState("idle");
-        }
-        setSessionMessage("");
-        await refreshSessions();
+        setSessionMessage("归档功能暂未实现，未修改会话");
       } catch (error) {
         setSessionMessage(toErrorMessage(error));
       }
     },
-    [refreshSessions, stopRunningForManagement],
+    [],
   );
 
   const deleteSession = useCallback(
     async (target: SessionInfo) => {
-      const title = target.title || "新会话";
-      if (!window.confirm(`确定永久删除「${title}」吗？`)) {
-        return;
-      }
-
-      stopRunningForManagement(target.id);
       try {
         const response = await fetch(
           `/api/session/${encodeURIComponent(target.id)}`,
           { method: "DELETE" },
         );
         await readApiData<void>(response);
-        if (target.id === currentSessionIdRef.current) {
-          currentSessionIdRef.current = "";
-          setSessionId("");
-          setMessages([]);
-          setInput("");
-          setActiveTurnId(null);
-          setConnectionState("idle");
-        }
-        setSessionMessage("");
-        await refreshSessions();
+        setSessionMessage("删除功能暂未实现，未修改会话");
       } catch (error) {
         setSessionMessage(toErrorMessage(error));
       }
     },
-    [refreshSessions, stopRunningForManagement],
+    [],
   );
 
   const sendMessage = useCallback(
@@ -603,7 +542,15 @@ export default function Home() {
           throw new Error(await readErrorMessage(response));
         }
 
-        await readSessionEventStream(response, handleSessionEvent);
+        await readSessionEventStream(response, (sessionEvent) => {
+          if (
+            abortControllerRef.current !== controller ||
+            controller.signal.aborted
+          ) {
+            return;
+          }
+          handleSessionEvent(sessionEvent);
+        });
       } catch (error) {
         if (controller.signal.aborted) {
           return;
@@ -615,15 +562,14 @@ export default function Home() {
         setInput((current) => current || userMessage);
         addSystemMessage(message, "error");
       } finally {
+        void refreshSessions();
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
+          setActiveTurnId(null);
+          setConnectionState((current) =>
+            current === "running" ? "idle" : current,
+          );
         }
-
-        void refreshSessions();
-        setActiveTurnId(null);
-        setConnectionState((current) =>
-          current === "running" ? "idle" : current,
-        );
       }
     },
     [
@@ -640,16 +586,22 @@ export default function Home() {
   );
 
   const stopCurrentRun = useCallback(() => {
-    cancelBackendTurn(currentSessionIdRef.current, activeTurnId);
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
-    markStreamingMessagesInterrupted();
-    setActiveTurnId(null);
-    setConnectionState("idle");
-  }, [activeTurnId, cancelBackendTurn, markStreamingMessagesInterrupted]);
+    handleSessionEvent({
+      eventId: createLocalId("cancelled"),
+      sessionId: currentSessionIdRef.current,
+      turnId: activeTurnId,
+      type: "CANCELLED",
+      source: "USER",
+      createdAt: new Date().toISOString(),
+      payload: { reason: "user_cancelled" },
+      meta: { local: true },
+    });
+    void refreshSessions();
+  }, [activeTurnId, handleSessionEvent, refreshSessions]);
 
   const startNewSession = useCallback(() => {
-    cancelBackendTurn(currentSessionIdRef.current, activeTurnId);
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     currentSessionIdRef.current = "";
@@ -662,7 +614,7 @@ export default function Home() {
     setConnectionState("idle");
     localStorage.removeItem(STORAGE_KEYS.sessionId);
     void refreshSessions();
-  }, [activeTurnId, cancelBackendTurn, refreshSessions]);
+  }, [refreshSessions]);
 
   const status = useMemo(
     () => getStatusView(connectionState, activeTurnId),
@@ -1168,17 +1120,6 @@ function toToolCallStatus(type: ToolCallEvent["type"]): ToolCallStatus {
 }
 
 function reduceSessionEventsToMessages(events: SessionEvent[]) {
-  const hiddenTurnIds = new Set<string>();
-  for (const event of events) {
-    if (
-      event.type === "TURN_SUPERSEDED" &&
-      event.turnId &&
-      event.payload.hiddenInNormalView
-    ) {
-      hiddenTurnIds.add(event.turnId);
-    }
-  }
-
   const seenEventIds = new Set<string>();
   let messages: ChatMessage[] = [];
 
@@ -1187,10 +1128,6 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
       continue;
     }
     seenEventIds.add(event.eventId);
-
-    if (event.turnId && hiddenTurnIds.has(event.turnId)) {
-      continue;
-    }
 
     if (event.type === "USER_MESSAGE") {
       messages = upsertMessageSnapshot(messages, {
@@ -1220,7 +1157,7 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
       continue;
     }
 
-    if (event.type === "TURN_FAILED") {
+    if (event.type === "ERROR") {
       messages = [
         ...messages,
         {
@@ -1228,6 +1165,28 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
           role: "system",
           text: event.payload.errorMessage || "本轮会话执行失败",
           state: "error",
+          turnId: event.turnId,
+          createdAt: event.createdAt,
+        },
+      ];
+      continue;
+    }
+
+    if (event.type === "CANCELLED") {
+      if (event.turnId) {
+        messages = messages.map((message) =>
+          message.role === "assistant" && message.turnId === event.turnId
+            ? { ...message, state: "interrupted" }
+            : message,
+        );
+      }
+      messages = [
+        ...messages,
+        {
+          id: `system_${event.eventId}`,
+          role: "system",
+          text: "本轮会话已取消",
+          state: "info",
           turnId: event.turnId,
           createdAt: event.createdAt,
         },

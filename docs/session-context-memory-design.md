@@ -16,7 +16,7 @@
 - 压缩失败时终止当前 turn，返回明确的“压缩上下文失败”错误。
 - 第一版统一按代码常量 `256K` 计算上下文窗口，不区分具体模型。
 - 工具事件沿用现有 JSONL 结构，保存工具参数和截断后的结果预览。
-- 已经输出给用户的助手文本参与后续记忆；被 `TURN_SUPERSEDED` 替换的 turn 不参与记忆。
+- 已经输出给用户的助手文本参与后续记忆。
 
 本文档建立在 [Agent Session JSONL 事件日志设计](./session-event-jsonl-design.md) 之上，不改变 JSONL 作为完整历史来源的定位。
 
@@ -296,12 +296,11 @@ WHERE memory_id = ?
 
 ### 可进入记忆的 turn
 
-| turn 状态 | 处理规则 |
+| 事件或消息状态 | 处理规则 |
 | --- | --- |
-| `TURN_COMPLETED` | 用户消息和完整助手回答进入近期上下文或摘要。 |
-| `TURN_FAILED` | 已经输出的助手部分文本保留，并在摘要中标明执行失败。 |
-| `TURN_CANCELLED` | 已经输出的助手部分文本保留，并在摘要中标明已取消。 |
-| `TURN_SUPERSEDED` | 被替换的 turn 不进入摘要和近期上下文。 |
+| `ASSISTANT_MESSAGE state=completed` | 用户消息和完整助手回答进入近期上下文或摘要。 |
+| `ERROR` | 已经输出的助手部分文本保留，并在摘要中标明执行失败。 |
+| `CANCELLED` | 已经输出的助手部分文本保留，并在摘要中标明已取消。 |
 
 “已经输出的就记住”具体指：
 
@@ -415,10 +414,10 @@ LangChain4j `TokenCountEstimator` 只计算文本和消息，不计算 `toolSpec
 
 ### 执行位置
 
-为了复用现有取消接口和 SSE，压缩发生在：
+为了复用现有 SSE 取消生命周期，压缩发生在：
 
 ```text
-TURN_STARTED 和 USER_MESSAGE 已写入
+USER_MESSAGE 已写入
 → active turn runtime 已建立
 → 判断并执行上下文压缩
 → 调用主模型
@@ -429,8 +428,8 @@ TURN_STARTED 和 USER_MESSAGE 已写入
 不建议在 `startTurn()` 之前压缩，因为：
 
 - 此时还没有 turn ID。
-- 现有取消接口无法定位压缩任务。
-- SSE 还没有稳定的 turn 事件上下文。
+- SSE 取消回调还没有可关联的运行时上下文。
+- 前端还没有收到携带 turn ID 的用户消息事件。
 - 压缩失败无法自然归入当前 turn 的失败状态。
 
 ### 时序
@@ -445,8 +444,8 @@ sequenceDiagram
     participant F as "前端"
 
     U->>T: "发送用户消息"
-    T->>T: "写 TURN_STARTED / USER_MESSAGE"
-    T-->>F: "推送 turn 和用户消息"
+    T->>T: "写 USER_MESSAGE"
+    T-->>F: "推送用户消息"
     T->>C: "检查当前模型 token 预算"
     alt "未达到阈值"
         C-->>T: "无需压缩，不生成或更新摘要"
@@ -473,12 +472,11 @@ sequenceDiagram
 1. 从 `mboo_chat_memory` 读取可选的旧摘要和 `covered_until_event_id`；第一次压缩时两者都为空。
 2. 按 JSONL 文件顺序读取 turn。
 3. 排除当前 turn。
-4. 排除所有被 `TURN_SUPERSEDED` 替换的 turn。
-5. 找出本次尚未被摘要覆盖的 turn；第一次压缩从最早的有效 turn 开始，后续压缩从 `covered_until_event_id` 之后开始。
-6. 从末尾开始，在压缩目标预算内选择近期完整 turn。
-7. 至少保留最近 2 个 turn。
-8. 其余较早 turn 交给摘要模型；如果存在旧摘要，则将旧摘要一并作为输入。
-9. 如果没有新的早期 turn 可摘要，但 ChatMemory 因工具消息过大超过阈值，则直接用 JSONL 重建近期普通 `user/assistant` 上下文，移除历史工具消息。
+4. 找出本次尚未被摘要覆盖的 turn；第一次压缩从最早的有效 turn 开始，后续压缩从 `covered_until_event_id` 之后开始。
+5. 从末尾开始，在压缩目标预算内选择近期完整 turn。
+6. 至少保留最近 2 个 turn。
+7. 其余较早 turn 交给摘要模型；如果存在旧摘要，则将旧摘要一并作为输入。
+8. 如果没有新的早期 turn 可摘要，但 ChatMemory 因工具消息过大超过阈值，则直接用 JSONL 重建近期普通 `user/assistant` 上下文，移除历史工具消息。
 
 ### 滚动摘要
 
@@ -600,7 +598,7 @@ Payload 示例：
 压缩失败不再发送 `completed`，而是沿用当前 turn 错误流程，最终产生：
 
 - `ASSISTANT_MESSAGE state=interrupted`
-- `TURN_FAILED`
+- `ERROR`
 - SSE 错误文案：`压缩上下文失败，请重试或切换到上下文窗口更大的模型`
 
 ## 取消处理

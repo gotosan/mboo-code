@@ -72,17 +72,14 @@
 
 - 基于 [session-event-jsonl-design.md](./session-event-jsonl-design.md) 实现最小事件集。
 - 第一批事件类型：
-  - `SESSION_CREATED`
-  - `TURN_STARTED`
-  - `TURN_COMPLETED`
-  - `TURN_FAILED`
   - `USER_MESSAGE`
   - `ASSISTANT_MESSAGE_DELTA`
-  - `ASSISTANT_MESSAGE_COMPLETED`
-  - `MODEL_CALL_STARTED`
-  - `MODEL_CALL_COMPLETED`
-  - `MODEL_CALL_FAILED`
+  - `ASSISTANT_MESSAGE`
   - `TOOL_CALL_STARTED`
+  - `TOOL_CALL_COMPLETED`
+  - `TOOL_CALL_FAILED`
+  - `ERROR`
+  - `CANCELLED`
   - `TOOL_CALL_COMPLETED`
 - 新增 `EventStore`：
   - 追加写入 JSONL。
@@ -124,7 +121,7 @@
   - 把工具结果继续放入上下文，再次调用模型。
   - 直到模型返回最终回答或进入等待确认状态。
 - 需要限制最大循环次数，避免模型反复调用工具无法结束。
-- turn 失败时必须写入 `TURN_FAILED`。
+- turn 失败时必须写入 `ERROR`。
 
 ### 6. 建立工具系统
 
@@ -220,8 +217,9 @@
   - `FILE_CHANGED`
   - `COMMAND_OUTPUT`
   - `APPROVAL_REQUIRED`
-  - `TURN_COMPLETED`
-  - `TURN_FAILED`
+  - `ASSISTANT_MESSAGE`
+  - `ERROR`
+  - `CANCELLED`
 - SSE 固定使用 `session_event`，消息体使用统一 `SessionEvent`，前端按 `data.type` 分发。
 - 不单独发送 assistant started 事件，第一条 `ASSISTANT_MESSAGE_DELTA` 携带 `messageId` 并表示助手消息开始。
 

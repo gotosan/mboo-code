@@ -16,10 +16,7 @@ public record SessionTurn(
         @Schema(description = "本轮 turn ID")
         String turnId,
 
-        @Schema(description = "用户消息 ID")
-        String userMessageId,
-
-        @Schema(description = "助手消息 ID")
-        String assistantMessageId
+        @Schema(description = "本轮 turn 开始时间")
+        Long startNano
 ) {
 }

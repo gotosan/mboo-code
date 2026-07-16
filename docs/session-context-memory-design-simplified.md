@@ -146,7 +146,7 @@ token 估算使用 LangChain4j 的 `TokenCountEstimator`。如果当前模型无
 压缩发生在当前 turn 已创建、主模型尚未调用时：
 
 ```text
-写入 TURN_STARTED 和 USER_MESSAGE
+写入 USER_MESSAGE
 → 建立 ActiveTurnRuntime
 → ContextCompactionService.compactIfNeeded(...)
 → 调用主模型

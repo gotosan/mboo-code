@@ -1,14 +1,11 @@
 export type SessionEventType =
-  | "TURN_STARTED"
-  | "TURN_COMPLETED"
-  | "TURN_FAILED"
-  | "TURN_CANCELLED"
-  | "TURN_SUPERSEDED"
   | "USER_MESSAGE"
   | "ASSISTANT_MESSAGE"
   | "TOOL_CALL_STARTED"
   | "TOOL_CALL_COMPLETED"
   | "TOOL_CALL_FAILED"
+  | "ERROR"
+  | "CANCELLED"
   | "ASSISTANT_MESSAGE_DELTA";
 
 export type SessionEventSource = "USER" | "ASSISTANT" | "SYSTEM";
@@ -35,30 +32,15 @@ type SessionEventBase<TType extends SessionEventType, TPayload> = {
   meta: Record<string, unknown>;
 };
 
-export type TurnStartedPayload = {
-  trigger: string;
-  userMessageId: string;
-};
-
-export type TurnCompletedPayload = {
-  durationMs?: number;
-};
-
-export type TurnFailedPayload = {
+export type ErrorPayload = {
   errorCode?: string;
   errorMessage?: string;
   durationMs?: number;
 };
 
-export type TurnCancelledPayload = {
+export type CancelledPayload = {
   reason?: string;
   durationMs?: number;
-};
-
-export type TurnSupersededPayload = {
-  supersededByTurnId?: string;
-  reason?: string;
-  hiddenInNormalView?: boolean;
 };
 
 export type UserMessagePayload = {
@@ -111,27 +93,21 @@ export type ToolCallFailedPayload = {
 };
 
 export type SessionEventPayload =
-  | TurnStartedPayload
-  | TurnCompletedPayload
-  | TurnFailedPayload
-  | TurnCancelledPayload
-  | TurnSupersededPayload
   | UserMessagePayload
   | AssistantMessagePayload
   | AssistantMessageDeltaPayload
   | ToolCallStartedPayload
   | ToolCallCompletedPayload
-  | ToolCallFailedPayload;
+  | ToolCallFailedPayload
+  | ErrorPayload
+  | CancelledPayload;
 
 export type SessionEvent =
-  | SessionEventBase<"TURN_STARTED", TurnStartedPayload>
-  | SessionEventBase<"TURN_COMPLETED", TurnCompletedPayload>
-  | SessionEventBase<"TURN_FAILED", TurnFailedPayload>
-  | SessionEventBase<"TURN_CANCELLED", TurnCancelledPayload>
-  | SessionEventBase<"TURN_SUPERSEDED", TurnSupersededPayload>
   | SessionEventBase<"USER_MESSAGE", UserMessagePayload>
   | SessionEventBase<"ASSISTANT_MESSAGE", AssistantMessagePayload>
   | SessionEventBase<"TOOL_CALL_STARTED", ToolCallStartedPayload>
   | SessionEventBase<"TOOL_CALL_COMPLETED", ToolCallCompletedPayload>
   | SessionEventBase<"TOOL_CALL_FAILED", ToolCallFailedPayload>
+  | SessionEventBase<"ERROR", ErrorPayload>
+  | SessionEventBase<"CANCELLED", CancelledPayload>
   | SessionEventBase<"ASSISTANT_MESSAGE_DELTA", AssistantMessageDeltaPayload>;

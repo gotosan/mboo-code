@@ -3,7 +3,6 @@ package com.yu.mboocode.session.service;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yu.mboocode.common.exception.ServiceException;
-import com.yu.mboocode.llm.PersistentChatMemoryStore;
 import com.yu.mboocode.session.mapper.SessionEventStore;
 import com.yu.mboocode.session.mapper.SessionsMapper;
 import com.yu.mboocode.session.model.SessionEvent;
@@ -12,7 +11,6 @@ import com.yu.mboocode.util.DateTimeUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
 
 import java.util.Collections;
 import java.util.List;
@@ -22,21 +20,18 @@ import java.util.Objects;
 public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     @Resource
     private SessionEventStore sessionEventStore;
-    @Resource
-    private PersistentChatMemoryStore persistentChatMemoryStore;
-
     @Transactional
-    public Sessions getActiveOrCreateSession(String sessionId, String userMessage) {
+    public Sessions getActiveOrCreateSession(String sessionId) {
         if (StrUtil.isNotBlank(sessionId)) {
             return getActiveSession(sessionId);
         }
-        return createSession(userMessage);
+        return createSession();
     }
 
     @Transactional
-    public Sessions createSession(String userMessage) {
+    public Sessions createSession() {
         Sessions session = new Sessions();
-        session.setTitle(toTitle(userMessage)); //todo 后续看看用大模型的回答
+        session.setTitle("新会话"); //todo 后续看看用大模型的回答
         session.setStatus(Sessions.StatusEnum.ACTIVE.getCode());
         session.setMetadataJson("{}");
         save(session);
@@ -99,34 +94,15 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
 
     @Transactional
     public Sessions archiveSession(String sessionId) {
+        // 归档逻辑后续实现，当前仅保留接口并校验会话存在。
         Sessions session = getSession(sessionId);
-        if (!Objects.equals(session.getStatus(), Sessions.StatusEnum.ACTIVE.getCode())) {
-            throw new ServiceException("只有活跃会话可以归档");
-        }
-
-        String now = DateTimeUtil.now();
-        boolean updated = lambdaUpdate()
-                .eq(Sessions::getId, sessionId)
-                .eq(Sessions::getStatus, Sessions.StatusEnum.ACTIVE.getCode())
-                .set(Sessions::getStatus, Sessions.StatusEnum.ARCHIVED.getCode())
-                .set(Sessions::getActiveTurnId, null)
-                .set(Sessions::getArchivedAt, now)
-                .set(Sessions::getUpdatedAt, now)
-                .update();
-        if (!updated) {
-            throw new ServiceException("归档会话失败");
-        }
-        return getSession(sessionId);
+        return session;
     }
 
     @Transactional
     public void deleteSession(String sessionId) {
-        Sessions session = getSession(sessionId);
-        if (StrUtil.isNotBlank(session.getTranscriptUri())) {
-            sessionEventStore.deleteTranscript(session.getTranscriptUri());
-        }
-        persistentChatMemoryStore.deleteMessages(sessionId);
-        removeById(sessionId);
+        // 删除逻辑后续实现，当前仅保留接口并校验会话存在。
+        getSession(sessionId);
     }
 
     public boolean updateActiveTurn(String sessionId, String turnId) {
@@ -139,22 +115,12 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     }
 
     // 清理当前活跃轮次
-    public void clearActiveTurn(String sessionId) {
+    public void clearActiveTurn(String sessionId, String activeTurnId) {
         lambdaUpdate()
                 .eq(Sessions::getId, sessionId)
+                .eq(Sessions::getActiveTurnId, activeTurnId)
                 .set(Sessions::getActiveTurnId, null)
                 .set(Sessions::getUpdatedAt, DateTimeUtil.now())
                 .update();
-    }
-
-    private String toTitle(String userMessage) {
-        if (!StringUtils.hasText(userMessage)) {
-            return "新会话";
-        }
-        String trimmed = userMessage.strip();
-        if (trimmed.length() <= 32) {
-            return trimmed;
-        }
-        return trimmed.substring(0, 32);
     }
 }
