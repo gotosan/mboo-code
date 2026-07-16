@@ -30,7 +30,7 @@ const TOOL_LABELS: Record<string, string> = {
 };
 
 type MessageRole = "user" | "assistant" | "system";
-type MessageState = AssistantMessageState | "streaming" | "error" | "info";
+type MessageState = AssistantMessageState | "streaming" | "info";
 type ConnectionState = "idle" | "running" | "error";
 
 type ToolCallView = {
@@ -73,6 +73,7 @@ type SessionInfo = {
 type ApiResponse<T> = {
   success?: boolean;
   data?: T;
+  code?: number;
   msg?: string;
   message?: string;
   exception?: string;
@@ -194,7 +195,7 @@ export default function Home() {
 
         const next = [...current];
         const existing = next[index];
-        if (existing.state === "completed" || existing.state === "interrupted") {
+        if (existing.state === "complete" || existing.state === "cancel" || existing.state === "error") {
           return current;
         }
         next[index] = {
@@ -256,11 +257,11 @@ export default function Home() {
     });
   }, []);
 
-  const markStreamingMessagesInterrupted = useCallback(() => {
+  const markStreamingMessagesCancelled = useCallback((turnId: string | null) => {
     setMessages((current) =>
       current.map((message) => {
-        if (message.role === "assistant" && message.state === "streaming") {
-          return { ...message, state: "interrupted" };
+        if (message.role === "assistant" && message.state === "streaming" && (!turnId || message.turnId === turnId)) {
+          return { ...message, state: "cancel" };
         }
         return message;
       }),
@@ -318,8 +319,15 @@ export default function Home() {
           turnId: event.turnId,
           createdAt: event.createdAt,
         });
-        if (event.payload.state === "completed") {
+        if (event.payload.state === "complete") {
           setConnectionState("idle");
+          setActiveTurnId(null);
+        } else if (event.payload.state === "cancel") {
+          setConnectionState("idle");
+          setActiveTurnId(null);
+        } else if (event.payload.state === "error") {
+          setConnectionState("error");
+          setErrorMessage(event.payload.errorMessage || "本轮会话执行失败");
           setActiveTurnId(null);
         }
         return;
@@ -328,7 +336,7 @@ export default function Home() {
       if (event.type === "CANCELLED") {
         setConnectionState("idle");
         setActiveTurnId(null);
-        markStreamingMessagesInterrupted();
+        markStreamingMessagesCancelled(event.turnId);
         addSystemMessage("本轮会话已取消", "info");
         return;
       }
@@ -344,7 +352,7 @@ export default function Home() {
     [
       addSystemMessage,
       appendAssistantDelta,
-      markStreamingMessagesInterrupted,
+      markStreamingMessagesCancelled,
       upsertToolCall,
       upsertMessage,
     ],
@@ -595,7 +603,7 @@ export default function Home() {
       type: "CANCELLED",
       source: "USER",
       createdAt: new Date().toISOString(),
-      payload: { reason: "user_cancelled" },
+      payload: {},
       meta: { local: true },
     });
     void refreshSessions();
@@ -1160,7 +1168,7 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
       if (event.turnId) {
         messages = messages.map((message) =>
           message.role === "assistant" && message.turnId === event.turnId
-            ? { ...message, state: "interrupted" }
+            ? { ...message, state: "cancel" }
             : message,
         );
       }
@@ -1187,6 +1195,12 @@ function upsertMessageSnapshot(
 ): ChatMessage[] {
   const index = messages.findIndex((item) => item.id === message.id);
   if (index < 0) {
+    if (message.role === "assistant" && message.turnId) {
+      const systemMessageIndex = messages.findIndex((item) => item.role === "system" && item.turnId === message.turnId);
+      if (systemMessageIndex >= 0) {
+        return [...messages.slice(0, systemMessageIndex), message, ...messages.slice(systemMessageIndex)];
+      }
+    }
     return [...messages, message];
   }
 
@@ -1345,12 +1359,12 @@ function stateLabel(state: MessageState) {
     return "生成中";
   }
 
-  if (state === "completed") {
+  if (state === "complete") {
     return "完成";
   }
 
-  if (state === "interrupted") {
-    return "已中断";
+  if (state === "cancel") {
+    return "已取消";
   }
 
   if (state === "error") {

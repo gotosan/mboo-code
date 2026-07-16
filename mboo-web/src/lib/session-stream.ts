@@ -1,6 +1,6 @@
 import type { SessionEvent } from "@/lib/session-types";
 
-const SESSION_EVENT_NAMES = new Set(["session", "session_event"]);
+const SESSION_EVENT_NAMES = new Set(["session"]);
 
 type SseBoundary = {
   index: number;

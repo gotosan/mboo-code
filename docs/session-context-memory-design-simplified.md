@@ -287,6 +287,8 @@ token 估算使用 LangChain4j 的 `TokenCountEstimator`。如果当前模型无
 
 归档 session 时保留 ChatMemory。
 
+这是本设计的目标行为。当前后端归档和删除接口只校验 session 存在，尚未执行状态更新、文件删除或 ChatMemory 清理。
+
 ## 组件调整
 
 ### `PersistentChatMemoryStore`

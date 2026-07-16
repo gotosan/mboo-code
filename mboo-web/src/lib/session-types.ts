@@ -9,7 +9,7 @@ export type SessionEventType =
 
 export type SessionEventSource = "USER" | "ASSISTANT" | "SYSTEM";
 
-export type AssistantMessageState = "completed" | "interrupted";
+export type AssistantMessageState = "complete" | "cancel" | "error";
 
 export type ToolCallStatus = "started" | "completed" | "failed";
 
@@ -32,13 +32,11 @@ type SessionEventBase<TType extends SessionEventType, TPayload> = {
 };
 
 export type ErrorPayload = {
-  errorCode?: string;
   errorMessage?: string;
   durationMs?: number;
 };
 
 export type CancelledPayload = {
-  reason?: string;
   durationMs?: number;
 };
 
@@ -51,8 +49,6 @@ export type AssistantMessagePayload = {
   messageId: string;
   state: AssistantMessageState;
   text: string;
-  finishReason?: string;
-  reason?: string;
   errorMessage?: string;
   durationMs?: number;
 };

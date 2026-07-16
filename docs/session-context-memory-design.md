@@ -297,14 +297,14 @@ WHERE memory_id = ?
 
 | 事件或消息状态 | 处理规则 |
 | --- | --- |
-| `ASSISTANT_MESSAGE state=completed` | 用户消息和完整助手回答进入近期上下文或摘要。 |
+| `ASSISTANT_MESSAGE state=complete` | 用户消息和完整助手回答进入近期上下文或摘要。 |
 | `ERROR` | 已经输出的助手部分文本保留，并在摘要中标明执行失败。 |
 | `CANCELLED` | 已经输出的助手部分文本保留，并在摘要中标明已取消。 |
 
 “已经输出的就记住”具体指：
 
-- `ASSISTANT_MESSAGE state=completed` 的完整文本。
-- `ASSISTANT_MESSAGE state=interrupted` 中非空的部分文本。
+- `ASSISTANT_MESSAGE state=complete` 的完整文本。
+- `ASSISTANT_MESSAGE state=error` 或 `state=cancel` 中非空的部分文本。
 - 已开始但没有任何助手文本的失败或取消 turn，只保留必要的失败事实，不作为普通 assistant 消息重放。
 
 ### 工具事件
@@ -463,7 +463,7 @@ sequenceDiagram
     end
     T->>M: "可选摘要 + 近期上下文 + 当前消息 + 工具"
     M-->>T: "流式回答和工具调用"
-    T-->>F: "现有 session_event 流"
+    T-->>F: "现有 session SSE 流"
 ```
 
 ### 压缩候选选择
@@ -596,7 +596,7 @@ Payload 示例：
 
 压缩失败不再发送 `completed`，而是沿用当前 turn 错误流程，最终产生：
 
-- `ASSISTANT_MESSAGE state=interrupted`
+- `ASSISTANT_MESSAGE state=error`
 - `ERROR`
 - SSE 错误文案：`压缩上下文失败，请重试或切换到上下文窗口更大的模型`
 
@@ -696,6 +696,8 @@ COMPLETED
 - 归档 session：保留 JSONL 和 `mboo_chat_memory`。
 - 永久删除 session：删除 JSONL 和对应的 `mboo_chat_memory` 记录。
 
+以上是上下文记忆功能落地后的目标行为。当前 `SessionService.archiveSession()` 和 `deleteSession()` 只校验会话存在，尚未真正修改状态、删除 JSONL 或清理 ChatMemory。
+
 ## 组件设计
 
 ### SqliteChatMemoryStore
@@ -716,7 +718,7 @@ COMPLETED
 职责：
 
 - 按 turn 聚合 JSONL 事件。
-- 处理 completed、failed、cancelled、superseded 状态。
+- 处理 `ASSISTANT_MESSAGE` 的 `complete`、`error`、`cancel` 状态，以及独立的 `ERROR`、`CANCELLED` 事件。
 - 输出压缩候选和近期 turn。
 
 该逻辑可以先放在 `SessionEventStore`，如果后续回放策略继续增长，再拆分独立组件。
@@ -844,5 +846,4 @@ AiServices.builder(AiCodeService.class)
 | 超限重试 | 不自动重试，沿用原错误流程并补充提示。 |
 | 用户管理 | 第一版不提供摘要和记忆管理界面。 |
 | 近期上下文 | 至少保留最近 2 个完整 turn，预算内尽量多保留。 |
-| 中断消息 | 已经输出的文本进入记忆。 |
-| 被替换 turn | 不进入记忆和摘要。 |
+| 错误或取消消息 | 已经输出的非空文本进入记忆。 |

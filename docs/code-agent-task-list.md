@@ -79,31 +79,28 @@
   - `TOOL_CALL_ENDED`
   - `ERROR`
   - `CANCELLED`
-- 新增 `EventStore`：
+- 新增 `SessionEventStore`：
   - 追加写入 JSONL。
   - 按文件行顺序 replay。
-  - 生成 session 内递增 `seq`。
   - 忽略或修复最后一行半截坏 JSON。
 - JSONL 是事实来源，数据库只保存 session 索引和最近状态。
 
-### 4. 实现 SessionService
+### 4. 完善 SessionService 与 TurnService
 
-- 补完当前空的 `SessionService.getOrNewSession()`。
+- 当前通过 `SessionService.getActiveOrCreateSession()` 创建或加载活跃会话，通过 `TurnService.startTurn()` 创建 turn。
 - 能力要求：
   - `sessionId` 为空时创建 session。
   - 生成 transcript JSONL 路径。
   - 写入 `mboo_sessions` 表。
-  - 写入 `SESSION_CREATED` 事件。
   - `sessionId` 不为空时加载 session。
   - 校验 session 状态不是 `archived` 或 `deleted`。
   - 校验同一 session 同一时间最多一个 running turn。
-- 建议新增接口：
+- 当前主要方法：
   - `createSession`
   - `getSession`
-  - `getOrCreateSession`
+  - `getActiveOrCreateSession`
   - `startTurn`
-  - `completeTurn`
-  - `failTurn`
+  - `clearActiveTurn`
 
 ### 5. 实现 AgentRuntime 主循环
 
@@ -135,7 +132,7 @@
 - 工具执行前后都必须写事件：
   - 执行前写 `TOOL_CALL_STARTED`。
   - 执行后写 `TOOL_CALL_ENDED`。
-  - 服务恢复时发现 started 但没有 completed 的工具，本阶段先按未完成状态处理，后续再补充不可确认状态事件。
+  - 服务恢复时发现 started 但没有 ended 的工具，本阶段先按未完成状态处理，后续再补充不可确认状态事件。
 
 ### 7. 第一批工具
 
@@ -218,17 +215,21 @@
   - `ASSISTANT_MESSAGE`
   - `ERROR`
   - `CANCELLED`
-- SSE 固定使用 `session_event`，消息体使用统一 `SessionEvent`，前端按 `data.type` 分发。
+- SSE 固定使用 `session`，消息体使用统一 `SessionEvent`，前端按 `data.type` 分发。
 - 不单独发送 assistant started 事件，第一条 `ASSISTANT_MESSAGE_DELTA` 携带 `messageId` 并表示助手消息开始。
 
 ### 12. 实现会话读取接口
 
-- 新增会话历史读取接口。
-- 建议接口：
+- 当前会话接口：
+  - `GET /session/list`
   - `GET /session/{sessionId}`
   - `GET /session/{sessionId}/events`
+  - `PATCH /session/{sessionId}`
+  - `POST /session/{sessionId}/archive`
+  - `DELETE /session/{sessionId}`
 - 第一版可以全量 replay JSONL。
 - 后续再实现分页、index 和 snapshot。
+- 当前归档和删除接口只校验会话存在，尚未真正修改或删除数据。
 
 ### 13. 恢复中断任务
 
@@ -241,10 +242,9 @@
 
 ### 14. 测试清单
 
-- `EventStore`：
+- `SessionEventStore`：
   - 事件追加写入。
   - replay 顺序正确。
-  - `seq` 递增。
   - 最后一行坏 JSON 可处理。
 - `SessionService`：
   - 新建 session。
@@ -266,7 +266,7 @@
 
 ## 推荐实现顺序
 
-1. `SessionService` + `EventStore`
+1. `SessionService` + `SessionEventStore`
 2. 最小事件模型
 3. 改造 `/session/chat` 写入用户消息和 assistant 文本事件
 4. `ModelClient` / `ModelProvider` 抽象
