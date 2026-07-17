@@ -3,7 +3,6 @@ package com.yu.mboocode.session.service;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yu.mboocode.common.exception.ServiceException;
-import com.yu.mboocode.session.mapper.SessionEventStore;
 import com.yu.mboocode.session.mapper.SessionsMapper;
 import com.yu.mboocode.session.model.SessionEvent;
 import com.yu.mboocode.session.model.Sessions;

@@ -9,7 +9,6 @@ import com.yu.mboocode.llm.AiCodeService;
 import com.yu.mboocode.session.TurnProcess;
 import com.yu.mboocode.session.enums.SessionEventSource;
 import com.yu.mboocode.session.enums.SessionEventType;
-import com.yu.mboocode.session.mapper.SessionEventStore;
 import com.yu.mboocode.session.model.SessionEvent;
 import com.yu.mboocode.session.model.SessionTurn;
 import com.yu.mboocode.session.model.Sessions;
@@ -43,7 +42,7 @@ public class TurnService {
     @Resource
     private AiCodeService aiCodeService;
     @Resource
-    private SessionEventStore sessionEventStore; //todo 不直接调用 SessionEventStore
+    private SessionEventStore sessionEventStore;
     @Resource
     private SessionService sessionService;
     @Resource
@@ -122,9 +121,12 @@ public class TurnService {
 
             // 注册流取消处理器
             sink.onCancel(() -> {
-                Optional.ofNullable(streamingHandleRef.get()).ifPresent(StreamingHandle::cancel);
-
                 String text = finalText.toString();
+                if (StrUtil.isBlank(text)) {
+                    return;
+                }
+
+                Optional.ofNullable(streamingHandleRef.get()).ifPresent(StreamingHandle::cancel);
                 sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
                         .eventId(IdUtil.getSnowflakeNextIdStr())
                         .sessionId(sessionTurn.sessionId())
@@ -234,6 +236,10 @@ public class TurnService {
                     })
                     .onError(error -> {
                         String text = finalText.toString();
+                        if (StrUtil.isBlank(text)) {
+                            return;
+                        }
+
                         emitEvent(sink, () -> sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
                                 .eventId(IdUtil.getSnowflakeNextIdStr())
                                 .sessionId(sessionTurn.sessionId())

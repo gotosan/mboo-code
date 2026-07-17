@@ -1,4 +1,4 @@
-package com.yu.mboocode.session.mapper;
+package com.yu.mboocode.session.service;
 
 import cn.hutool.core.thread.lock.LockUtil;
 import cn.hutool.core.thread.lock.SegmentLock;

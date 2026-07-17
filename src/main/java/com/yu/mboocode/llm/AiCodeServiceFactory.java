@@ -3,6 +3,7 @@ package com.yu.mboocode.llm;
 import com.yu.mboocode.config.Setting;
 import com.yu.mboocode.llm.listener.MyAiServiceCompletedListener;
 import com.yu.mboocode.llm.listener.MyChatModelListener;
+import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
 import com.yu.mboocode.llm.tool.WeatherTool;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
