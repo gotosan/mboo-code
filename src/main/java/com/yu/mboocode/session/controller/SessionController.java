@@ -43,6 +43,12 @@ public class SessionController {
         return R.ok(sessionService.listActiveSessions());
     }
 
+    @Operation(summary = "归档会话列表")
+    @GetMapping("/list/archived")
+    public R<List<Sessions>> listArchived() {
+        return R.ok(sessionService.listArchivedSessions());
+    }
+
     @Operation(summary = "会话详情")
     @GetMapping("/{sessionId}")
     public R<Sessions> detail(@PathVariable String sessionId) {
@@ -65,6 +71,12 @@ public class SessionController {
     @PostMapping("/{sessionId}/archive")
     public R<Sessions> archive(@PathVariable String sessionId) {
         return R.ok(sessionService.archiveSession(sessionId));
+    }
+
+    @Operation(summary = "取消归档会话")
+    @PostMapping("/{sessionId}/unarchive")
+    public R<Sessions> unarchive(@PathVariable String sessionId) {
+        return R.ok(sessionService.unarchiveSession(sessionId));
     }
 
     @Operation(summary = "删除会话")

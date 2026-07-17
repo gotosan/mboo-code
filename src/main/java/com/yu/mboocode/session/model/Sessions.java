@@ -20,7 +20,7 @@ public class Sessions {
     @Schema(description = "会话标题")
     private String title;
 
-    @Schema(description = "会话状态：`active` 活跃、`archived` 已归档、`deleted` 已软删除")
+    @Schema(description = "会话状态：`active` 活跃、`archived` 已归档")
     private String status;
 
     @Schema(description = "会话文件路径或相对 URI")
@@ -40,9 +40,6 @@ public class Sessions {
     @Schema(description = "会话归档时间")
     private String archivedAt;
 
-    @Schema(description = "会话删除时间")
-    private String deletedAt;
-
     @Schema(description = "会话扩展元数据，JSON 字符串，例如工作区路径、UI 设置等")
     private String metadataJson;
 
@@ -51,7 +48,6 @@ public class Sessions {
     public enum StatusEnum {
         ACTIVE("active"), //活跃
         ARCHIVED("archived"), //归档
-        DELETED("deleted") //删除,
         ;
 
         private final String code;

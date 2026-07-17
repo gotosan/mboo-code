@@ -55,7 +55,8 @@ type ChatMessage = {
   toolCalls?: ToolCallView[];
 };
 
-type SessionStatus = "active" | "archived" | "deleted";
+type SessionStatus = "active" | "archived";
+type SessionListTab = "active" | "archived";
 
 type SessionInfo = {
   id: string;
@@ -66,7 +67,6 @@ type SessionInfo = {
   createdAt?: string | null;
   updatedAt?: string | null;
   archivedAt?: string | null;
-  deletedAt?: string | null;
   metadataJson?: string | null;
 };
 
@@ -89,6 +89,9 @@ type ToolCallEvent = Extract<
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [archivedSessions, setArchivedSessions] = useState<SessionInfo[]>([]);
+  const [sessionListTab, setSessionListTab] =
+    useState<SessionListTab>("active");
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [modelName, setModelName] = useState(DEFAULT_MODEL);
@@ -98,10 +101,12 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState("");
   const [sessionMessage, setSessionMessage] = useState("");
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
-  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
+  const [viewingSessionStatus, setViewingSessionStatus] =
+    useState<SessionStatus | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -358,19 +363,71 @@ export default function Home() {
     ],
   );
 
+  const clearCurrentSession = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    shouldLoadSessionRef.current = false;
+    currentSessionIdRef.current = "";
+    setMessages([]);
+    setInput("");
+    setSessionId("");
+    setErrorMessage("");
+    setActiveTurnId(null);
+    setEditingSessionId(null);
+    setTitleDraft("");
+    setViewingSessionStatus(null);
+    setConnectionState("idle");
+    localStorage.removeItem(STORAGE_KEYS.sessionId);
+  }, []);
+
   const refreshSessions = useCallback(async () => {
     setIsLoadingSessions(true);
     try {
-      const response = await fetch("/api/session/list", { cache: "no-store" });
-      const data = await readApiData<SessionInfo[]>(response);
-      setSessions(data ?? []);
+      const [activeResponse, archivedResponse] = await Promise.all([
+        fetch("/api/session/list", { cache: "no-store" }),
+        fetch("/api/session/list/archived", { cache: "no-store" }),
+      ]);
+      const activeData = await readApiData<SessionInfo[]>(activeResponse);
+      const archivedData = await readApiData<SessionInfo[]>(archivedResponse);
+      const nextActive = activeData ?? [];
+      const nextArchived = archivedData ?? [];
+      setSessions(nextActive);
+      setArchivedSessions(nextArchived);
       setSessionMessage("");
+
+      const currentId = currentSessionIdRef.current;
+      if (!currentId) {
+        setViewingSessionStatus(null);
+        return;
+      }
+
+      const activeSession = nextActive.find((session) => session.id === currentId);
+      if (activeSession) {
+        setViewingSessionStatus("active");
+        return;
+      }
+
+      const archivedSession = nextArchived.find(
+        (session) => session.id === currentId,
+      );
+      if (archivedSession) {
+        // 本地缓存恢复阶段遇到归档会话要清空；用户主动打开的只读会话可保留
+        if (shouldLoadSessionRef.current) {
+          clearCurrentSession();
+          return;
+        }
+        setViewingSessionStatus("archived");
+        return;
+      }
+
+      // 会话已被硬删除或不存在时，切回未选中
+      clearCurrentSession();
     } catch (error) {
       setSessionMessage(toErrorMessage(error));
     } finally {
       setIsLoadingSessions(false);
     }
-  }, []);
+  }, [clearCurrentSession]);
 
   const loadSessionEvents = useCallback(async (nextSessionId: string) => {
     if (!nextSessionId) {
@@ -408,26 +465,52 @@ export default function Home() {
   }, [refreshSessions]);
 
   useEffect(() => {
-    if (!sessionId || !shouldLoadSessionRef.current) {
+    if (!sessionId || !shouldLoadSessionRef.current || isLoadingSessions) {
+      return;
+    }
+
+    const isActive = sessions.some((session) => session.id === sessionId);
+    if (!isActive) {
+      // 本地缓存会话已归档或不存在时，不回显，直接清空
+      shouldLoadSessionRef.current = false;
+      if (sessionId) {
+        clearCurrentSession();
+      }
       return;
     }
 
     shouldLoadSessionRef.current = false;
+    setViewingSessionStatus("active");
     void loadSessionEvents(sessionId);
-  }, [loadSessionEvents, sessionId]);
+  }, [
+    clearCurrentSession,
+    isLoadingSessions,
+    loadSessionEvents,
+    sessionId,
+    sessions,
+  ]);
 
   const openSession = useCallback(
-    async (nextSessionId: string) => {
-      if (!nextSessionId || nextSessionId === currentSessionIdRef.current) {
+    async (nextSessionId: string, status?: SessionStatus) => {
+      if (!nextSessionId) {
+        return;
+      }
+      if (
+        nextSessionId === currentSessionIdRef.current &&
+        (!status || status === viewingSessionStatus)
+      ) {
         return;
       }
 
       shouldLoadSessionRef.current = false;
       currentSessionIdRef.current = nextSessionId;
       setSessionId(nextSessionId);
+      if (status) {
+        setViewingSessionStatus(status);
+      }
       await loadSessionEvents(nextSessionId);
     },
-    [loadSessionEvents],
+    [loadSessionEvents, viewingSessionStatus],
   );
 
   const beginRenameSession = useCallback((session: SessionInfo) => {
@@ -480,28 +563,60 @@ export default function Home() {
           { method: "POST" },
         );
         await readApiData<SessionInfo>(response);
-        setSessionMessage("归档功能暂未实现，未修改会话");
+        if (currentSessionIdRef.current === target.id) {
+          clearCurrentSession();
+        }
+        setSessionMessage("");
+        await refreshSessions();
       } catch (error) {
         setSessionMessage(toErrorMessage(error));
       }
     },
-    [],
+    [clearCurrentSession, refreshSessions],
+  );
+
+  const unarchiveSession = useCallback(
+    async (target: SessionInfo) => {
+      try {
+        const response = await fetch(
+          `/api/session/${encodeURIComponent(target.id)}/unarchive`,
+          { method: "POST" },
+        );
+        await readApiData<SessionInfo>(response);
+        if (currentSessionIdRef.current === target.id) {
+          setViewingSessionStatus("active");
+        }
+        setSessionMessage("");
+        await refreshSessions();
+      } catch (error) {
+        setSessionMessage(toErrorMessage(error));
+      }
+    },
+    [refreshSessions],
   );
 
   const deleteSession = useCallback(
     async (target: SessionInfo) => {
+      if (!window.confirm("删除后不可恢复，确认删除该会话？")) {
+        return;
+      }
+
       try {
         const response = await fetch(
           `/api/session/${encodeURIComponent(target.id)}`,
           { method: "DELETE" },
         );
         await readApiData<void>(response);
-        setSessionMessage("删除功能暂未实现，未修改会话");
+        if (currentSessionIdRef.current === target.id) {
+          clearCurrentSession();
+        }
+        setSessionMessage("");
+        await refreshSessions();
       } catch (error) {
         setSessionMessage(toErrorMessage(error));
       }
     },
-    [],
+    [clearCurrentSession, refreshSessions],
   );
 
   const sendMessage = useCallback(
@@ -610,28 +725,31 @@ export default function Home() {
   }, [activeTurnId, handleSessionEvent, refreshSessions]);
 
   const startNewSession = useCallback(() => {
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    currentSessionIdRef.current = "";
-    setMessages([]);
-    setInput("");
-    setSessionId("");
-    setErrorMessage("");
+    clearCurrentSession();
     setSessionMessage("");
-    setActiveTurnId(null);
-    setConnectionState("idle");
-    localStorage.removeItem(STORAGE_KEYS.sessionId);
+    setSessionListTab("active");
     void refreshSessions();
-  }, [refreshSessions]);
+  }, [clearCurrentSession, refreshSessions]);
 
   const status = useMemo(
     () => getStatusView(connectionState, activeTurnId),
     [activeTurnId, connectionState],
   );
-  const currentSession = useMemo(
-    () => sessions.find((session) => session.id === sessionId) ?? null,
-    [sessionId, sessions],
-  );
+  const currentSession = useMemo(() => {
+    if (!sessionId) {
+      return null;
+    }
+    return (
+      sessions.find((session) => session.id === sessionId) ??
+      archivedSessions.find((session) => session.id === sessionId) ??
+      null
+    );
+  }, [archivedSessions, sessionId, sessions]);
+  const isArchivedView =
+    viewingSessionStatus === "archived" ||
+    currentSession?.status === "archived";
+  const visibleSessions =
+    sessionListTab === "active" ? sessions : archivedSessions;
 
   return (
     <main className="min-h-screen bg-zinc-100 text-zinc-950">
@@ -667,7 +785,7 @@ export default function Home() {
 
           <div className="mt-6 flex min-h-0 flex-1 flex-col border-t border-zinc-800 pt-5">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-semibold text-zinc-100">活跃会话</p>
+              <p className="text-sm font-semibold text-zinc-100">会话列表</p>
               <button
                 className="h-8 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-emerald-400 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={isLoadingSessions}
@@ -675,6 +793,39 @@ export default function Home() {
                 onClick={() => void refreshSessions()}
               >
                 刷新
+              </button>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                className={`h-8 rounded-md border px-2 text-xs transition ${
+                  sessionListTab === "active"
+                    ? "border-emerald-500 bg-emerald-950/40 text-emerald-100"
+                    : "border-zinc-700 text-zinc-300 hover:border-zinc-500"
+                }`}
+                type="button"
+                onClick={() => {
+                  setSessionListTab("active");
+                  setEditingSessionId(null);
+                  setTitleDraft("");
+                }}
+              >
+                活跃
+              </button>
+              <button
+                className={`h-8 rounded-md border px-2 text-xs transition ${
+                  sessionListTab === "archived"
+                    ? "border-emerald-500 bg-emerald-950/40 text-emerald-100"
+                    : "border-zinc-700 text-zinc-300 hover:border-zinc-500"
+                }`}
+                type="button"
+                onClick={() => {
+                  setSessionListTab("archived");
+                  setEditingSessionId(null);
+                  setTitleDraft("");
+                }}
+              >
+                归档
               </button>
             </div>
 
@@ -689,15 +840,16 @@ export default function Home() {
                 <p className="rounded-md border border-zinc-800 px-3 py-3 text-sm text-zinc-400">
                   正在加载会话
                 </p>
-              ) : sessions.length === 0 ? (
+              ) : visibleSessions.length === 0 ? (
                 <p className="rounded-md border border-dashed border-zinc-800 px-3 py-6 text-center text-sm text-zinc-500">
-                  暂无活跃会话
+                  {sessionListTab === "active" ? "暂无活跃会话" : "暂无归档会话"}
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {sessions.map((session) => {
+                  {visibleSessions.map((session) => {
                     const selected = session.id === sessionId;
                     const editing = editingSessionId === session.id;
+                    const isArchivedItem = sessionListTab === "archived";
 
                     return (
                       <div
@@ -708,7 +860,7 @@ export default function Home() {
                             : "border-zinc-800 bg-zinc-900/70"
                         }`}
                       >
-                        {editing ? (
+                        {editing && !isArchivedItem ? (
                           <div className="space-y-2">
                             <input
                               className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 text-sm text-zinc-100 outline-none transition focus:border-emerald-400"
@@ -744,37 +896,60 @@ export default function Home() {
                               className="block w-full min-w-0 text-left"
                               disabled={isLoadingHistory}
                               type="button"
-                              onClick={() => void openSession(session.id)}
+                              onClick={() =>
+                                void openSession(
+                                  session.id,
+                                  isArchivedItem ? "archived" : "active",
+                                )
+                              }
                             >
                               <span className="block truncate text-sm font-medium text-zinc-100">
                                 {session.title || "新会话"}
                               </span>
                               <span className="mt-1 block truncate text-xs text-zinc-500">
-                                {formatSessionTime(session.updatedAt)}
+                                {formatSessionTime(
+                                  isArchivedItem
+                                    ? session.archivedAt || session.updatedAt
+                                    : session.updatedAt,
+                                )}
                               </span>
                             </button>
                             <div className="mt-3 flex gap-2">
-                              <button
-                                className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-emerald-500 hover:text-emerald-200"
-                                type="button"
-                                onClick={() => beginRenameSession(session)}
-                              >
-                                重命名
-                              </button>
-                              <button
-                                className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-amber-400 hover:text-amber-100"
-                                type="button"
-                                onClick={() => void archiveSession(session)}
-                              >
-                                归档
-                              </button>
-                              <button
-                                className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-rose-400 hover:text-rose-100"
-                                type="button"
-                                onClick={() => void deleteSession(session)}
-                              >
-                                删除
-                              </button>
+                              {isArchivedItem ? (
+                                <>
+                                  <button
+                                    className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-emerald-500 hover:text-emerald-200"
+                                    type="button"
+                                    onClick={() => void unarchiveSession(session)}
+                                  >
+                                    取消归档
+                                  </button>
+                                  <button
+                                    className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-rose-400 hover:text-rose-100"
+                                    type="button"
+                                    onClick={() => void deleteSession(session)}
+                                  >
+                                    删除
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-emerald-500 hover:text-emerald-200"
+                                    type="button"
+                                    onClick={() => beginRenameSession(session)}
+                                  >
+                                    重命名
+                                  </button>
+                                  <button
+                                    className="h-8 flex-1 rounded-md border border-zinc-700 px-2 text-xs text-zinc-200 transition hover:border-amber-400 hover:text-amber-100"
+                                    type="button"
+                                    onClick={() => void archiveSession(session)}
+                                  >
+                                    归档
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </>
                         )}
@@ -794,9 +969,16 @@ export default function Home() {
                 <p className="text-xs font-semibold uppercase text-emerald-700">
                   Mboo Code
                 </p>
-                <h2 className="mt-1 text-xl font-semibold tracking-normal text-zinc-950">
-                  {currentSession?.title || "会话工作台"}
-                </h2>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <h2 className="text-xl font-semibold tracking-normal text-zinc-950">
+                    {currentSession?.title || "会话工作台"}
+                  </h2>
+                  {isArchivedView ? (
+                    <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">
+                      已归档（只读）
+                    </span>
+                  ) : null}
+                </div>
                 <p className="mt-1 break-all text-xs text-zinc-500">
                   {sessionId ? `Session ID：${sessionId}` : "未打开会话"}
                 </p>
@@ -886,43 +1068,51 @@ export default function Home() {
             <div ref={messagesEndRef} />
           </div>
 
-          <form
-            className="border-t border-zinc-200 bg-white px-4 py-4 sm:px-6"
-            onSubmit={sendMessage}
-          >
-            <div className="mx-auto flex max-w-4xl flex-col gap-3">
-              <textarea
-                className="min-h-28 resize-none rounded-md border border-zinc-300 bg-white px-3 py-3 text-sm leading-6 text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                disabled={isRunning || isLoadingHistory}
-                placeholder="输入消息"
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-              />
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <p className="min-h-5 text-sm text-zinc-500">
-                  {sessionId ? `当前会话：${sessionId}` : "当前会话：未创建"}
-                </p>
-                <div className="flex shrink-0 gap-2">
-                  {isRunning ? (
-                    <button
-                      className="h-10 rounded-md border border-amber-300 bg-amber-50 px-4 text-sm font-medium text-amber-900 transition hover:bg-amber-100"
-                      type="button"
-                      onClick={stopCurrentRun}
-                    >
-                      停止
-                    </button>
-                  ) : null}
-                  <button
-                    className="h-10 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-500"
-                    disabled={isRunning || isLoadingHistory || !input.trim()}
-                    type="submit"
-                  >
-                    {isRunning ? "发送中" : "发送"}
-                  </button>
-                </div>
+          {isArchivedView ? (
+            <div className="border-t border-zinc-200 bg-white px-4 py-4 sm:px-6">
+              <div className="mx-auto max-w-4xl rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                当前为归档会话，仅支持回看历史。可在侧栏取消归档后继续对话。
               </div>
             </div>
-          </form>
+          ) : (
+            <form
+              className="border-t border-zinc-200 bg-white px-4 py-4 sm:px-6"
+              onSubmit={sendMessage}
+            >
+              <div className="mx-auto flex max-w-4xl flex-col gap-3">
+                <textarea
+                  className="min-h-28 resize-none rounded-md border border-zinc-300 bg-white px-3 py-3 text-sm leading-6 text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  disabled={isRunning || isLoadingHistory}
+                  placeholder="输入消息"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                />
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="min-h-5 text-sm text-zinc-500">
+                    {sessionId ? `当前会话：${sessionId}` : "当前会话：未创建"}
+                  </p>
+                  <div className="flex shrink-0 gap-2">
+                    {isRunning ? (
+                      <button
+                        className="h-10 rounded-md border border-amber-300 bg-amber-50 px-4 text-sm font-medium text-amber-900 transition hover:bg-amber-100"
+                        type="button"
+                        onClick={stopCurrentRun}
+                      >
+                        停止
+                      </button>
+                    ) : null}
+                    <button
+                      className="h-10 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-500"
+                      disabled={isRunning || isLoadingHistory || !input.trim()}
+                      type="submit"
+                    >
+                      {isRunning ? "发送中" : "发送"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </form>
+          )}
         </section>
       </div>
     </main>

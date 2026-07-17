@@ -3,6 +3,7 @@ package com.yu.mboocode.session.service;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
 import com.yu.mboocode.session.mapper.SessionsMapper;
 import com.yu.mboocode.session.model.SessionEvent;
 import com.yu.mboocode.session.model.Sessions;
@@ -19,6 +20,9 @@ import java.util.Objects;
 public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     @Resource
     private SessionEventStore sessionEventStore;
+    @Resource
+    private PersistentChatMemoryStore persistentChatMemoryStore;
+
     @Transactional
     public Sessions getActiveOrCreateSession(String sessionId) {
         if (StrUtil.isNotBlank(sessionId)) {
@@ -67,6 +71,13 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
                 .list();
     }
 
+    public List<Sessions> listArchivedSessions() {
+        return lambdaQuery()
+                .eq(Sessions::getStatus, Sessions.StatusEnum.ARCHIVED.getCode())
+                .orderByDesc(Sessions::getArchivedAt)
+                .list();
+    }
+
     public List<SessionEvent> readSessionEvents(String sessionId) {
         Sessions session = getSession(sessionId);
         if (StrUtil.isBlank(session.getTranscriptUri())) {
@@ -77,7 +88,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
 
     @Transactional
     public Sessions updateTitle(String sessionId, String title) {
-        Sessions session = getSession(sessionId);
+        Sessions session = getActiveSession(sessionId);
         String trimmedTitle = StrUtil.trim(title);
         if (StrUtil.isBlank(trimmedTitle)) {
             throw new ServiceException("会话标题不能为空");
@@ -93,15 +104,66 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
 
     @Transactional
     public Sessions archiveSession(String sessionId) {
-        // 归档逻辑后续实现，当前仅保留接口并校验会话存在。
         Sessions session = getSession(sessionId);
-        return session;
+        if (!Objects.equals(session.getStatus(), Sessions.StatusEnum.ACTIVE.getCode())) {
+            throw new ServiceException("仅活跃会话可归档");
+        }
+        if (StrUtil.isNotBlank(session.getActiveTurnId())) {
+            throw new ServiceException("正在会话中，不能归档");
+        }
+
+        String now = DateTimeUtil.now();
+        boolean updated = lambdaUpdate()
+                .eq(Sessions::getId, sessionId)
+                .eq(Sessions::getStatus, Sessions.StatusEnum.ACTIVE.getCode())
+                .isNull(Sessions::getActiveTurnId)
+                .set(Sessions::getStatus, Sessions.StatusEnum.ARCHIVED.getCode())
+                .set(Sessions::getArchivedAt, now)
+                .set(Sessions::getUpdatedAt, now)
+                .update();
+        if (!updated) {
+            Sessions latest = getSession(sessionId);
+            if (StrUtil.isNotBlank(latest.getActiveTurnId())) {
+                throw new ServiceException("正在会话中，不能归档");
+            }
+            throw new ServiceException("仅活跃会话可归档");
+        }
+        return getSession(sessionId);
+    }
+
+    @Transactional
+    public Sessions unarchiveSession(String sessionId) {
+        Sessions session = getSession(sessionId);
+        if (!Objects.equals(session.getStatus(), Sessions.StatusEnum.ARCHIVED.getCode())) {
+            throw new ServiceException("仅已归档会话可取消归档");
+        }
+
+        String now = DateTimeUtil.now();
+        boolean updated = lambdaUpdate()
+                .eq(Sessions::getId, sessionId)
+                .eq(Sessions::getStatus, Sessions.StatusEnum.ARCHIVED.getCode())
+                .set(Sessions::getStatus, Sessions.StatusEnum.ACTIVE.getCode())
+                .set(Sessions::getArchivedAt, null)
+                .set(Sessions::getUpdatedAt, now)
+                .update();
+        if (!updated) {
+            throw new ServiceException("仅已归档会话可取消归档");
+        }
+        return getSession(sessionId);
     }
 
     @Transactional
     public void deleteSession(String sessionId) {
-        // 删除逻辑后续实现，当前仅保留接口并校验会话存在。
-        getSession(sessionId);
+        Sessions session = getSession(sessionId);
+        if (!Objects.equals(session.getStatus(), Sessions.StatusEnum.ARCHIVED.getCode())) {
+            throw new ServiceException("仅已归档会话可删除");
+        }
+
+        if (StrUtil.isNotBlank(session.getTranscriptUri())) {
+            sessionEventStore.deleteTranscript(session.getTranscriptUri());
+        }
+        persistentChatMemoryStore.deleteMessages(sessionId);
+        removeById(sessionId);
     }
 
     public boolean updateActiveTurn(String sessionId, String turnId) {
