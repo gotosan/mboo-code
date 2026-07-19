@@ -65,6 +65,7 @@ type SessionInfo = {
   status: SessionStatus;
   transcriptUri?: string | null;
   activeTurnId?: string | null;
+  workspacePath?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
   archivedAt?: string | null;
@@ -807,10 +808,7 @@ export default function Home() {
       null
     );
   }, [archivedSessions, sessionId, sessions]);
-  const persistedWorkspacePath = useMemo(
-    () => readWorkspacePath(currentSession?.metadataJson),
-    [currentSession?.metadataJson],
-  );
+  const persistedWorkspacePath = currentSession?.workspacePath ?? "";
   const displayedWorkspacePath = persistedWorkspacePath || pendingWorkspacePath;
   const workspaceStatusText = displayedWorkspacePath || (sessionId ? (currentSession ? "未设置工作区" : "工作区加载中") : "默认工作区");
   const isArchivedView =
@@ -1639,18 +1637,6 @@ function toErrorMessage(error: unknown) {
     return error.message;
   }
   return "会话请求失败";
-}
-
-function readWorkspacePath(metadataJson?: string | null) {
-  if (!metadataJson?.trim()) {
-    return "";
-  }
-  try {
-    const metadata = JSON.parse(metadataJson) as Record<string, unknown>;
-    return typeof metadata.workspacePath === "string" ? metadata.workspacePath : "";
-  } catch {
-    return "";
-  }
 }
 
 function saveLocalValue(key: string, value: string) {

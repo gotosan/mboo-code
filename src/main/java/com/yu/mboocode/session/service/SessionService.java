@@ -1,9 +1,6 @@
 package com.yu.mboocode.session.service;
 
 import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONException;
-import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
@@ -29,8 +26,6 @@ import java.util.Objects;
 @Service
 @Slf4j
 public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
-    private static final String WORKSPACE_PATH_KEY = "workspacePath";
-
     @Resource
     private SessionEventStore sessionEventStore;
     @Resource
@@ -49,11 +44,11 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         Sessions session = new Sessions();
         session.setTitle("新会话"); //todo 后续看看用大模型的回答
         session.setStatus(Sessions.StatusEnum.ACTIVE.getCode());
+        String resolvedWorkspacePath = StrUtil.isNotBlank(workspacePath) ? normalizeWorkspacePath(workspacePath) : createDefaultWorkspace(session.getId(), LocalDate.now());
+        session.setWorkspacePath(resolvedWorkspacePath);
         session.setMetadataJson("{}");
         save(session);
 
-        String resolvedWorkspacePath = StrUtil.isNotBlank(workspacePath) ? normalizeWorkspacePath(workspacePath) : createDefaultWorkspace(session.getId(), LocalDate.now());
-        session.setMetadataJson(writeWorkspacePath(session.getMetadataJson(), resolvedWorkspacePath));
         session.setTranscriptUri(sessionEventStore.newTranscriptUri(session.getId()));
         updateById(session);
         return session;
@@ -218,18 +213,4 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
             throw new ServiceException("工作区路径格式错误");
         }
     }
-
-    private String writeWorkspacePath(String metadataJson, String workspacePath) {
-        try {
-            JSONObject metadata = StrUtil.isBlank(metadataJson) ? new JSONObject() : JSON.parseObject(metadataJson);
-            if (metadata == null) {
-                metadata = new JSONObject();
-            }
-            metadata.put(WORKSPACE_PATH_KEY, workspacePath);
-            return metadata.toJSONString();
-        } catch (JSONException e) {
-            throw new ServiceException("会话元数据格式错误");
-        }
-    }
-
 }

@@ -6,11 +6,12 @@ CREATE TABLE IF NOT EXISTS mboo_sessions (
                           status TEXT NOT NULL DEFAULT 'active' -- 会话状态：`active` 活跃、`archived` 已归档
                               CHECK (status IN ('active', 'archived')),
                           transcript_uri TEXT, -- 会话文件路径或相对 URI
+                          workspace_path TEXT, -- 会话工作区绝对路径
                           active_turn_id TEXT, -- 当前运行中的 turn ID
                           created_at TEXT, -- 会话创建时间
                           updated_at TEXT, -- 会话最近更新时间
                           archived_at TEXT, -- 会话归档时间
-                          metadata_json TEXT NOT NULL DEFAULT '{}' -- 会话扩展元数据，JSON 字符串，例如工作区路径、UI 设置等
+                          metadata_json TEXT NOT NULL DEFAULT '{}' -- 会话扩展元数据，JSON 字符串，例如 UI 设置等
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_list

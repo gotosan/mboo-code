@@ -26,6 +26,9 @@ public class Sessions {
     @Schema(description = "会话文件路径或相对 URI")
     private String transcriptUri;
 
+    @Schema(description = "会话工作区绝对路径")
+    private String workspacePath;
+
     @Schema(description = "当前运行中的 turn ID")
     private String activeTurnId;
 
@@ -40,7 +43,7 @@ public class Sessions {
     @Schema(description = "会话归档时间")
     private String archivedAt;
 
-    @Schema(description = "会话扩展元数据，JSON 字符串，例如工作区路径、UI 设置等")
+    @Schema(description = "会话扩展元数据，JSON 字符串，例如 UI 设置等")
     private String metadataJson;
 
     @AllArgsConstructor
