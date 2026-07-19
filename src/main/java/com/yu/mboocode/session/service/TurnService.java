@@ -50,8 +50,8 @@ public class TurnService {
 
     //todo 取消竞态处理 cas
 
-    public Flux<@NonNull SessionEvent> turn(String sessionId, TurnProcess turnProcess) {
-        SessionTurn sessionTurn = SpringUtil.getBean(getClass()).startTurn(sessionId);
+    public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, TurnProcess turnProcess) {
+        SessionTurn sessionTurn = SpringUtil.getBean(getClass()).startTurn(sessionId, workspacePath);
         return Flux.defer(() -> Flux.defer(() -> turnProcess.process(sessionTurn))
                 .onErrorResume(error ->
                         Flux.just(sessionEventStore.appendSession(
@@ -88,8 +88,8 @@ public class TurnService {
     }
 
     @Transactional
-    public SessionTurn startTurn(String sessionId) {
-        Sessions session = sessionService.getActiveOrCreateSession(sessionId);
+    public SessionTurn startTurn(String sessionId, String workspacePath) {
+        Sessions session = sessionService.getActiveOrCreateSession(sessionId, workspacePath);
         String turnId = IdUtil.getSnowflakeNextIdStr();
         if (!sessionService.updateActiveTurn(session.getId(), turnId)) {
             throw new ServiceException("当前会话已有运行中的 turn");
@@ -330,4 +330,3 @@ public class TurnService {
         return text.substring(0, maxLength) + "\n...（结果已截断）";
     }
 }
-

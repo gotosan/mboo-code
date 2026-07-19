@@ -89,7 +89,7 @@ public class SessionController {
     @Operation(summary = "聊天")
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<@NonNull ServerSentEvent<@NonNull SessionEvent>> chat(@Valid @RequestBody ChatReq req) {
-        return turnService.turn(req.sessionId(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), LLMUtil.buildChatReq(req.modelName(), req.reasoningEffort())))
+        return turnService.turn(req.sessionId(), req.workspacePath(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), LLMUtil.buildChatReq(req.modelName(), req.reasoningEffort())))
                 .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build());
     }
 }

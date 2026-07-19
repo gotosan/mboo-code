@@ -43,6 +43,7 @@ $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 | `POST /api/session/{sessionId}/archive` | `POST /session/{sessionId}/archive` | 归档接口，当前后端仅校验会话存在 |
 | `DELETE /api/session/{sessionId}` | `DELETE /session/{sessionId}` | 删除接口，当前后端仅校验会话存在 |
 | `POST /api/session/chat` | `POST /session/chat` | 代理 SSE 会话事件流 |
+| `POST /api/workspace/select-directory` | `POST /workspace/select-directory` | 打开本机工作区目录选择窗口 |
 
 普通 JSON 接口使用后端统一响应结构：
 
@@ -56,7 +57,7 @@ $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 }
 ```
 
-聊天请求字段为 `modelName`、`reasoningEffort`、`userMessage` 和 `sessionId`。`sessionId` 为空字符串时，后端会创建新会话。
+聊天请求字段为 `modelName`、`reasoningEffort`、`userMessage`、`workspacePath` 和 `sessionId`。`sessionId` 为空字符串时，后端会创建新会话；此时 `workspacePath` 为空会自动创建 `.mboo/workspaces/{yyyy-MM-dd}/{sessionId}`，已有会话会忽略请求中的工作区路径。
 
 ## SSE 事件
 

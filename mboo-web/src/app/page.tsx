@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FolderOpen, LoaderCircle, X } from "lucide-react";
 import { readSessionEventStream } from "@/lib/session-stream";
 import type {
   AssistantMessageState,
@@ -79,6 +80,10 @@ type ApiResponse<T> = {
   exception?: string;
 };
 
+type WorkspaceSelectResp = {
+  workspacePath?: string | null;
+};
+
 type ToolCallEvent = Extract<
   SessionEvent,
   {
@@ -107,12 +112,16 @@ export default function Home() {
   const [titleDraft, setTitleDraft] = useState("");
   const [viewingSessionStatus, setViewingSessionStatus] =
     useState<SessionStatus | null>(null);
+  const [pendingWorkspacePath, setPendingWorkspacePath] = useState("");
+  const [workspaceMessage, setWorkspaceMessage] = useState("");
+  const [isSelectingWorkspace, setIsSelectingWorkspace] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const currentSessionIdRef = useRef("");
   const shouldLoadSessionRef = useRef(false);
   const connectionStateRef = useRef<ConnectionState>("idle");
+  const workspaceSelectionVersionRef = useRef(0);
   const isRunning = connectionState === "running";
 
   useEffect(() => {
@@ -366,6 +375,7 @@ export default function Home() {
   const clearCurrentSession = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    workspaceSelectionVersionRef.current += 1;
     shouldLoadSessionRef.current = false;
     currentSessionIdRef.current = "";
     setMessages([]);
@@ -376,6 +386,9 @@ export default function Home() {
     setEditingSessionId(null);
     setTitleDraft("");
     setViewingSessionStatus(null);
+    setPendingWorkspacePath("");
+    setWorkspaceMessage("");
+    setIsSelectingWorkspace(false);
     setConnectionState("idle");
     localStorage.removeItem(STORAGE_KEYS.sessionId);
   }, []);
@@ -503,8 +516,12 @@ export default function Home() {
       }
 
       shouldLoadSessionRef.current = false;
+      workspaceSelectionVersionRef.current += 1;
       currentSessionIdRef.current = nextSessionId;
       setSessionId(nextSessionId);
+      setPendingWorkspacePath("");
+      setWorkspaceMessage("");
+      setIsSelectingWorkspace(false);
       if (status) {
         setViewingSessionStatus(status);
       }
@@ -619,6 +636,48 @@ export default function Home() {
     [clearCurrentSession, refreshSessions],
   );
 
+  const selectWorkspace = useCallback(async () => {
+    if (currentSessionIdRef.current || isSelectingWorkspace || isRunning) {
+      return;
+    }
+
+    const requestVersion = workspaceSelectionVersionRef.current + 1;
+    workspaceSelectionVersionRef.current = requestVersion;
+    setIsSelectingWorkspace(true);
+    setWorkspaceMessage("");
+
+    try {
+      const response = await fetch("/api/workspace/select-directory", {
+        method: "POST",
+        cache: "no-store",
+      });
+      const result = await readApiData<WorkspaceSelectResp>(response);
+      if (workspaceSelectionVersionRef.current !== requestVersion || currentSessionIdRef.current) {
+        return;
+      }
+      if (result?.workspacePath) {
+        setPendingWorkspacePath(result.workspacePath);
+      }
+    } catch (error) {
+      if (workspaceSelectionVersionRef.current === requestVersion) {
+        setWorkspaceMessage(toErrorMessage(error));
+      }
+    } finally {
+      if (workspaceSelectionVersionRef.current === requestVersion) {
+        setIsSelectingWorkspace(false);
+      }
+    }
+  }, [isRunning, isSelectingWorkspace]);
+
+  const clearPendingWorkspace = useCallback(() => {
+    if (currentSessionIdRef.current || isSelectingWorkspace) {
+      return;
+    }
+    workspaceSelectionVersionRef.current += 1;
+    setPendingWorkspacePath("");
+    setWorkspaceMessage("");
+  }, [isSelectingWorkspace]);
+
   const sendMessage = useCallback(
     async (event?: FormEvent<HTMLFormElement>) => {
       event?.preventDefault();
@@ -626,7 +685,7 @@ export default function Home() {
       const userMessage = input.trim();
       const selectedModelName = modelName.trim();
 
-      if (!userMessage || isRunning || isLoadingHistory) {
+      if (!userMessage || isRunning || isLoadingHistory || isSelectingWorkspace) {
         return;
       }
 
@@ -647,6 +706,7 @@ export default function Home() {
         modelName: selectedModelName,
         reasoningEffort: reasoningEffort.trim(),
         userMessage,
+        workspacePath: sessionId ? "" : pendingWorkspacePath,
         sessionId,
       };
 
@@ -701,7 +761,9 @@ export default function Home() {
       input,
       isLoadingHistory,
       isRunning,
+      isSelectingWorkspace,
       modelName,
+      pendingWorkspacePath,
       reasoningEffort,
       refreshSessions,
       sessionId,
@@ -745,6 +807,12 @@ export default function Home() {
       null
     );
   }, [archivedSessions, sessionId, sessions]);
+  const persistedWorkspacePath = useMemo(
+    () => readWorkspacePath(currentSession?.metadataJson),
+    [currentSession?.metadataJson],
+  );
+  const displayedWorkspacePath = persistedWorkspacePath || pendingWorkspacePath;
+  const workspaceStatusText = displayedWorkspacePath || (sessionId ? (currentSession ? "未设置工作区" : "工作区加载中") : "默认工作区");
   const isArchivedView =
     viewingSessionStatus === "archived" ||
     currentSession?.status === "archived";
@@ -768,7 +836,7 @@ export default function Home() {
             <StatusPill status={status} />
             <button
               className="h-10 w-full rounded-md border border-zinc-700 px-3 text-sm font-medium text-zinc-100 transition hover:border-emerald-400 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isRunning}
+              disabled={isRunning || isSelectingWorkspace}
               type="button"
               onClick={startNewSession}
             >
@@ -894,7 +962,7 @@ export default function Home() {
                           <>
                             <button
                               className="block w-full min-w-0 text-left"
-                              disabled={isLoadingHistory}
+                              disabled={isLoadingHistory || isSelectingWorkspace}
                               type="button"
                               onClick={() =>
                                 void openSession(
@@ -987,7 +1055,7 @@ export default function Home() {
                 <StatusPill status={status} />
                 <button
                   className="h-9 rounded-md border border-zinc-300 px-3 text-sm font-medium text-zinc-800 transition hover:border-emerald-500 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 lg:hidden"
-                  disabled={isRunning}
+                  disabled={isRunning || isSelectingWorkspace}
                   type="button"
                   onClick={startNewSession}
                 >
@@ -1070,8 +1138,14 @@ export default function Home() {
 
           {isArchivedView ? (
             <div className="border-t border-zinc-200 bg-white px-4 py-4 sm:px-6">
-              <div className="mx-auto max-w-4xl rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                当前为归档会话，仅支持回看历史。可在侧栏取消归档后继续对话。
+              <div className="mx-auto flex max-w-4xl flex-col gap-3">
+                <WorkspaceBar
+                  displayedPath={displayedWorkspacePath}
+                  statusText={workspaceStatusText}
+                />
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  当前为归档会话，仅支持回看历史。可在侧栏取消归档后继续对话。
+                </div>
               </div>
             </div>
           ) : (
@@ -1080,9 +1154,18 @@ export default function Home() {
               onSubmit={sendMessage}
             >
               <div className="mx-auto flex max-w-4xl flex-col gap-3">
+                <WorkspaceBar
+                  displayedPath={displayedWorkspacePath}
+                  statusText={workspaceStatusText}
+                  canSelect={!sessionId && !isRunning && !isLoadingHistory}
+                  isSelecting={isSelectingWorkspace}
+                  errorMessage={workspaceMessage}
+                  onSelect={() => void selectWorkspace()}
+                  onClear={clearPendingWorkspace}
+                />
                 <textarea
                   className="min-h-28 resize-none rounded-md border border-zinc-300 bg-white px-3 py-3 text-sm leading-6 text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  disabled={isRunning || isLoadingHistory}
+                  disabled={isRunning || isLoadingHistory || isSelectingWorkspace}
                   placeholder="输入消息"
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
@@ -1103,7 +1186,7 @@ export default function Home() {
                     ) : null}
                     <button
                       className="h-10 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-500"
-                      disabled={isRunning || isLoadingHistory || !input.trim()}
+                      disabled={isRunning || isLoadingHistory || isSelectingWorkspace || !input.trim()}
                       type="submit"
                     >
                       {isRunning ? "发送中" : "发送"}
@@ -1116,6 +1199,65 @@ export default function Home() {
         </section>
       </div>
     </main>
+  );
+}
+
+function WorkspaceBar({
+  displayedPath,
+  statusText,
+  canSelect = false,
+  isSelecting = false,
+  errorMessage = "",
+  onSelect,
+  onClear,
+}: {
+  displayedPath: string;
+  statusText: string;
+  canSelect?: boolean;
+  isSelecting?: boolean;
+  errorMessage?: string;
+  onSelect?: () => void;
+  onClear?: () => void;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="flex min-h-12 min-w-0 items-center gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
+        <FolderOpen aria-hidden="true" className="size-4 shrink-0 text-emerald-700" />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-zinc-500">工作区</p>
+          <p className="truncate text-sm text-zinc-800" title={displayedPath || statusText}>
+            {statusText}
+          </p>
+        </div>
+        {canSelect ? (
+          <div className="flex shrink-0 gap-1">
+            <button
+              aria-label={displayedPath ? "重新选择工作区" : "选择工作区"}
+              className="flex size-9 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 transition hover:border-emerald-500 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isSelecting}
+              title={displayedPath ? "重新选择工作区" : "选择工作区"}
+              type="button"
+              onClick={onSelect}
+            >
+              {isSelecting ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <FolderOpen aria-hidden="true" className="size-4" />}
+            </button>
+            {displayedPath ? (
+              <button
+                aria-label="恢复默认工作区"
+                className="flex size-9 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 transition hover:border-rose-400 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isSelecting}
+                title="恢复默认工作区"
+                type="button"
+                onClick={onClear}
+              >
+                <X aria-hidden="true" className="size-4" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {errorMessage ? <p className="mt-2 text-sm text-rose-700">{errorMessage}</p> : null}
+    </div>
   );
 }
 
@@ -1497,6 +1639,18 @@ function toErrorMessage(error: unknown) {
     return error.message;
   }
   return "会话请求失败";
+}
+
+function readWorkspacePath(metadataJson?: string | null) {
+  if (!metadataJson?.trim()) {
+    return "";
+  }
+  try {
+    const metadata = JSON.parse(metadataJson) as Record<string, unknown>;
+    return typeof metadata.workspacePath === "string" ? metadata.workspacePath : "";
+  } catch {
+    return "";
+  }
 }
 
 function saveLocalValue(key: string, value: string) {

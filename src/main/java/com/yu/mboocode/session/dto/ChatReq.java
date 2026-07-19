@@ -16,6 +16,9 @@ public record ChatReq(
         @NotBlank(message = "用户消息不能为空")
         String userMessage,
 
+        @Schema(description = "新会话工作区绝对路径，仅创建新会话时生效")
+        String workspacePath,
+
         @Schema(description = "会话 ID，为空时创建新会话")
         String sessionId
 ) {}

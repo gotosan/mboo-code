@@ -17,6 +17,7 @@ export type ChatReq = {
   modelName: string;
   reasoningEffort: string;
   userMessage: string;
+  workspacePath: string;
   sessionId: string;
 };
 

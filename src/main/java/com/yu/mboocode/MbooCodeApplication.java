@@ -14,7 +14,9 @@ import java.nio.file.Path;
 public class MbooCodeApplication {
     static void main(String[] args) {
         createMbooHomeDirectory();
-        SpringApplication.run(MbooCodeApplication.class, args);
+        SpringApplication application = new SpringApplication(MbooCodeApplication.class);
+        application.setHeadless(false);
+        application.run(args);
     }
 
     private static void createMbooHomeDirectory() {
