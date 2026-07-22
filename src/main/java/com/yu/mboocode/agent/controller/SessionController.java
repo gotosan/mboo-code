@@ -2,12 +2,14 @@ package com.yu.mboocode.agent.controller;
 
 import com.yu.mboocode.common.dto.R;
 import com.yu.mboocode.common.enums.SSEEvent;
+import com.yu.mboocode.agent.dto.ToolApprovalReq;
 import com.yu.mboocode.llm.LLMUtil;
 import com.yu.mboocode.agent.dto.ChatReq;
 import com.yu.mboocode.agent.dto.SessionUpdateReq;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.Sessions;
 import com.yu.mboocode.agent.service.SessionService;
+import com.yu.mboocode.agent.service.ToolApprovalService;
 import com.yu.mboocode.agent.service.TurnService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,6 +38,8 @@ public class SessionController {
     private TurnService turnService;
     @Resource
     private SessionService sessionService;
+    @Resource
+    private ToolApprovalService toolApprovalService;
 
     @Operation(summary = "活跃会话列表")
     @GetMapping("/list")
@@ -82,7 +86,15 @@ public class SessionController {
     @Operation(summary = "删除会话")
     @DeleteMapping("/{sessionId}")
     public R<Void> delete(@PathVariable String sessionId) {
+        toolApprovalService.clearSession(sessionId);
         sessionService.deleteSession(sessionId);
+        return R.ok();
+    }
+
+    @Operation(summary = "处理工具授权")
+    @PostMapping("/{sessionId}/approvals/{approvalId}")
+    public R<Void> resolveToolApproval(@PathVariable String sessionId, @PathVariable String approvalId, @Valid @RequestBody ToolApprovalReq req) {
+        toolApprovalService.resolve(sessionId, approvalId, req.decision());
         return R.ok();
     }
 

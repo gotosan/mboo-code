@@ -46,6 +46,8 @@ public class TurnService {
     @Resource
     private SessionService sessionService;
     @Resource
+    private ToolApprovalService toolApprovalService;
+    @Resource
     private ChatMemoryProvider chatMemoryProvider;
 
     //todo 取消竞态处理 cas
@@ -121,12 +123,14 @@ public class TurnService {
 
             // 注册流取消处理器
             sink.onCancel(() -> {
+                Optional.ofNullable(streamingHandleRef.get()).ifPresent(StreamingHandle::cancel);
+                toolApprovalService.cancelTurn(sessionTurn.sessionId(), sessionTurn.turnId());
+
                 String text = finalText.toString();
                 if (StrUtil.isBlank(text)) {
                     return;
                 }
 
-                Optional.ofNullable(streamingHandleRef.get()).ifPresent(StreamingHandle::cancel);
                 sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
                         .eventId(IdUtil.getSnowflakeNextIdStr())
                         .sessionId(sessionTurn.sessionId())
@@ -174,20 +178,23 @@ public class TurnService {
                     .onPartialToolCallWithContext((toolCall, context) -> cancelHandle(sink, context.streamingHandle(), streamingHandleRef)) // tool call
                     .beforeToolExecution(beforeToolExecution -> { // 工具调用前
                         ToolExecutionRequest request = beforeToolExecution.request();
-                        emitEvent(sink, () -> sessionEventStore.appendSession(
-                                sessionTurn.transcriptUri(),
-                                sessionTurn.sessionId(),
-                                sessionTurn.turnId(),
-                                SessionEventType.TOOL_CALL_STARTED,
-                                SessionEventSource.ASSISTANT,
-                                ToolCallStartedPayload.builder()
-                                        .messageId(assistantMessageId)
-                                        .toolCallId(request.id())
-                                        .toolName(request.name())
-                                        .arguments(request.arguments())
-                                        .build()
-                        ));
-
+                        Runnable toolStartedEmitter = () -> emitEvent(sink, () -> sessionEventStore.appendSession(
+                                        sessionTurn.transcriptUri(),
+                                        sessionTurn.sessionId(),
+                                        sessionTurn.turnId(),
+                                        SessionEventType.TOOL_CALL_STARTED,
+                                        SessionEventSource.ASSISTANT,
+                                        ToolCallStartedPayload.builder()
+                                                .messageId(assistantMessageId)
+                                                .toolCallId(request.id())
+                                                .toolName(request.name())
+                                                .arguments(request.arguments())
+                                                .build()
+                                ));
+                        boolean waitingApproval = toolApprovalService.requestIfNeeded(sessionTurn, assistantMessageId, request, sink::next, toolStartedEmitter);
+                        if (!waitingApproval) {
+                            toolStartedEmitter.run();
+                        }
                     })
                     .onToolExecuted(toolExecution -> {
                         ToolExecutionRequest request = toolExecution.request();

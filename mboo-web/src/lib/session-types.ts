@@ -3,6 +3,7 @@ export type SessionEventType =
   | "ASSISTANT_MESSAGE"
   | "TOOL_CALL_STARTED"
   | "TOOL_CALL_ENDED"
+  | "TOOL_APPROVAL_REQUIRED"
   | "ERROR"
   | "CANCELLED"
   | "ASSISTANT_MESSAGE_DELTA";
@@ -11,7 +12,9 @@ export type SessionEventSource = "USER" | "ASSISTANT" | "SYSTEM";
 
 export type AssistantMessageState = "complete" | "cancel" | "error";
 
-export type ToolCallStatus = "started" | "completed" | "failed";
+export type ToolCallStatus = "waiting_approval" | "submitting" | "started" | "completed" | "failed";
+
+export type ToolApprovalDecision = "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY";
 
 export type ChatReq = {
   modelName: string;
@@ -66,6 +69,16 @@ export type ToolCallStartedPayload = {
   arguments: string;
 };
 
+export type ToolApprovalRequiredPayload = {
+  messageId: string;
+  approvalId: string;
+  toolCallId: string;
+  toolName: string;
+  arguments: string;
+  title: string;
+  description: string;
+};
+
 export type ToolCallEndedPayload = {
   messageId: string;
   toolCallId: string;
@@ -83,6 +96,7 @@ export type SessionEventPayload =
   | AssistantMessagePayload
   | AssistantMessageDeltaPayload
   | ToolCallStartedPayload
+  | ToolApprovalRequiredPayload
   | ToolCallEndedPayload
   | ErrorPayload
   | CancelledPayload;
@@ -91,6 +105,7 @@ export type SessionEvent =
   | SessionEventBase<"USER_MESSAGE", UserMessagePayload>
   | SessionEventBase<"ASSISTANT_MESSAGE", AssistantMessagePayload>
   | SessionEventBase<"TOOL_CALL_STARTED", ToolCallStartedPayload>
+  | SessionEventBase<"TOOL_APPROVAL_REQUIRED", ToolApprovalRequiredPayload>
   | SessionEventBase<"TOOL_CALL_ENDED", ToolCallEndedPayload>
   | SessionEventBase<"ERROR", ErrorPayload>
   | SessionEventBase<"CANCELLED", CancelledPayload>

@@ -8,6 +8,7 @@ import type {
   AssistantMessageState,
   ChatReq,
   SessionEvent,
+  ToolApprovalDecision,
   ToolCallStatus,
 } from "@/lib/session-types";
 
@@ -44,6 +45,9 @@ type ToolCallView = {
   errorMessage: string;
   durationMs?: number;
   createdAt?: string;
+  approvalId?: string;
+  approvalTitle?: string;
+  approvalDescription?: string;
 };
 
 type ChatMessage = {
@@ -88,7 +92,7 @@ type WorkspaceSelectResp = {
 type ToolCallEvent = Extract<
   SessionEvent,
   {
-    type: "TOOL_CALL_STARTED" | "TOOL_CALL_ENDED";
+    type: "TOOL_CALL_STARTED" | "TOOL_CALL_ENDED" | "TOOL_APPROVAL_REQUIRED";
   }
 >;
 
@@ -272,6 +276,34 @@ export default function Home() {
     });
   }, []);
 
+  const resolveToolApproval = useCallback(async (toolCall: ToolCallView, decision: ToolApprovalDecision) => {
+    const approvalId = toolCall.approvalId;
+    const targetSessionId = currentSessionIdRef.current;
+    if (!approvalId || !targetSessionId) {
+      return;
+    }
+
+    const updateToolCall = (status: ToolCallStatus, errorMessage = "") => {
+      setMessages((current) => current.map((message) => ({
+        ...message,
+        toolCalls: message.toolCalls?.map((item) => item.id === toolCall.id ? { ...item, status, errorMessage } : item),
+      })));
+    };
+
+    updateToolCall("submitting");
+    try {
+      const response = await fetch(`/api/session/${encodeURIComponent(targetSessionId)}/approvals/${encodeURIComponent(approvalId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+    } catch (error) {
+      updateToolCall("waiting_approval", toErrorMessage(error));
+    }
+  }, []);
   const markStreamingMessagesCancelled = useCallback((turnId: string | null) => {
     setMessages((current) =>
       current.map((message) => {
@@ -1127,7 +1159,7 @@ export default function Home() {
             ) : (
               <div className="mx-auto flex max-w-4xl flex-col gap-4">
                 {messages.map((message) => (
-                  <MessageBubble key={message.id} message={message} />
+                  <MessageBubble key={message.id} message={message} onResolveApproval={resolveToolApproval} />
                 ))}
               </div>
             )}
@@ -1259,7 +1291,7 @@ function WorkspaceBar({
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message, onResolveApproval }: { message: ChatMessage; onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void> }) {
   const bubbleClassName =
     message.role === "user"
       ? "ml-auto border-emerald-200 bg-emerald-50"
@@ -1285,13 +1317,13 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         {message.text || " "}
       </p>
       {message.toolCalls && message.toolCalls.length > 0 ? (
-        <ToolTrace toolCalls={message.toolCalls} />
+        <ToolTrace toolCalls={message.toolCalls} onResolveApproval={onResolveApproval} />
       ) : null}
     </article>
   );
 }
 
-function ToolTrace({ toolCalls }: { toolCalls: ToolCallView[] }) {
+function ToolTrace({ toolCalls, onResolveApproval }: { toolCalls: ToolCallView[]; onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void> }) {
   return (
     <details className="mt-3 border-t border-zinc-200 pt-3">
       <summary className="cursor-pointer select-none text-xs font-semibold text-zinc-600">
@@ -1346,6 +1378,17 @@ function ToolTrace({ toolCalls }: { toolCalls: ToolCallView[] }) {
                 <p className="mt-2 break-words text-xs leading-5 text-rose-700">
                   {toolCall.errorMessage}
                 </p>
+              ) : null}
+              {toolCall.approvalId && (toolCall.status === "waiting_approval" || toolCall.status === "submitting") ? (
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-sm font-medium text-amber-950">{toolCall.approvalTitle || "需要工具授权"}</p>
+                  {toolCall.approvalDescription ? <p className="mt-1 text-xs leading-5 text-amber-800">{toolCall.approvalDescription}</p> : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50" disabled={toolCall.status === "submitting"} type="button" onClick={() => void onResolveApproval(toolCall, "ALLOW_ONCE")}>允许本次</button>
+                    <button className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-medium text-emerald-800 disabled:opacity-50" disabled={toolCall.status === "submitting"} type="button" onClick={() => void onResolveApproval(toolCall, "ALLOW_SESSION")}>本会话允许</button>
+                    <button className="rounded-md border border-rose-300 bg-white px-3 py-2 text-xs font-medium text-rose-700 disabled:opacity-50" disabled={toolCall.status === "submitting"} type="button" onClick={() => void onResolveApproval(toolCall, "DENY")}>拒绝</button>
+                  </div>
+                </div>
               ) : null}
             </div>
           );
@@ -1411,28 +1454,38 @@ function payloadDisplayText(value: unknown) {
 }
 
 function isToolCallEvent(event: SessionEvent): event is ToolCallEvent {
-  return event.type === "TOOL_CALL_STARTED" || event.type === "TOOL_CALL_ENDED";
+  return event.type === "TOOL_CALL_STARTED" || event.type === "TOOL_CALL_ENDED" || event.type === "TOOL_APPROVAL_REQUIRED";
 }
 
 function toToolCallView(event: ToolCallEvent): ToolCallView {
   const { payload } = event;
   const toolName = payload.toolName || "unknown_tool";
+  if (event.type === "TOOL_APPROVAL_REQUIRED") {
+    return {
+      id: payload.toolCallId || event.eventId,
+      turnId: event.turnId,
+      toolName,
+      status: "waiting_approval",
+      argumentsText: payloadDisplayText(payload.arguments),
+      resultPreview: "",
+      errorMessage: "",
+      createdAt: event.createdAt,
+      approvalId: event.payload.approvalId,
+      approvalTitle: event.payload.title,
+      approvalDescription: event.payload.description,
+    };
+  }
+
+  const started = event.type === "TOOL_CALL_STARTED";
   return {
     id: payload.toolCallId || event.eventId,
     turnId: event.turnId,
     toolName,
-    status: event.type === "TOOL_CALL_STARTED" ? "started" : event.payload.status,
+    status: started ? "started" : event.payload.status,
     argumentsText: payloadDisplayText(payload.arguments),
-    resultPreview:
-      event.type === "TOOL_CALL_STARTED"
-        ? ""
-        : payloadDisplayText(event.payload.resultPreview),
-    errorMessage:
-      event.type === "TOOL_CALL_STARTED"
-        ? ""
-        : event.payload.errorMessage || "",
-    durationMs:
-      event.type === "TOOL_CALL_STARTED" ? undefined : event.payload.durationMs,
+    resultPreview: started ? "" : payloadDisplayText(event.payload.resultPreview),
+    errorMessage: started ? "" : event.payload.errorMessage || "",
+    durationMs: started ? undefined : event.payload.durationMs,
     createdAt: event.createdAt,
   };
 }
@@ -1705,6 +1758,14 @@ function stateLabel(state: MessageState) {
 }
 
 function toolStatusLabel(status: ToolCallStatus) {
+  if (status === "waiting_approval") {
+    return "等待授权";
+  }
+
+  if (status === "submitting") {
+    return "处理中";
+  }
+
   if (status === "started") {
     return "运行中";
   }
@@ -1721,6 +1782,10 @@ function toolStatusLabel(status: ToolCallStatus) {
 }
 
 function toolStatusClassName(status: ToolCallStatus) {
+  if (status === "waiting_approval" || status === "submitting") {
+    return "bg-amber-50 text-amber-800";
+  }
+
   if (status === "started") {
     return "bg-amber-50 text-amber-800";
   }

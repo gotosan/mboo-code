@@ -5,6 +5,7 @@ import com.yu.mboocode.agent.model.payload.AssistantMessagePayload;
 import com.yu.mboocode.agent.model.payload.CancelledPayload;
 import com.yu.mboocode.agent.model.payload.ErrorPayload;
 import com.yu.mboocode.agent.model.payload.SessionEventPayload;
+import com.yu.mboocode.agent.model.payload.ToolApprovalRequiredPayload;
 import com.yu.mboocode.agent.model.payload.ToolCallEndedPayload;
 import com.yu.mboocode.agent.model.payload.ToolCallStartedPayload;
 import com.yu.mboocode.agent.model.payload.UserMessagePayload;
@@ -22,6 +23,7 @@ public enum SessionEventType {
 
     TOOL_CALL_STARTED(ToolCallStartedPayload.class), //工具调用已开始
     TOOL_CALL_ENDED(ToolCallEndedPayload.class), //工具调用已结束
+    TOOL_APPROVAL_REQUIRED(ToolApprovalRequiredPayload.class), //工具等待用户授权
 
     ERROR(ErrorPayload.class), //会话执行错误
     CANCELLED(CancelledPayload.class), //会话已取消
