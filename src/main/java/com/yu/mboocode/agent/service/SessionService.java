@@ -44,11 +44,11 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         Sessions session = new Sessions();
         session.setTitle("新会话"); //todo 后续看看用大模型的回答
         session.setStatus(Sessions.StatusEnum.ACTIVE.getCode());
-        String resolvedWorkspacePath = StrUtil.isNotBlank(workspacePath) ? normalizeWorkspacePath(workspacePath) : createDefaultWorkspace(session.getId(), LocalDate.now());
-        session.setWorkspacePath(resolvedWorkspacePath);
         session.setMetadataJson("{}");
         save(session);
 
+        String resolvedWorkspacePath = StrUtil.isNotBlank(workspacePath) ? normalizeWorkspacePath(workspacePath) : createDefaultWorkspace(session.getId(), LocalDate.now());
+        session.setWorkspacePath(resolvedWorkspacePath);
         session.setTranscriptUri(sessionEventStore.newTranscriptUri(session.getId()));
         updateById(session);
         return session;
