@@ -127,26 +127,24 @@ public class TurnService {
                 toolApprovalService.cancelTurn(sessionTurn.sessionId(), sessionTurn.turnId());
 
                 String text = finalText.toString();
-                if (StrUtil.isBlank(text)) {
-                    return;
+                if (StrUtil.isNotBlank(text)) {
+                    sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
+                            .eventId(IdUtil.getSnowflakeNextIdStr())
+                            .sessionId(sessionTurn.sessionId())
+                            .turnId(sessionTurn.turnId())
+                            .type(SessionEventType.ASSISTANT_MESSAGE)
+                            .source(SessionEventSource.ASSISTANT)
+                            .createdAt(DateTimeUtil.now())
+                            .payload(AssistantMessagePayload.builder()
+                                    .messageId(assistantMessageId)
+                                    .state(AssistantMessagePayload.AssistantMessageState.CANCEL)
+                                    .text(text)
+                                    .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
+                                    .build())
+                            .meta(Collections.emptyMap())
+                            .build());
+                    appendInterruptedMemory(sessionTurn.sessionId(), text);
                 }
-
-                sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
-                        .eventId(IdUtil.getSnowflakeNextIdStr())
-                        .sessionId(sessionTurn.sessionId())
-                        .turnId(sessionTurn.turnId())
-                        .type(SessionEventType.ASSISTANT_MESSAGE)
-                        .source(SessionEventSource.ASSISTANT)
-                        .createdAt(DateTimeUtil.now())
-                        .payload(AssistantMessagePayload.builder()
-                                .messageId(assistantMessageId)
-                                .state(AssistantMessagePayload.AssistantMessageState.CANCEL)
-                                .text(text)
-                                .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
-                                .build())
-                        .meta(Collections.emptyMap())
-                        .build());
-                appendInterruptedMemory(sessionTurn.sessionId(), text);
             }); // 方法内有做处理，暂时不用 CAS 跟 onCompleteResponse 竞争终态
 
             aiCodeService.chatStream(sessionTurn.sessionId(), userMessage, params)
@@ -243,11 +241,7 @@ public class TurnService {
                     })
                     .onError(error -> {
                         String text = finalText.toString();
-                        if (StrUtil.isBlank(text)) {
-                            return;
-                        }
-
-                        emitEvent(sink, () -> sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
+                        if (StrUtil.isNotBlank(text)) {emitEvent(sink, () -> sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
                                 .eventId(IdUtil.getSnowflakeNextIdStr())
                                 .sessionId(sessionTurn.sessionId())
                                 .turnId(sessionTurn.turnId())
@@ -263,7 +257,8 @@ public class TurnService {
                                         .build())
                                 .meta(Collections.emptyMap())
                                 .build()));
-                        appendInterruptedMemory(sessionTurn.sessionId(), text);
+                            appendInterruptedMemory(sessionTurn.sessionId(), text);
+                        }
                         sink.error(error);
                     })
                     .start();
