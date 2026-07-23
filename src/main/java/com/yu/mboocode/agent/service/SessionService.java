@@ -1,6 +1,8 @@
 package com.yu.mboocode.agent.service;
 
 import cn.hutool.core.collection.CollUtil;
+import cn.hutool.core.thread.lock.LockUtil;
+import cn.hutool.core.thread.lock.SegmentLock;
 import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
@@ -24,12 +26,17 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.*;
+import java.util.concurrent.locks.Lock;
 import java.util.function.Consumer;
 
 @Service
 @Slf4j
 public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
-    private static final String PERMISSIONS_KEY = "permissions"; // metadataJson中权限的字段名
+    private static final String PERMISSIONS_KEY = "permissions"; // metadataJson 中权限字段名
+    private static final int METADATA_UPDATE_MAX_ATTEMPTS = 3; // metadataJson 更新自旋锁最大重试次数
+
+    /** 按 sessionId 分段锁，串行化同一会话的 metadataJson 读改写。 */
+    private final SegmentLock<Lock> sessionMetaLocks = LockUtil.createLazySegmentLock(64);
 
     @Resource
     private SessionEventStore sessionEventStore;
@@ -221,7 +228,6 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
             return;
         }
         updatePermissions(sessionId, permissions -> {
-
             LinkedHashSet<String> tools = new LinkedHashSet<>(CollUtil.emptyIfNull(permissions.getAllowedTools()));
             tools.add(toolName);
             permissions.setAllowedTools(new ArrayList<>(tools));
@@ -252,19 +258,50 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         });
     }
 
+    /**
+     * 修改会话 permissions 节点；底层走统一的 metadataJson 更新（分段锁 + CAS 重试）。
+     */
     private void updatePermissions(String sessionId, Consumer<SessionPermissions> mutator) {
-        Sessions session = getSession(sessionId);
-        JSONObject meta = parseMetadata(session.getMetadataJson());
-        SessionPermissions permissions = parsePermissionsObject(meta.get(PERMISSIONS_KEY));
-        mutator.accept(permissions);
-        meta.put(PERMISSIONS_KEY, permissions);
-        boolean updated = lambdaUpdate()
-                .eq(Sessions::getId, sessionId)
-                .set(Sessions::getMetadataJson, meta.toJSONString())
-                .set(Sessions::getUpdatedAt, DateTimeUtil.now())
-                .update();
-        if (!updated) {
-            throw new ServiceException("更新会话权限失败");
+        updateMetadataJson(sessionId, meta -> {
+            SessionPermissions permissions = parsePermissionsObject(meta.get(PERMISSIONS_KEY));
+            mutator.accept(permissions);
+            meta.put(PERMISSIONS_KEY, permissions);
+        });
+    }
+
+    /**
+     * 统一更新 metadataJson：按 sessionId 加锁，读最新 → 变更 → 按旧值 CAS 写回，失败则重试。
+     */
+    private void updateMetadataJson(String sessionId, Consumer<JSONObject> mutator) {
+        Lock lock = sessionMetaLocks.get(sessionId);
+        lock.lock();
+        try {
+            for (int attempt = 1; attempt <= METADATA_UPDATE_MAX_ATTEMPTS; attempt++) {
+                Sessions session = getSession(sessionId);
+                String oldJson = session.getMetadataJson();
+                JSONObject meta = parseMetadata(oldJson);
+                mutator.accept(meta);
+                String nextJson = meta.toJSONString();
+                String now = DateTimeUtil.now();
+
+                var update = lambdaUpdate().eq(Sessions::getId, sessionId);
+                if (oldJson == null) {
+                    update.isNull(Sessions::getMetadataJson);
+                } else {
+                    update.eq(Sessions::getMetadataJson, oldJson);
+                }
+                boolean updated = update
+                        .set(Sessions::getMetadataJson, nextJson)
+                        .set(Sessions::getUpdatedAt, now)
+                        .update();
+                if (updated) {
+                    return;
+                }
+                log.warn("会话 metadataJson CAS 冲突，准备重试 sessionId:{} attempt:{}", sessionId, attempt);
+            }
+            throw new ServiceException("更新会话元数据失败");
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -301,7 +338,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
             JSONObject meta = JSON.parseObject(metadataJson);
             return meta == null ? new JSONObject() : meta;
         } catch (Exception e) {
-            log.warn("会话 metadataJson 解析失败，将使用空对象覆盖 permissions 节点");
+            log.warn("会话 metadataJson 解析失败，将使用空对象");
             return new JSONObject();
         }
     }
@@ -325,5 +362,3 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         }
     }
 }
-
-
