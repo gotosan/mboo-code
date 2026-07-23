@@ -37,11 +37,14 @@ $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 | 前端接口 | 后端接口 | 说明 |
 | --- | --- | --- |
 | `GET /api/session/list` | `GET /session/list` | 查询活跃会话 |
-| `GET /api/session/{sessionId}` | `GET /session/{sessionId}` | 查询会话详情 |
+| `GET /api/session/list/archived` | `GET /session/list/archived` | 查询归档会话 |
+| `GET /api/session/{sessionId}` | `GET /session/{sessionId}` | 查询会话详情（打开会话时与 events 并行拉取） |
 | `GET /api/session/{sessionId}/events` | `GET /session/{sessionId}/events` | 全量读取 JSONL 会话事件 |
 | `PATCH /api/session/{sessionId}` | `PATCH /session/{sessionId}` | 更新会话标题 |
-| `POST /api/session/{sessionId}/archive` | `POST /session/{sessionId}/archive` | 归档接口，当前后端仅校验会话存在 |
-| `DELETE /api/session/{sessionId}` | `DELETE /session/{sessionId}` | 删除接口，当前后端仅校验会话存在 |
+| `POST /api/session/{sessionId}/archive` | `POST /session/{sessionId}/archive` | 归档会话 |
+| `POST /api/session/{sessionId}/unarchive` | `POST /session/{sessionId}/unarchive` | 取消归档会话 |
+| `DELETE /api/session/{sessionId}` | `DELETE /session/{sessionId}` | 删除会话 |
+| `POST /api/session/{sessionId}/approvals/{approvalId}` | `POST /session/{sessionId}/approvals/{approvalId}` | 处理工具授权（`ALLOW_ONCE` / `ALLOW_SESSION` / `DENY`） |
 | `POST /api/session/chat` | `POST /session/chat` | 代理 SSE 会话事件流 |
 | `POST /api/workspace/select-directory` | `POST /workspace/select-directory` | 打开本机工作区目录选择窗口 |
 
@@ -59,6 +62,8 @@ $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 
 聊天请求字段为 `modelName`、`reasoningEffort`、`userMessage`、`workspacePath` 和 `sessionId`。`sessionId` 为空字符串时，后端会创建新会话；此时 `workspacePath` 为空会自动创建 `.mboo/workspaces/{yyyy-MM-dd}/{sessionId}`，已有会话会忽略请求中的工作区路径。
 
+工具授权请求字段为 `decision`：`ALLOW_ONCE`（允许本次）、`ALLOW_SESSION`（本会话允许）、`DENY`（拒绝）。`approvalId` 来自 SSE 事件 `TOOL_APPROVAL_REQUIRED.payload.approvalId`。
+
 ## SSE 事件
 
 后端 SSE 事件名固定为 `session`，`data` 是完整 `SessionEvent`。当前事件类型包括：
@@ -67,6 +72,7 @@ $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 - `ASSISTANT_MESSAGE_DELTA`
 - `ASSISTANT_MESSAGE`
 - `TOOL_CALL_STARTED`
+- `TOOL_APPROVAL_REQUIRED`
 - `TOOL_CALL_ENDED`
 - `ERROR`
 - `CANCELLED`

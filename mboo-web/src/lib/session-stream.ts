@@ -7,6 +7,15 @@ type SseBoundary = {
   length: number;
 };
 
+export type SessionStreamOptions = {
+  /**
+   * 同一网络分片内可能含多个 SSE 事件。按动画帧让出主线程，
+   * 让 React 有机会中间渲染，形成打字机效果。
+   */
+  paceWithAnimationFrame?: boolean;
+  signal?: AbortSignal;
+};
+
 export class SessionStreamError extends Error {
   constructor(message: string) {
     super(message);
@@ -16,7 +25,8 @@ export class SessionStreamError extends Error {
 
 export async function readSessionEventStream(
   response: Response,
-  onEvent: (event: SessionEvent) => void,
+  onEvent: (event: SessionEvent) => void | Promise<void>,
+  options: SessionStreamOptions = {},
 ) {
   if (!response.body) {
     throw new SessionStreamError("后端没有返回可读取的会话事件流");
@@ -26,35 +36,49 @@ export async function readSessionEventStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
+  try {
+    while (true) {
+      if (options.signal?.aborted) {
+        await reader.cancel().catch(() => undefined);
+        return;
+      }
 
-    if (done) {
-      buffer += decoder.decode();
-      break;
+      const { done, value } = await reader.read();
+
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      buffer = await consumeBufferedMessages(buffer, onEvent, options);
     }
 
-    buffer += decoder.decode(value, { stream: true });
-    buffer = consumeBufferedMessages(buffer, onEvent);
-  }
-
-  const remaining = buffer.trim();
-  if (remaining.length > 0) {
-    handleSseMessage(remaining, onEvent);
+    const remaining = buffer.trim();
+    if (remaining.length > 0) {
+      await handleSseMessage(remaining, onEvent, options);
+    }
+  } finally {
+    reader.releaseLock?.();
   }
 }
 
-function consumeBufferedMessages(
+async function consumeBufferedMessages(
   buffer: string,
-  onEvent: (event: SessionEvent) => void,
+  onEvent: (event: SessionEvent) => void | Promise<void>,
+  options: SessionStreamOptions,
 ) {
   let nextBuffer = buffer;
   let boundary = findSseBoundary(nextBuffer);
 
   while (boundary) {
+    if (options.signal?.aborted) {
+      return nextBuffer;
+    }
+
     const rawMessage = nextBuffer.slice(0, boundary.index);
     nextBuffer = nextBuffer.slice(boundary.index + boundary.length);
-    handleSseMessage(rawMessage, onEvent);
+    await handleSseMessage(rawMessage, onEvent, options);
     boundary = findSseBoundary(nextBuffer);
   }
 
@@ -73,9 +97,10 @@ function findSseBoundary(buffer: string): SseBoundary | null {
   return boundaries[0] ?? null;
 }
 
-function handleSseMessage(
+async function handleSseMessage(
   rawMessage: string,
-  onEvent: (event: SessionEvent) => void,
+  onEvent: (event: SessionEvent) => void | Promise<void>,
+  options: SessionStreamOptions,
 ) {
   if (!rawMessage.trim()) {
     return;
@@ -86,12 +111,44 @@ function handleSseMessage(
     return;
   }
 
+  let event: SessionEvent;
   try {
-    onEvent(JSON.parse(data) as SessionEvent);
+    event = JSON.parse(data) as SessionEvent;
   } catch (error) {
     const detail = error instanceof Error ? error.message : "未知错误";
     throw new SessionStreamError(`无法解析后端会话事件：${detail}`);
   }
+
+  await onEvent(event);
+
+  if (options.paceWithAnimationFrame) {
+    await waitAnimationFrame(options.signal);
+  }
+}
+
+function waitAnimationFrame(signal?: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+
+    if (typeof requestAnimationFrame !== "function") {
+      setTimeout(resolve, 0);
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => resolve());
+    if (!signal) {
+      return;
+    }
+
+    const onAbort = () => {
+      cancelAnimationFrame(frame);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function parseSseMessage(rawMessage: string) {
