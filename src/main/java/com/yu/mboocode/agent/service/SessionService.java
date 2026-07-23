@@ -32,12 +32,6 @@ import java.util.function.Consumer;
 @Service
 @Slf4j
 public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
-    private static final String PERMISSIONS_KEY = "permissions"; // metadataJson 中权限字段名
-    private static final int METADATA_UPDATE_MAX_ATTEMPTS = 3; // metadataJson 更新自旋锁最大重试次数
-
-    /** 按 sessionId 分段锁，串行化同一会话的 metadataJson 读改写。 */
-    private final SegmentLock<Lock> sessionMetaLocks = LockUtil.createLazySegmentLock(64);
-
     @Resource
     private SessionEventStore sessionEventStore;
     @Resource
@@ -258,6 +252,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         });
     }
 
+    private static final String PERMISSIONS_KEY = "permissions"; // metadataJson 中权限字段名
     /**
      * 修改会话 permissions 节点；底层走统一的 metadataJson 更新（分段锁 + CAS 重试）。
      */
@@ -269,6 +264,9 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         });
     }
 
+
+    private static final int METADATA_UPDATE_MAX_ATTEMPTS = 3; // metadataJson 更新自旋锁最大重试次数
+    private final SegmentLock<Lock> sessionMetaLocks = LockUtil.createLazySegmentLock(64); // 按 sessionId 分段锁，串行化同一会话的 metadataJson 读改写。
     /**
      * 统一更新 metadataJson：按 sessionId 加锁，读最新 → 变更 → 按旧值 CAS 写回，失败则重试。
      */
