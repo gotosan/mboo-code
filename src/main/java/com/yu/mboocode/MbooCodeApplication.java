@@ -1,6 +1,6 @@
 package com.yu.mboocode;
 
-import com.yu.mboocode.util.CommonUtil;
+import com.yu.mboocode.common.util.CommonUtil;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

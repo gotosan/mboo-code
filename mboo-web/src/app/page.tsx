@@ -23,6 +23,7 @@ import type {
   SessionEvent,
   ToolApprovalDecision,
   ToolCallStatus,
+  ToolPermissionType,
 } from "@/lib/session-types";
 
 const STORAGE_KEYS = {
@@ -43,6 +44,7 @@ const REASONING_OPTIONS = [
 
 const TOOL_LABELS: Record<string, string> = {
   getWeather: "查询天气",
+  demoWriteFile: "演示写入权限",
 };
 
 /** 新建会话在拿到后端 sessionId 前，消息暂存用的本地键 */
@@ -65,6 +67,8 @@ type ToolCallView = {
   approvalId?: string;
   approvalTitle?: string;
   approvalDescription?: string;
+  permissionType?: ToolPermissionType;
+  grantPath?: string;
 };
 
 type ChatMessage = {
@@ -2303,6 +2307,13 @@ const ToolTraceItem = memo(function ToolTraceItem({
               {toolCall.approvalDescription ? (
                 <p className="mt-1 text-xs leading-5 text-text-2">{toolCall.approvalDescription}</p>
               ) : null}
+              {toolCall.grantPath &&
+              (toolCall.permissionType === "READ" || toolCall.permissionType === "WRITE") ? (
+                <div className="mt-2 rounded-lg border border-running/20 bg-panel/70 px-2.5 py-2">
+                  <p className="font-mono text-xs leading-5 text-text-1 break-all">{toolCall.grantPath}</p>
+                  <p className="mt-1 text-xs text-text-3">包含其子目录</p>
+                </div>
+              ) : null}
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   className="rounded-lg bg-accent px-3 py-2 text-xs font-medium text-accent-fg disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
@@ -2310,7 +2321,7 @@ const ToolTraceItem = memo(function ToolTraceItem({
                   type="button"
                   onClick={() => void onResolveApproval(toolCall, "ALLOW_ONCE")}
                 >
-                  允许本次
+                  仅允许本次
                 </button>
                 <button
                   className="rounded-lg border border-ok/40 bg-panel px-3 py-2 text-xs font-medium text-ok disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ok/40"
@@ -2318,7 +2329,7 @@ const ToolTraceItem = memo(function ToolTraceItem({
                   type="button"
                   onClick={() => void onResolveApproval(toolCall, "ALLOW_SESSION")}
                 >
-                  本会话允许
+                  {sessionAllowLabel(toolCall.permissionType)}
                 </button>
                 <button
                   className="rounded-lg border border-danger/40 bg-panel px-3 py-2 text-xs font-medium text-danger disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40"
@@ -2424,6 +2435,8 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
       approvalId: event.payload.approvalId,
       approvalTitle: event.payload.title,
       approvalDescription: event.payload.description,
+      permissionType: event.payload.permissionType || "TOOL",
+      grantPath: event.payload.grantPath || undefined,
     };
   }
 
@@ -2443,6 +2456,16 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
 
 function getToolLabel(toolName: string) {
   return TOOL_LABELS[toolName] ?? toolName;
+}
+
+function sessionAllowLabel(permissionType?: ToolPermissionType) {
+  if (permissionType === "READ") {
+    return "本会话允许读取此目录";
+  }
+  if (permissionType === "WRITE") {
+    return "本会话允许读写此目录";
+  }
+  return "本会话始终允许此工具";
 }
 
 function reduceSessionEventsToMessages(events: SessionEvent[]) {
@@ -2520,7 +2543,20 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
     }
   }
 
-  return messages;
+  // 历史回放中尚未结束的授权卡片已失效，禁止再次点击
+  return messages.map((message) => ({
+    ...message,
+    toolCalls: message.toolCalls?.map((toolCall) =>
+      toolCall.status === "waiting_approval" || toolCall.status === "submitting"
+        ? {
+            ...toolCall,
+            status: "failed" as const,
+            errorMessage: toolCall.errorMessage || "授权请求已失效",
+            approvalId: undefined,
+          }
+        : toolCall,
+    ),
+  }));
 }
 
 function upsertMessageSnapshot(

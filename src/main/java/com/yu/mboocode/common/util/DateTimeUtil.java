@@ -1,4 +1,4 @@
-package com.yu.mboocode.util;
+package com.yu.mboocode.common.util;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;

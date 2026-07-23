@@ -3,7 +3,7 @@ package com.yu.mboocode.config;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONException;
 import com.alibaba.fastjson2.JSONWriter;
-import com.yu.mboocode.util.CommonUtil;
+import com.yu.mboocode.common.util.CommonUtil;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 

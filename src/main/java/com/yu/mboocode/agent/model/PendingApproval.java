@@ -1,6 +1,7 @@
 package com.yu.mboocode.agent.model;
 
 import com.yu.mboocode.agent.enums.ToolApprovalDecision;
+import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.util.concurrent.CompletableFuture;
@@ -21,6 +22,12 @@ public record PendingApproval(
 
         @Schema(description = "工具名称")
         String toolName,
+
+        @Schema(description = "权限类型")
+        ToolPermissionType permissionType,
+
+        @Schema(description = "申请授权的规范化目录，仅 READ/WRITE 使用")
+        String grantPath,
 
         @Schema(hidden = true)
         CompletableFuture<ToolApprovalDecision> future,

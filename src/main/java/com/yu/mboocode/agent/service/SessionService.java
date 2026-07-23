@@ -1,27 +1,33 @@
 package com.yu.mboocode.agent.service;
 
+import cn.hutool.core.collection.CollUtil;
+import cn.hutool.core.thread.lock.LockUtil;
+import cn.hutool.core.thread.lock.SegmentLock;
 import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.yu.mboocode.common.exception.ServiceException;
-import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
 import com.yu.mboocode.agent.mapper.SessionsMapper;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.Sessions;
-import com.yu.mboocode.util.CommonUtil;
-import com.yu.mboocode.util.DateTimeUtil;
+import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.common.util.CommonUtil;
+import com.yu.mboocode.common.util.DateTimeUtil;
+import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
+import com.yu.mboocode.llm.tool.permission.SessionPermissions;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
-import java.nio.file.InvalidPathException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.LocalDate;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
+import java.util.concurrent.locks.Lock;
+import java.util.function.Consumer;
 
 @Service
 @Slf4j
@@ -193,6 +199,146 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
                 .set(Sessions::getActiveTurnId, null)
                 .set(Sessions::getUpdatedAt, DateTimeUtil.now())
                 .update();
+    }
+
+    /**
+     * 读取会话权限；工作区默认读权限由 workspacePath 动态派生，不写入 metadataJson。
+     */
+    public SessionPermissions getSessionPermissions(String sessionId) {
+        Sessions session = getSession(sessionId);
+        return getSessionPermissions(session);
+    }
+
+    /**
+     * 读取会话权限；工作区默认读权限由 workspacePath 动态派生，不写入 metadataJson。
+     */
+    public SessionPermissions getSessionPermissions(Sessions session) {
+        return parsePermissions(session.getMetadataJson());
+    }
+
+    @Transactional
+    public void grantToolPermission(String sessionId, String toolName) {
+        if (StrUtil.isBlank(toolName)) {
+            return;
+        }
+        updatePermissions(sessionId, permissions -> {
+            LinkedHashSet<String> tools = new LinkedHashSet<>(CollUtil.emptyIfNull(permissions.getAllowedTools()));
+            tools.add(toolName);
+            permissions.setAllowedTools(new ArrayList<>(tools));
+        });
+    }
+
+    @Transactional
+    public void grantReadPath(String sessionId, String path) {
+        if (StrUtil.isBlank(path)) {
+            return;
+        }
+        updatePermissions(sessionId, permissions -> {
+            LinkedHashSet<String> paths = new LinkedHashSet<>(CollUtil.emptyIfNull(permissions.getReadPaths()));
+            paths.add(path);
+            permissions.setReadPaths(new ArrayList<>(paths));
+        });
+    }
+
+    @Transactional
+    public void grantWritePath(String sessionId, String path) {
+        if (StrUtil.isBlank(path)) {
+            return;
+        }
+        updatePermissions(sessionId, permissions -> {
+            LinkedHashSet<String> paths = new LinkedHashSet<>(CollUtil.emptyIfNull(permissions.getReadWritePaths()));
+            paths.add(path);
+            permissions.setReadWritePaths(new ArrayList<>(paths));
+        });
+    }
+
+    private static final String PERMISSIONS_KEY = "permissions"; // metadataJson 中权限字段名
+    /**
+     * 修改会话 permissions 节点；底层走统一的 metadataJson 更新（分段锁 + CAS 重试）。
+     */
+    private void updatePermissions(String sessionId, Consumer<SessionPermissions> mutator) {
+        updateMetadataJson(sessionId, meta -> {
+            SessionPermissions permissions = parsePermissionsObject(meta.get(PERMISSIONS_KEY));
+            mutator.accept(permissions);
+            meta.put(PERMISSIONS_KEY, permissions);
+        });
+    }
+
+
+    private static final int METADATA_UPDATE_MAX_ATTEMPTS = 3; // metadataJson 更新自旋锁最大重试次数
+    private final SegmentLock<Lock> sessionMetaLocks = LockUtil.createLazySegmentLock(64); // 按 sessionId 分段锁，串行化同一会话的 metadataJson 读改写。
+    /**
+     * 统一更新 metadataJson：按 sessionId 加锁，读最新 → 变更 → 按旧值 CAS 写回，失败则重试。
+     */
+    private void updateMetadataJson(String sessionId, Consumer<JSONObject> mutator) {
+        Lock lock = sessionMetaLocks.get(sessionId);
+        lock.lock();
+        try {
+            for (int attempt = 1; attempt <= METADATA_UPDATE_MAX_ATTEMPTS; attempt++) {
+                Sessions session = getSession(sessionId);
+                String oldJson = session.getMetadataJson();
+                JSONObject meta = parseMetadata(oldJson);
+                mutator.accept(meta);
+                String nextJson = meta.toJSONString();
+                String now = DateTimeUtil.now();
+
+                var update = lambdaUpdate().eq(Sessions::getId, sessionId);
+                if (oldJson == null) {
+                    update.isNull(Sessions::getMetadataJson);
+                } else {
+                    update.eq(Sessions::getMetadataJson, oldJson);
+                }
+                boolean updated = update
+                        .set(Sessions::getMetadataJson, nextJson)
+                        .set(Sessions::getUpdatedAt, now)
+                        .update();
+                if (updated) {
+                    return;
+                }
+                log.warn("会话 metadataJson CAS 冲突，准备重试 sessionId:{} attempt:{}", sessionId, attempt);
+            }
+            throw new ServiceException("更新会话元数据失败");
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private SessionPermissions parsePermissions(String metadataJson) {
+        JSONObject meta = parseMetadata(metadataJson);
+        return parsePermissionsObject(meta.get(PERMISSIONS_KEY));
+    }
+
+    private SessionPermissions parsePermissionsObject(Object raw) {
+        if (raw == null) {
+            return SessionPermissions.builder().build();
+        }
+        SessionPermissions permissions = JSON.parseObject(JSON.toJSONString(raw), SessionPermissions.class);
+        if (permissions == null) {
+            return SessionPermissions.builder().build();
+        }
+        if (permissions.getAllowedTools() == null) {
+            permissions.setAllowedTools(new ArrayList<>());
+        }
+        if (permissions.getReadPaths() == null) {
+            permissions.setReadPaths(new ArrayList<>());
+        }
+        if (permissions.getReadWritePaths() == null) {
+            permissions.setReadWritePaths(new ArrayList<>());
+        }
+        return permissions;
+    }
+
+    private JSONObject parseMetadata(String metadataJson) {
+        if (StrUtil.isBlank(metadataJson)) {
+            return new JSONObject();
+        }
+        try {
+            JSONObject meta = JSON.parseObject(metadataJson);
+            return meta == null ? new JSONObject() : meta;
+        } catch (Exception e) {
+            log.warn("会话 metadataJson 解析失败，将使用空对象");
+            return new JSONObject();
+        }
     }
 
     private String createDefaultWorkspace(String sessionId, LocalDate date) {

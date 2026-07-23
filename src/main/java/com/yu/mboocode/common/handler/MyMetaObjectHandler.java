@@ -1,7 +1,7 @@
 package com.yu.mboocode.common.handler;
 
 import com.baomidou.mybatisplus.core.handlers.MetaObjectHandler;
-import com.yu.mboocode.util.DateTimeUtil;
+import com.yu.mboocode.common.util.DateTimeUtil;
 import org.apache.ibatis.reflection.MetaObject;
 import org.springframework.context.annotation.Configuration;
 

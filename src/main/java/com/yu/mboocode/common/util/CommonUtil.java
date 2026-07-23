@@ -1,4 +1,4 @@
-package com.yu.mboocode.util;
+package com.yu.mboocode.common.util;
 
 public class CommonUtil {
     public static String getAppDataDir() {

@@ -1,5 +1,6 @@
 package com.yu.mboocode.agent.model.payload;
 
+import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -35,4 +36,10 @@ public class ToolApprovalRequiredPayload implements SessionEventPayload {
 
     @Schema(description = "授权提示说明")
     private String description;
+
+    @Schema(description = "本次申请的权限类型；历史事件缺失时按 TOOL 兼容")
+    private ToolPermissionType permissionType;
+
+    @Schema(description = "申请授权的规范化绝对目录，仅 READ/WRITE 使用")
+    private String grantPath;
 }
