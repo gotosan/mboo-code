@@ -1,20 +1,25 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// 设计决策：拉丁用 IBM Plex；中文走系统/Noto 栈（globals），避免中英混排「AI 默认脸」
+const uiFont = IBM_Plex_Sans({
+  variable: "--font-latin",
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const codeFont = IBM_Plex_Mono({
+  variable: "--font-code",
   subsets: ["latin"],
+  weight: ["400", "500"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "Mboo Code 会话工作台",
-  description: "Mboo Code 前端会话工作台",
+  title: "Mboo Code · 会话工作台",
+  description: "本地 AI Code Agent 会话工作台",
 };
 
 export default function RootLayout({
@@ -25,9 +30,9 @@ export default function RootLayout({
   return (
     <html
       lang="zh-CN"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${uiFont.variable} ${codeFont.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full bg-canvas font-sans text-text-1">{children}</body>
     </html>
   );
 }

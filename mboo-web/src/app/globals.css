@@ -1,26 +1,162 @@
 @import "tailwindcss";
+/* graphite-lock cache-bust polish-optimize */
 
+/*
+  Graphite Desk · 石墨工作台
+  - 中性近白/近黑，拒绝电青与脏暖棕
+  - 主按钮用石墨黑/白；语义色只服务状态
+  - 浅色全浅 / 深色全深
+  - 长回复阅读优先
+*/
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  color-scheme: light;
+  --canvas: #f3f3f1;
+  --canvas-deep: #eaeae6;
+  --panel: #f8f8f6;
+  --panel-elevated: #ffffff;
+  --panel-muted: #ecece8;
+  --line: #e0e0db;
+  --line-strong: #c4c4bc;
+  --text-1: #121212;
+  --text-2: #555550;
+  --text-3: #8a8a82;
+  --accent: #171717;
+  --accent-strong: #000000;
+  --accent-soft: #ebebe8;
+  --accent-fg: #fafafa;
+  --running: #c2410c;
+  --running-soft: #fff7ed;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --ok: #16794c;
+  --ok-soft: #eef8f2;
+  --panel-shadow: 0 1px 0 rgb(18 18 18 / 0.04), 0 8px 20px rgb(18 18 18 / 0.05);
+  --dock-shadow: 0 10px 28px rgb(18 18 18 / 0.08);
+  --radius-sm: 0.4rem;
+  --radius-md: 0.6rem;
+  --radius-lg: 0.8rem;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    color-scheme: dark;
+    --canvas: #0d0d0d;
+    --canvas-deep: #080808;
+    --panel: #141414;
+    --panel-elevated: #1a1a1a;
+    --panel-muted: #222222;
+    --line: #333333;
+    --line-strong: #5c5c5c;
+    --text-1: #f4f4f4;
+    /* 次要字略提亮：深底上 #8c 偏闷，扫读吃力 */
+    --text-2: #b8b8b8;
+    --text-3: #9a9a9a;
+    --accent: #f2f2f2;
+    --accent-strong: #ffffff;
+    --accent-soft: #262626;
+    --accent-fg: #0d0d0d;
+    --running: #fb923c;
+    --running-soft: rgb(251 146 60 / 0.14);
+    --danger: #f87171;
+    --danger-soft: rgb(248 113 113 / 0.14);
+    /* solid ok 避免过亮浅绿（白字会翻车）；实心按钮改走 soft/accent */
+    --ok: #34d399;
+    --ok-soft: rgb(52 211 153 / 0.14);
+    --panel-shadow: 0 1px 0 rgb(255 255 255 / 0.04), 0 12px 28px rgb(0 0 0 / 0.4);
+    --dock-shadow: 0 14px 36px rgb(0 0 0 / 0.45);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-canvas-deep: var(--canvas-deep);
+  --color-panel: var(--panel);
+  --color-panel-elevated: var(--panel-elevated);
+  --color-panel-muted: var(--panel-muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-text-1: var(--text-1);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-running: var(--running);
+  --color-running-soft: var(--running-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --shadow-panel: var(--panel-shadow);
+  --shadow-dock: var(--dock-shadow);
+  /* 中英混排：拉丁 Plex + 中文系统/Noto 栈；mono 仅路径/ID/JSON */
+  --font-sans: var(--font-latin), "PingFang SC", "Hiragino Sans GB", "Noto Sans SC",
+    "Microsoft YaHei", "Segoe UI", sans-serif;
+  --font-mono: var(--font-code), ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+}
+
+@utility console-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--text-3) 50%, transparent) transparent;
+}
+
+@layer base {
+  * {
+    @apply box-border;
+  }
+
+  html,
+  body {
+    @apply h-full;
+  }
+
+  body {
+    /* 字阶：12/14/15/16 — 避免 10–11px 碎标签 */
+    @apply m-0 bg-canvas font-sans text-sm text-text-1 antialiased;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--text-1) 16%, transparent);
+    color: var(--text-1);
+  }
+
+  :focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--text-1) 55%, transparent);
+    outline-offset: 2px;
+  }
+}
+
+.message-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
+textarea {
+  font-size: 16px;
+}
+
+@media (min-width: 640px) {
+  textarea {
+    font-size: inherit;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .motion-safe\:animate-spin {
+    animation: none !important;
+  }
+}
+
+/* 会话列表项：长列表时降低离屏布局成本（optimize） */
+.session-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
 }
