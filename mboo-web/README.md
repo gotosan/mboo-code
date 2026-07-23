@@ -79,4 +79,4 @@ $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 
 `ASSISTANT_MESSAGE.state` 使用 `complete`、`cancel`、`error`。工具结束状态使用 `completed`、`failed`，两组状态值不能混用。
 
-更完整的字段说明见 [Session Event Payload 字段说明](../docs/session-event-payload-fields.md)。
+更完整的字段说明见 [Session Event Payload 字段说明](../docs/会话事件Payload字段说明.md)。
