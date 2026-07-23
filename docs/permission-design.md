@@ -4,23 +4,29 @@
 
 在保留现有按工具授权能力的基础上，增加文件读取和写入权限，并按会话工作区控制路径访问。
 
-本方案只处理会话内的工具调用授权，不实现全局权限管理，也不新增真实文件读写工具。开发阶段可增加一个无副作用的空写工具，用于验证完整授权流程。
+本方案只处理会话内的工具调用授权，不实现全局权限管理，也不新增真实文件读写工具。开发阶段提供一个无副作用的空写工具 `demoWriteFile`，用于验证完整授权流程。
 
 ## 2. 权限类型
 
-每个工具只配置一种权限类型，并且必须显式配置。遗漏配置时应在应用启动或工具注册阶段报错，避免工具绕过权限检查。
+每个工具只配置一种权限类型，并且必须通过 `@ToolPermission` 显式配置。遗漏配置时在工具注册阶段（`ToolPermissionRegistry.register`）直接失败，避免工具绕过权限检查。
 
 | 类型 | 含义 |
 | --- | --- |
 | `NONE` | 工具无需授权 |
-| `TOOL` | 按工具名称授权，保留现有授权方式 |
+| `TOOL` | 按工具名称授权 |
 | `READ` | 允许读取指定目录及其子目录 |
 | `WRITE` | 允许读写指定目录及其子目录，包含 `READ` 权限 |
 
-路径型工具还需配置：
+路径型工具（`READ` / `WRITE`）还需配置：
 
-- 路径参数名称，例如 `path`。
-- 参数表示文件还是目录。文件参数申请其父目录，目录参数申请目录本身。
+- `pathParam`：路径参数名称，例如 `path`。
+- `pathKind`：参数表示文件还是目录。`FILE` 申请其父目录，`DIRECTORY` 申请目录本身。
+
+可选配置：
+
+- `title` / `description`：授权卡片文案；为空时由服务端按权限类型生成默认文案。
+
+工具名与 LangChain4j `@Tool` 一致：优先使用注解 `name`，为空则使用方法名。
 
 ## 3. 权限判定规则
 
@@ -33,6 +39,14 @@
 - 目录授权包含该目录及其全部子目录。
 - 相对路径以会话工作区为基准解析，绝对路径保持原含义。
 
+单次评估结果由 `PermissionCheck` 表示：
+
+| 状态 | 含义 |
+| --- | --- |
+| `ALLOWED` | 已满足权限，可直接执行 |
+| `NEED_ASK` | 需要向用户弹窗授权 |
+| `ERROR` | 评估失败（参数/路径等硬错误），不弹授权卡片，直接返回错误 |
+
 授权结果的有效期：
 
 - `ALLOW_ONCE`：仅允许当前工具调用，不持久化。
@@ -41,12 +55,11 @@
 
 ## 4. 会话权限存储
 
-`metadataJson` 当前没有其他业务占用，适合保存体量较小的会话权限。权限数据放在独立的 `permissions` 节点中，更新时保留其他元数据。
+权限数据放在 `metadataJson` 的独立 `permissions` 节点中，更新时保留其他元数据。
 
 ```json
 {
   "permissions": {
-    "version": 1,
     "allowedTools": ["getWeather"],
     "readPaths": ["D:\\shared\\docs"],
     "readWritePaths": ["D:\\output"]
@@ -62,21 +75,38 @@
 
 工作区默认读取权限由 `workspacePath` 动态派生，不重复写入 `metadataJson`。
 
+更新策略：
+
+- 通过 `SessionService.updatePermissions` 修改 `permissions` 节点。
+- 底层统一走 `updateMetadataJson`：按 `sessionId` 分段锁串行化读改写，并以旧值 CAS 写回，失败重试，避免并发覆盖。
+
 会话归档和取消归档后权限继续保留；删除会话时权限随会话数据一起删除。
 
 ## 5. 工具调用流程
 
-1. 工具注册时读取并校验权限配置。
-2. 工具调用前，根据工具名称取得权限类型。
-3. `READ`、`WRITE` 工具从调用参数中提取路径，解析出本次申请授权的目录。
-4. 检查当前会话是否已经满足权限。
-5. 权限不足时，发送 `TOOL_APPROVAL_REQUIRED` 事件并等待用户处理。
-6. 用户允许后执行工具；拒绝或超时则返回权限错误，不执行工具。
-7. 用户选择会话授权时，将对应工具或目录写入 `metadataJson`。
+1. 工具注册时由 `AiCodeServiceFactory` 调用 `ToolPermissionRegistry.register`，读取并校验 `@ToolPermission`。
+2. 工具统一由 `PermissionToolExecutor` 包装执行。
+3. `beforeToolExecution` 调用 `ToolApprovalService.requestIfNeeded`：
+   - `ALLOWED` / `ERROR`：不弹窗；
+   - `NEED_ASK`：登记待授权、发送 `TOOL_APPROVAL_REQUIRED` 并阻塞等待。
+4. `PermissionToolExecutor` 调用 `awaitAuthorization` 取得最终结果；路径型工具再经 `verifyBeforeExecute` 做执行前复核。
+5. 用户允许后执行工具；拒绝或超时则返回权限错误，不执行工具。
+6. 用户选择会话授权时，先将对应工具或目录写入 `metadataJson`，再完成等待中的 Future。
 
-当前授权等待时间保持 10 分钟。超时按拒绝处理，但工具结果应明确区分“授权超时”和“用户拒绝”。
+关键时序：
 
-服务重启后，已持久化的会话权限继续有效；尚未处理的授权请求失效，历史授权卡片不再允许点击，用户需要重新发起请求。
+```text
+模型发起工具调用
+  -> requestIfNeeded 评估 PermissionCheck
+  -> NEED_ASK：落盘/推送 TOOL_APPROVAL_REQUIRED，阻塞等待
+  -> awaitAuthorization 返回 ToolAuthorizationResult
+  -> verifyBeforeExecute（READ/WRITE）
+  -> 通过则执行工具，否则返回错误结果
+```
+
+当前授权等待时间保持 10 分钟。超时与用户拒绝使用不同错误码（见第 10 节）。
+
+服务重启后，已持久化的会话权限继续有效；内存中尚未处理的授权请求失效。前端历史回放时，未结束的授权卡片标记为“授权请求已失效”且不可点击，用户需要重新发起请求。
 
 ## 6. 授权事件
 
@@ -88,6 +118,8 @@
 `TOOL` 类型继续展示工具名称和用途，不展示目录。历史事件没有 `permissionType` 时按 `TOOL` 兼容处理。
 
 一次工具调用只申请一种权限，因此一次只展示一个授权卡片，不处理多权限组合授权。
+
+路径无法解析、参数缺失等 `ERROR` 场景不发送授权事件，直接在工具结果中返回错误。
 
 ## 7. 前端展示
 
@@ -105,23 +137,68 @@
 
 ## 8. 路径安全检查
 
-路径检查采用严格模式：
+路径检查由 `FilePermissionUtil` 统一实现，采用严格模式：
 
 1. 将工作区、授权目录和工具参数转换为绝对路径并执行规范化。
 2. 使用 `Path.startsWith()` 判断目录包含关系，不使用字符串前缀比较。
 3. 对已存在路径解析真实路径，防止符号链接或 Windows junction 跳出已授权目录。
-4. 写入路径尚不存在时，从最近的已存在父目录解析真实路径，再拼接剩余路径。
-5. 工具实际执行前再次检查目标父目录，降低检查后路径被替换的风险。
+4. 目标路径尚不存在时，从最近的已存在父目录解析真实路径，再拼接剩余路径。
+5. 工具实际执行前由 `verifyBeforeExecute` 再次检查：
+   - `ALLOW_ONCE`：本次授权目录必须与当前参数解析结果一致；
+   - 会话授权：重新评估会话权限是否仍覆盖目标目录。
 
 无法正确解析或验证的路径默认拒绝访问。
 
 ## 9. 空写工具
 
-为展示权限功能，可以注册一个 `WRITE` 类型的空写工具：
+当前注册的演示工具：
 
-- 接收 `path` 等展示所需参数。
-- `path` 配置为文件路径，授权范围为其父目录。
+| 项 | 说明 |
+| --- | --- |
+| 类 | `FileWritePermissionDemoTool` |
+| 工具名 | `demoWriteFile` |
+| 权限类型 | `WRITE` |
+| 路径参数 | `path`（`PathKind.FILE`，授权范围为父目录） |
+
+行为约定：
+
 - 完整经过路径解析、权限检查、授权事件和授权结果持久化流程。
 - 授权通过后只返回固定的占位结果，不创建目录、不创建文件，也不修改文件内容。
 
 本阶段不增加真实读工具、真实写工具或权限撤销界面。
+
+## 10. 错误码与结果结构
+
+权限相关错误码由 `ToolPermissionErrorCode` 统一管理：
+
+| 错误码 | 含义 |
+| --- | --- |
+| `PERMISSION_DENIED` | 用户拒绝本次工具调用 |
+| `PERMISSION_TIMEOUT` | 等待用户授权超时 |
+| `PERMISSION_INVALID_PATH` | 路径参数缺失、格式错误或无法解析授权目录 |
+| `PERMISSION_UNKNOWN_TYPE` | 未知的工具权限类型 |
+| `PERMISSION_INTERRUPTED` | 授权等待被中断 |
+| `PERMISSION_ERROR` | 授权处理过程出现未分类错误 |
+| `PERMISSION_PATH_CHANGED` | 执行前复核发现路径与授权时不一致 |
+| `PERMISSION_REVOKED` | 会话级授权已不满足当前路径 |
+
+工具失败结果由 `PermissionToolExecutor` 序列化为 JSON，至少包含：
+
+- `errorCode`
+- `message`
+- `permissionType`（如有）
+- `grantPath`（如有）
+
+## 11. 主要代码位置
+
+| 职责 | 位置 |
+| --- | --- |
+| 权限注解 / 类型 / 注册表 | `com.yu.mboocode.llm.tool.permission` |
+| 路径校验 | `FilePermissionUtil` |
+| 权限评估结果 | `PermissionCheck` |
+| 授权等待结果 | `ToolAuthorizationResult` |
+| 授权服务 | `ToolApprovalService` |
+| 执行前拦截 | `PermissionToolExecutor` |
+| 会话权限读写 | `SessionService`（`getSessionPermissions` / `grant*`） |
+| 工具注册 | `AiCodeServiceFactory` |
+| 授权事件载荷 | `ToolApprovalRequiredPayload` |
