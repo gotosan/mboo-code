@@ -1,31 +1,36 @@
 package com.yu.mboocode.agent.service;
 
+import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.yu.mboocode.common.exception.ServiceException;
-import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
 import com.yu.mboocode.agent.mapper.SessionsMapper;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.Sessions;
-import com.yu.mboocode.util.CommonUtil;
-import com.yu.mboocode.util.DateTimeUtil;
+import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.common.util.CommonUtil;
+import com.yu.mboocode.common.util.DateTimeUtil;
+import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
+import com.yu.mboocode.llm.tool.permission.SessionPermissions;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
-import java.nio.file.InvalidPathException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.LocalDate;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
+import java.util.function.Consumer;
 
 @Service
 @Slf4j
 public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
+    private static final String PERMISSIONS_KEY = "permissions"; // metadataJson中权限的字段名
+
     @Resource
     private SessionEventStore sessionEventStore;
     @Resource
@@ -195,6 +200,112 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
                 .update();
     }
 
+    /**
+     * 读取会话权限；工作区默认读权限由 workspacePath 动态派生，不写入 metadataJson。
+     */
+    public SessionPermissions getSessionPermissions(String sessionId) {
+        Sessions session = getSession(sessionId);
+        return getSessionPermissions(session);
+    }
+
+    /**
+     * 读取会话权限；工作区默认读权限由 workspacePath 动态派生，不写入 metadataJson。
+     */
+    public SessionPermissions getSessionPermissions(Sessions session) {
+        return parsePermissions(session.getMetadataJson());
+    }
+
+    @Transactional
+    public void grantToolPermission(String sessionId, String toolName) {
+        if (StrUtil.isBlank(toolName)) {
+            return;
+        }
+        updatePermissions(sessionId, permissions -> {
+
+            LinkedHashSet<String> tools = new LinkedHashSet<>(CollUtil.emptyIfNull(permissions.getAllowedTools()));
+            tools.add(toolName);
+            permissions.setAllowedTools(new ArrayList<>(tools));
+        });
+    }
+
+    @Transactional
+    public void grantReadPath(String sessionId, String path) {
+        if (StrUtil.isBlank(path)) {
+            return;
+        }
+        updatePermissions(sessionId, permissions -> {
+            LinkedHashSet<String> paths = new LinkedHashSet<>(CollUtil.emptyIfNull(permissions.getReadPaths()));
+            paths.add(path);
+            permissions.setReadPaths(new ArrayList<>(paths));
+        });
+    }
+
+    @Transactional
+    public void grantWritePath(String sessionId, String path) {
+        if (StrUtil.isBlank(path)) {
+            return;
+        }
+        updatePermissions(sessionId, permissions -> {
+            LinkedHashSet<String> paths = new LinkedHashSet<>(CollUtil.emptyIfNull(permissions.getReadWritePaths()));
+            paths.add(path);
+            permissions.setReadWritePaths(new ArrayList<>(paths));
+        });
+    }
+
+    private void updatePermissions(String sessionId, Consumer<SessionPermissions> mutator) {
+        Sessions session = getSession(sessionId);
+        JSONObject meta = parseMetadata(session.getMetadataJson());
+        SessionPermissions permissions = parsePermissionsObject(meta.get(PERMISSIONS_KEY));
+        mutator.accept(permissions);
+        meta.put(PERMISSIONS_KEY, permissions);
+        boolean updated = lambdaUpdate()
+                .eq(Sessions::getId, sessionId)
+                .set(Sessions::getMetadataJson, meta.toJSONString())
+                .set(Sessions::getUpdatedAt, DateTimeUtil.now())
+                .update();
+        if (!updated) {
+            throw new ServiceException("更新会话权限失败");
+        }
+    }
+
+    private SessionPermissions parsePermissions(String metadataJson) {
+        JSONObject meta = parseMetadata(metadataJson);
+        return parsePermissionsObject(meta.get(PERMISSIONS_KEY));
+    }
+
+    private SessionPermissions parsePermissionsObject(Object raw) {
+        if (raw == null) {
+            return SessionPermissions.builder().build();
+        }
+        SessionPermissions permissions = JSON.parseObject(JSON.toJSONString(raw), SessionPermissions.class);
+        if (permissions == null) {
+            return SessionPermissions.builder().build();
+        }
+        if (permissions.getAllowedTools() == null) {
+            permissions.setAllowedTools(new ArrayList<>());
+        }
+        if (permissions.getReadPaths() == null) {
+            permissions.setReadPaths(new ArrayList<>());
+        }
+        if (permissions.getReadWritePaths() == null) {
+            permissions.setReadWritePaths(new ArrayList<>());
+        }
+        return permissions;
+    }
+
+    private JSONObject parseMetadata(String metadataJson) {
+        if (StrUtil.isBlank(metadataJson)) {
+            return new JSONObject();
+        }
+        try {
+            JSONObject meta = JSON.parseObject(metadataJson);
+            return meta == null ? new JSONObject() : meta;
+        } catch (Exception e) {
+            log.warn("会话 metadataJson 解析失败，将使用空对象覆盖 permissions 节点");
+            return new JSONObject();
+        }
+    }
+
     private String createDefaultWorkspace(String sessionId, LocalDate date) {
         try {
             Path workspacePath = Path.of(CommonUtil.getAppDataDir(), "workspaces", date.toString(), sessionId).toAbsolutePath().normalize();
@@ -214,3 +325,5 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         }
     }
 }
+
+

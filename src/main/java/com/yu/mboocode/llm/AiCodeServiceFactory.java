@@ -5,8 +5,10 @@ import com.yu.mboocode.config.Setting;
 import com.yu.mboocode.llm.listener.MyAiServiceCompletedListener;
 import com.yu.mboocode.llm.listener.MyChatModelListener;
 import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
+import com.yu.mboocode.llm.tool.FileWritePermissionDemoTool;
 import com.yu.mboocode.llm.tool.PermissionToolExecutor;
 import com.yu.mboocode.llm.tool.WeatherTool;
+import com.yu.mboocode.llm.tool.permission.ToolPermissionRegistry;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.agent.tool.ToolSpecifications;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
@@ -22,6 +24,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 
 @Configuration
@@ -34,6 +37,8 @@ public class AiCodeServiceFactory {
     private PersistentChatMemoryStore persistentChatMemoryStore;
     @Resource
     private ToolApprovalService toolApprovalService;
+    @Resource
+    private ToolPermissionRegistry toolPermissionRegistry;
 
     @Bean
     public ChatMemoryProvider chatMemoryProvider() {
@@ -47,7 +52,6 @@ public class AiCodeServiceFactory {
 
     @Bean
     public AiCodeService getAiCodeService(ChatMemoryProvider chatMemoryProvider) {
-
         ChatModel chatModel = OpenAiChatModel
                 .builder()
                 .apiKey(setting.getApiKey())
@@ -64,17 +68,9 @@ public class AiCodeServiceFactory {
                 .listeners(List.of(new MyChatModelListener()))
                 .build();
 
-        WeatherTool weatherTool = new WeatherTool();
-        Method weatherMethod;
-        try {
-            weatherMethod = WeatherTool.class.getDeclaredMethod("getWeather", String.class);
-        } catch (NoSuchMethodException e) {
-            throw new IllegalStateException("天气工具定义无效", e);
-        }
-        ToolSpecification weatherSpecification = ToolSpecifications.toolSpecificationFrom(weatherMethod);
-        PermissionToolExecutor weatherExecutor = new PermissionToolExecutor(weatherTool, weatherMethod, toolApprovalService);
-        AiServiceTool weatherAiTool = AiServiceTool.builder().toolSpecification(weatherSpecification).toolExecutor(weatherExecutor).build();
-        List<AiServiceTool> tools = List.of(weatherAiTool);
+        List<AiServiceTool> tools = new ArrayList<>();
+        tools.add(buildPermissionTool(new WeatherTool(), WeatherTool.class, "getWeather", String.class));
+        tools.add(buildPermissionTool(new FileWritePermissionDemoTool(), FileWritePermissionDemoTool.class, "demoWriteFile", String.class));
 
         return AiServices
                 .builder(AiCodeService.class)
@@ -84,5 +80,18 @@ public class AiCodeServiceFactory {
                 .tools(tools)
                 .registerListeners(new MyAiServiceCompletedListener())
                 .build();
+    }
+
+    private AiServiceTool buildPermissionTool(Object toolInstance, Class<?> toolClass, String methodName, Class<?>... parameterTypes) {
+        Method method;
+        try {
+            method = toolClass.getDeclaredMethod(methodName, parameterTypes);
+        } catch (NoSuchMethodException e) {
+            throw new IllegalStateException("工具定义无效: " + toolClass.getSimpleName() + "#" + methodName, e);
+        }
+        toolPermissionRegistry.register(method);
+        ToolSpecification specification = ToolSpecifications.toolSpecificationFrom(method);
+        PermissionToolExecutor executor = new PermissionToolExecutor(toolInstance, method, toolApprovalService);
+        return AiServiceTool.builder().toolSpecification(specification).toolExecutor(executor).build();
     }
 }

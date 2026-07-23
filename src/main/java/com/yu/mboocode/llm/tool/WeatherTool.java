@@ -7,6 +7,8 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.llm.tool.permission.ToolPermission;
+import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 
@@ -22,6 +24,11 @@ public class WeatherTool {
             + "precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m";
 
     @Tool("根据明确的城市名称查询当前实时天气。仅当用户已提供城市时调用；未提供城市时先追问城市。")
+    @ToolPermission(
+            value = ToolPermissionType.TOOL,
+            title = "允许查询天气？",
+            description = "天气工具将访问网络，根据城市名称查询实时天气。"
+    )
     public String getWeather(@P(name = "city", value = "城市名称，例如：北京、上海、杭州") String city) {
         String cityName = StrUtil.trim(city);
         if (StrUtil.isBlank(cityName)) {
