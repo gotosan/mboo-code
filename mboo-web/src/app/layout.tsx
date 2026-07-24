@@ -1,15 +1,8 @@
-import type { Metadata } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import type { Metadata, Viewport } from "next";
+import { IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 
-// 设计决策：拉丁用 IBM Plex；中文走系统/Noto 栈（globals），避免中英混排「AI 默认脸」
-const uiFont = IBM_Plex_Sans({
-  variable: "--font-latin",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  display: "swap",
-});
-
+// 设计决策：UI 走系统雅黑/苹方贴近 QQ 2007；仅保留 mono 给路径与代码
 const codeFont = IBM_Plex_Mono({
   variable: "--font-code",
   subsets: ["latin"],
@@ -18,8 +11,16 @@ const codeFont = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mboo Code · 会话工作台",
-  description: "本地 AI Code Agent 会话工作台",
+  title: "Mboo Code 2007 · Agent 工作台",
+  description: "QQ 2007 风格的本地 AI Code Agent 工作台",
+};
+
+// 设计决策：viewport-fit=cover 才能让 env(safe-area-inset-*) 在刘海机上生效
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#087fd1",
 };
 
 export default function RootLayout({
@@ -28,10 +29,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="zh-CN"
-      className={`${uiFont.variable} ${codeFont.variable} h-full antialiased`}
-    >
+    <html lang="zh-CN" className={`${codeFont.variable} h-full antialiased`}>
       <body className="min-h-full bg-canvas font-sans text-text-1">{children}</body>
     </html>
   );

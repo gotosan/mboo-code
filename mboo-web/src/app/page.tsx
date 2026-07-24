@@ -1,17 +1,18 @@
 "use client";
 
-import type { FormEvent } from "react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentPropsWithoutRef, FormEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   Archive,
+  ChevronDown,
+  ChevronRight,
   Copy,
   FolderOpen,
   LoaderCircle,
   Menu,
-  Plus,
   RefreshCw,
   RotateCcw,
-  Search,
   Square,
   Trash2,
   X,
@@ -131,6 +132,8 @@ export default function Home() {
     useState<ConnectionState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [sessionMessage, setSessionMessage] = useState("");
+  // 列表加载失败单独成态：避免与重命名/归档提示混用，并支持就近重试
+  const [sessionListError, setSessionListError] = useState("");
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -143,6 +146,11 @@ export default function Home() {
   const [isSelectingWorkspace, setIsSelectingWorkspace] = useState(false);
   // 移动端会话抽屉与列表过滤（T1/T6）
   const [isSessionDrawerOpen, setIsSessionDrawerOpen] = useState(false);
+  // QQ 窗体：左栏折叠与全屏状态映射到标题栏控件
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // 移动端任务设置默认折叠摘要；缺模型时强制展开，避免找不到配置
+  const [isComposerSettingsOpen, setIsComposerSettingsOpen] = useState(true);
   const [sessionQuery, setSessionQuery] = useState("");
   // 错误恢复：保留最近一次失败输入以便重试（T7）
   const [lastFailedInput, setLastFailedInput] = useState("");
@@ -154,7 +162,6 @@ export default function Home() {
   const autoTitleAttemptedRef = useRef<Set<string>>(new Set());
 
   const abortControllerRef = useRef<AbortController | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const currentSessionIdRef = useRef("");
   const shouldLoadSessionRef = useRef(false);
   const connectionStateRef = useRef<ConnectionState>("idle");
@@ -169,6 +176,13 @@ export default function Home() {
   const sessionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const isRunning = connectionState === "running";
+
+  useEffect(() => {
+    const syncFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    syncFullscreen();
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreen);
+  }, []);
 
   useEffect(() => {
     const storedSessionId = localStorage.getItem(STORAGE_KEYS.sessionId) ?? "";
@@ -193,16 +207,23 @@ export default function Home() {
     connectionStateRef.current = connectionState;
   }, [connectionState]);
 
+  // 设计决策：输入中防抖写 localStorage，避免每个按键同步磁盘（optimize）
   useEffect(() => {
-    saveLocalValue(STORAGE_KEYS.modelName, modelName);
+    const timer = window.setTimeout(() => {
+      saveLocalValue(STORAGE_KEYS.modelName, modelName);
+    }, 250);
+    return () => window.clearTimeout(timer);
   }, [modelName]);
 
   useEffect(() => {
-    saveLocalValue(STORAGE_KEYS.reasoningEffort, reasoningEffort);
+    const timer = window.setTimeout(() => {
+      saveLocalValue(STORAGE_KEYS.reasoningEffort, reasoningEffort);
+    }, 250);
+    return () => window.clearTimeout(timer);
   }, [reasoningEffort]);
 
-  // 仅在用户接近底部时跟随流式输出，避免长回复阅读时被强行拽走（optimize）
-  const messagesViewportRef = useRef<HTMLDivElement | null>(null);
+  // 设计决策：长消息用 react-virtuoso 虚拟列表；贴底跟随与动态高度交给库，避免手写测量
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const stickToBottomRef = useRef(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   // 流式 delta 按帧合并，降低 setState 频率（optimize）
@@ -211,43 +232,36 @@ export default function Home() {
   >(new Map());
   const deltaRafRef = useRef<number | null>(null);
 
-  const updateStickToBottom = useCallback(() => {
-    const viewport = messagesViewportRef.current;
-    if (!viewport) {
-      return;
-    }
-    const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    const stick = distance < 96;
-    stickToBottomRef.current = stick;
+  const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
+    stickToBottomRef.current = atBottom;
     setShowJumpToBottom((prev) => {
-      const next = !stick && viewport.scrollHeight > viewport.clientHeight + 24;
+      const next = !atBottom;
       return prev === next ? prev : next;
     });
   }, []);
 
   const scrollMessagesToBottom = useCallback(() => {
-    const viewport = messagesViewportRef.current;
     stickToBottomRef.current = true;
     setShowJumpToBottom(false);
-    if (!viewport) {
-      messagesEndRef.current?.scrollIntoView({ block: "end" });
-      return;
-    }
-    viewport.scrollTop = viewport.scrollHeight;
+    virtuosoRef.current?.scrollToIndex({
+      index: "LAST",
+      align: "end",
+      behavior: "smooth",
+    });
+  }, []);
+
+  const followOutput = useCallback((isAtBottom: boolean) => {
+    // 仅贴底时跟随流式增长/新消息，用户上翻阅读不被拽走
+    return stickToBottomRef.current || isAtBottom ? "auto" : false;
   }, []);
 
   useEffect(() => {
-    if (!stickToBottomRef.current) {
-      return;
-    }
-    const viewport = messagesViewportRef.current;
-    if (!viewport) {
-      messagesEndRef.current?.scrollIntoView({ block: "end" });
-      return;
-    }
-    // 直接写 scrollTop，避免 scrollIntoView 在高频流式下触发布局抖动
-    viewport.scrollTop = viewport.scrollHeight;
-  }, [messages, isRunning]);
+    return () => {
+      if (deltaRafRef.current !== null) {
+        window.cancelAnimationFrame(deltaRafRef.current);
+      }
+    };
+  }, []);
 
   // 抽屉：锁背景滚动 + 初始焦点 + Tab 陷阱 + 关闭归还焦点（harden）
   useEffect(() => {
@@ -273,8 +287,10 @@ export default function Home() {
 
     // 步骤：聚焦面板内第一个可聚焦控件（通常是关闭或新会话）
     const focusables = getFocusable();
+    // 关闭按钮文案为「关闭会话列表」，不能用精确等于「关闭」
     const preferred =
-      focusables.find((el) => el.getAttribute("aria-label") === "关闭") || focusables[0];
+      focusables.find((el) => (el.getAttribute("aria-label") || "").includes("关闭")) ||
+      focusables[0];
     window.requestAnimationFrame(() => preferred?.focus());
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -847,6 +863,7 @@ export default function Home() {
       const nextArchived = archivedData ?? [];
       setSessions(nextActive);
       setArchivedSessions(nextArchived);
+      setSessionListError("");
       setSessionMessage("");
 
       const currentId = currentSessionIdRef.current;
@@ -881,7 +898,7 @@ export default function Home() {
       }
       clearCurrentSession();
     } catch (error) {
-      setSessionMessage(toErrorMessage(error));
+      setSessionListError(humanizeSessionListError(error));
     } finally {
       setIsLoadingSessions(false);
     }
@@ -1388,10 +1405,68 @@ export default function Home() {
   }, [archivedSessions, sessionId, sessions]);
   const persistedWorkspacePath = currentSession?.workspacePath ?? "";
   const displayedWorkspacePath = persistedWorkspacePath || pendingWorkspacePath;
-  const workspaceStatusText = displayedWorkspacePath || (sessionId ? (currentSession ? "未设置工作区" : "工作区加载中") : "默认工作区");
+  const workspaceStatusText = displayedWorkspacePath || (sessionId ? (currentSession ? "未设置工作区" : "工作区加载中") : "使用默认工作区");
   const isArchivedView =
     viewingSessionStatus === "archived" ||
     currentSession?.status === "archived";
+
+  const recentSessions = useMemo(
+    () =>
+      [...sessions]
+        .sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left))
+        .slice(0, 3),
+    [sessions],
+  );
+
+  const pendingApprovalCount = useMemo(
+    () =>
+      messages.reduce(
+        (count, message) =>
+          count +
+          (message.toolCalls?.filter(
+            (tool) => tool.status === "waiting_approval" || tool.status === "submitting",
+          ).length ?? 0),
+        0,
+      ),
+    [messages],
+  );
+
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      await document.documentElement.requestFullscreen();
+    } catch {
+      setSessionMessage("浏览器未允许切换全屏");
+    }
+  }, []);
+
+  const resetWindowLayout = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      }
+    } catch {
+      // 退出全屏失败时仍恢复应用内布局
+    }
+    setIsSidebarCollapsed(false);
+    setIsSessionDrawerOpen(false);
+  }, []);
+
+  const focusModelInput = useCallback(() => {
+    setIsComposerSettingsOpen(true);
+    requestAnimationFrame(() => {
+      const input = document.getElementById("model-input");
+      if (!(input instanceof HTMLInputElement)) {
+        return;
+      }
+      input.focus();
+      input.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }, []);
+
   // 列表：最近活跃优先；当前选中置顶；搜索含标题/摘要/路径/ID
   const visibleSessions = useMemo(() => {
     const source =
@@ -1469,11 +1544,30 @@ export default function Home() {
 
   const renderSessionList = (options?: { onAfterSelect?: () => void }) => (
     <>
-      <div className="flex items-center justify-between px-1">
-        <p className="text-xs font-semibold text-text-2">会话索引</p>
+      <label className="qq-search-field mt-1">
+        <span className="qq-icon qq-icon-search" aria-hidden />
+        <span className="sr-only">过滤会话</span>
+        <input
+          className="min-w-0 flex-1 bg-transparent text-xs text-text-1 outline-none placeholder:text-text-3"
+          placeholder="搜索会话"
+          value={sessionQuery}
+          onChange={(event) => setSessionQuery(event.target.value)}
+        />
+      </label>
+
+      <div className="mt-2 flex items-center gap-1">
+        <button
+          className="qq-button-primary inline-flex h-11 flex-1 items-center justify-center gap-1 px-2 text-xs min-[900px]:h-8"
+          disabled={isRunning || isSelectingWorkspace}
+          type="button"
+          onClick={startNewSession}
+        >
+          <span className="qq-icon qq-icon-new-task" aria-hidden />
+          新会话
+        </button>
         <button
           aria-label="刷新会话列表"
-          className="inline-flex size-8 items-center justify-center rounded-lg border border-line text-text-2 transition hover:border-line-strong hover:text-text-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-45"
+          className="qq-button inline-flex size-11 items-center justify-center text-text-2 min-[900px]:size-8"
           disabled={isLoadingSessions}
           type="button"
           onClick={() => void refreshSessions()}
@@ -1482,25 +1576,12 @@ export default function Home() {
         </button>
       </div>
 
-      <label className="mt-3 flex h-9 items-center gap-2 rounded-[var(--radius-sm)] border border-line bg-canvas px-2.5 text-text-3 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/30">
-        <Search className="size-3.5 shrink-0" aria-hidden />
-        <span className="sr-only">过滤会话</span>
-        <input
-          className="min-w-0 flex-1 bg-transparent text-xs text-text-1 outline-none placeholder:text-text-3"
-          placeholder="搜索标题或 ID"
-          value={sessionQuery}
-          onChange={(event) => setSessionQuery(event.target.value)}
-        />
-      </label>
-
-      <div className="mt-3 grid grid-cols-2 gap-1 rounded-[var(--radius-md)] border border-line bg-panel-muted/80 p-1" role="tablist" aria-label="会话分类">
+      <div className="mt-2 grid grid-cols-2 gap-1 rounded-[var(--radius-sm)] border border-line bg-panel-muted p-0.5" role="tablist" aria-label="会话分类">
         <button
           role="tab"
           aria-selected={sessionListTab === "active"}
-          className={`h-8 rounded-[calc(var(--radius-md)-2px)] text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
-            sessionListTab === "active"
-              ? "bg-panel-elevated text-text-1 shadow-sm"
-              : "text-text-3 hover:text-text-1"
+          className={`h-9 rounded-[2px] text-xs font-medium min-[900px]:h-7 ${
+            sessionListTab === "active" ? "qq-selected-row text-text-1" : "text-text-3 hover:text-text-1"
           }`}
           type="button"
           onClick={() => {
@@ -1514,10 +1595,8 @@ export default function Home() {
         <button
           role="tab"
           aria-selected={sessionListTab === "archived"}
-          className={`h-8 rounded-[calc(var(--radius-md)-2px)] text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
-            sessionListTab === "archived"
-              ? "bg-panel-elevated text-text-1 shadow-sm"
-              : "text-text-3 hover:text-text-1"
+          className={`h-9 rounded-[2px] text-xs font-medium min-[900px]:h-7 ${
+            sessionListTab === "archived" ? "qq-selected-row text-text-1" : "text-text-3 hover:text-text-1"
           }`}
           type="button"
           onClick={() => {
@@ -1530,19 +1609,61 @@ export default function Home() {
         </button>
       </div>
 
+      {sessionListError ? (
+        <div className="mt-2 rounded-[var(--radius-sm)] border border-danger/35 bg-danger-soft px-2.5 py-2" role="alert">
+          <p className="text-xs font-medium leading-5 text-danger">{sessionListError}</p>
+          <p className="mt-1 text-[11px] leading-5 text-text-3">仍可新建任务；历史会话恢复后会自动可用。</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <button
+              className="qq-button inline-flex h-7 items-center gap-1 px-2 text-[11px] text-danger"
+              type="button"
+              disabled={isLoadingSessions}
+              onClick={() => void refreshSessions()}
+            >
+              <RefreshCw className={`size-3 ${isLoadingSessions ? "motion-safe:animate-spin" : ""}`} aria-hidden />
+              重试
+            </button>
+            <button
+              className="qq-button-primary inline-flex h-7 items-center gap-1 px-2 text-[11px]"
+              type="button"
+              disabled={isRunning || isSelectingWorkspace}
+              onClick={startNewSession}
+            >
+              新建任务
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {sessionMessage ? (
-        <p className="mt-3 rounded-[var(--radius-md)] border border-danger/25 bg-danger-soft px-3 py-2 text-xs leading-5 text-danger" role="status">
+        <p className="mt-2 rounded-[var(--radius-sm)] border border-danger/30 bg-danger-soft px-2.5 py-2 text-xs leading-5 text-danger" role="status">
           {sessionMessage}
         </p>
       ) : null}
 
-      <div className="console-scroll mt-3 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
+      <div className="qq-group-header mt-3 flex items-center gap-1 px-1 py-1">
+        {sessionListTab === "active" ? (
+          <ChevronDown className="size-3.5" aria-hidden />
+        ) : (
+          <ChevronRight className="size-3.5" aria-hidden />
+        )}
+        <span>
+          {sessionListTab === "active" ? "正在进行" : "已归档"}（{visibleSessions.length}）
+        </span>
+      </div>
+
+      <div className="qq-scrollbar console-scroll mt-1 min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-0.5">
         {isLoadingSessions ? (
-          <div className="rounded-[var(--radius-md)] border border-dashed border-line px-3 py-8 text-center text-sm text-text-3">
+          <div className="rounded-[var(--radius-sm)] border border-dashed border-line px-3 py-8 text-center text-sm text-text-3">
             正在加载会话
           </div>
+        ) : sessionListError ? (
+          // 设计决策：失败原因只在上方 alert 讲一次，列表区不再双写警报
+          <div className="rounded-[var(--radius-sm)] border border-dashed border-line px-3 py-6 text-center text-xs text-text-3">
+            列表暂时为空。可先新建任务，或使用上方重试。
+          </div>
         ) : visibleSessions.length === 0 ? (
-          <div className="rounded-[var(--radius-md)] border border-dashed border-line px-3 py-10 text-center">
+          <div className="rounded-[var(--radius-sm)] border border-dashed border-line px-3 py-8 text-center">
             <p className="text-sm text-text-2">
               {sessionQuery.trim()
                 ? "没有匹配的会话"
@@ -1563,33 +1684,31 @@ export default function Home() {
             return (
               <div
                 key={session.id}
-                className={`session-item group rounded-[var(--radius-md)] border p-2 transition ${
-                  selected
-                    ? "border-accent bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]"
-                    : "border-line/80 bg-panel-elevated/70 hover:border-line-strong"
+                className={`session-item group min-h-[46px] rounded-[var(--radius-sm)] px-1.5 py-1.5 ${
+                  selected ? "qq-selected-row" : "qq-session-row"
                 }`}
               >
                 {editing && !isArchivedItem ? (
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <label className="block">
                       <span className="sr-only">会话标题</span>
                       <input
-                        className="h-9 w-full rounded-lg border border-line bg-canvas px-2.5 text-sm text-text-1 outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                        className="qq-input h-10 w-full px-2 text-sm text-text-1 outline-none min-[900px]:h-8"
                         maxLength={80}
                         value={titleDraft}
                         onChange={(event) => setTitleDraft(event.target.value)}
                       />
                     </label>
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-1">
                       <button
-                        className="h-8 flex-1 rounded-lg bg-accent text-xs font-semibold text-accent-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                        className="qq-button-primary h-10 flex-1 text-xs min-[900px]:h-7"
                         type="button"
                         onClick={() => void submitRenameSession()}
                       >
                         保存
                       </button>
                       <button
-                        className="h-8 flex-1 rounded-lg border border-line text-xs text-text-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                        className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
                         type="button"
                         onClick={() => {
                           setEditingSessionId(null);
@@ -1603,7 +1722,7 @@ export default function Home() {
                 ) : (
                   <>
                     <button
-                      className="block w-full min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-md"
+                      className="flex w-full min-w-0 items-start gap-2 text-left focus-visible:outline-none"
                       disabled={isLoadingHistory || isSelectingWorkspace}
                       type="button"
                       onClick={() => {
@@ -1611,41 +1730,44 @@ export default function Home() {
                         options?.onAfterSelect?.();
                       }}
                     >
-                      <span className="block truncate text-sm font-medium text-text-1">
-                        {sessionListTitle(session, sessionPreviews[session.id])}
+                      <span className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-[3px] border border-line bg-panel-elevated">
+                        <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={28} height={28} decoding="async" loading="lazy" className="size-7 object-cover" />
                       </span>
-                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-3">
-                        <span className="shrink-0">
-                          {formatSessionTime(
-                            isArchivedItem
-                              ? session.archivedAt || session.updatedAt
-                              : session.updatedAt,
-                          )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-text-1">
+                          {sessionListTitle(session, sessionPreviews[session.id])}
                         </span>
-                        {session.workspacePath ? (
-                          <>
-                            <span className="text-line-strong" aria-hidden>
-                              ·
-                            </span>
-                            <span className="truncate font-mono text-xs" title={session.workspacePath}>
-                              {workspaceBasename(session.workspacePath)}
-                            </span>
-                          </>
-                        ) : null}
+                        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-text-3">
+                          <span className="shrink-0">
+                            {formatSessionTime(
+                              isArchivedItem
+                                ? session.archivedAt || session.updatedAt
+                                : session.updatedAt,
+                            )}
+                          </span>
+                          {session.workspacePath ? (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span className="truncate font-mono" title={session.workspacePath}>
+                                {workspaceBasename(session.workspacePath)}
+                              </span>
+                            </>
+                          ) : null}
+                        </span>
                       </span>
                     </button>
-                    {/* 次级操作：悬停/焦点/选中再显，降低扫视噪声 */}
+                    {/* 设计决策：<900 与无 hover 设备常显；宽屏精细指针才 hover 显，避免触控找不到操作 */}
                     <div
-                      className={`mt-1.5 gap-1.5 ${
+                      className={`session-row-actions mt-1 flex gap-1 ${
                         selected
-                          ? "flex"
-                          : "hidden group-hover:flex group-focus-within:flex"
+                          ? ""
+                          : "min-[900px]:hidden min-[900px]:group-hover:flex min-[900px]:group-focus-within:flex"
                       }`}
                     >
                       {isArchivedItem ? (
                         <>
                           <button
-                            className="h-7 flex-1 rounded-md border border-line text-xs text-text-2 hover:border-line-strong hover:text-text-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                            className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
                             disabled={isLoadingHistory || isSelectingWorkspace}
                             type="button"
                             onClick={() => void unarchiveSession(session)}
@@ -1653,19 +1775,19 @@ export default function Home() {
                             取消归档
                           </button>
                           <button
-                            className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-line text-xs text-text-2 hover:border-danger hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                            className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-danger min-[900px]:h-7"
                             disabled={isLoadingHistory || isSelectingWorkspace}
                             type="button"
                             onClick={() => void deleteSession(session)}
                           >
-                            <Trash2 className="size-3" aria-hidden />
+                            <Trash2 className="size-3.5 min-[900px]:size-3" aria-hidden />
                             删除
                           </button>
                         </>
                       ) : (
                         <>
                           <button
-                            className="h-7 flex-1 rounded-md border border-line text-xs text-text-2 hover:border-line-strong hover:text-text-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                            className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
                             disabled={isLoadingHistory || isSelectingWorkspace}
                             type="button"
                             onClick={() => beginRenameSession(session)}
@@ -1673,12 +1795,12 @@ export default function Home() {
                             重命名
                           </button>
                           <button
-                            className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-line text-xs text-text-2 hover:border-danger hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                            className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-text-2 min-[900px]:h-7"
                             disabled={isLoadingHistory || isSelectingWorkspace || (selected && isRunning)}
                             type="button"
                             onClick={() => void archiveSession(session)}
                           >
-                            <Archive className="size-3" aria-hidden />
+                            <Archive className="size-3.5 min-[900px]:size-3" aria-hidden />
                             归档
                           </button>
                         </>
@@ -1694,396 +1816,525 @@ export default function Home() {
     </>
   );
 
+  const desktopSidebarVisible = !isSidebarCollapsed;
+
   return (
-    <main className="relative h-dvh overflow-hidden bg-canvas text-text-1">
-      <div className="flex h-full min-h-0">
-        {/* 桌面侧栏：会话索引 */}
-        <aside className="hidden w-[18.5rem] shrink-0 border-r border-line bg-panel lg:flex lg:flex-col">
-          <div className="border-b border-line px-4 py-4">
-            <p className="text-xs font-medium text-text-3">Mboo Code</p>
-            <h1 className="mt-2 text-xl font-semibold tracking-tight text-text-1">会话工作台</h1>
-            <p className="mt-1 text-xs leading-5 text-text-3">本地任务台 · 长回复优先</p>
+    <main className="relative h-dvh overflow-hidden bg-canvas p-0 text-text-1 min-[720px]:p-1 min-[900px]:p-2">
+      <div className="qq-shell flex h-full min-h-0 flex-col overflow-hidden rounded-[4px]">
+        {/* QQ 标题栏：窗口控件映射真实网页动作 */}
+        <header className="qq-titlebar flex shrink-0 items-center gap-2 px-2">
+          <img
+            src="/qq2007/sidebar-avatar.png"
+            alt=""
+            aria-hidden
+            width={28}
+            height={28}
+            decoding="async"
+            className="hidden size-7 rounded-[3px] border border-white/30 bg-white/10 object-cover min-[380px]:block"
+          />
+          <div className="min-w-0">
+            <p className="qq-titlebar-title truncate">Mboo Code 2007</p>
+          </div>
+          <div className="ml-1 hidden items-center gap-0.5 md:flex" aria-hidden="true">
+            <span className="qq-chrome-deco inline-flex size-7 items-center justify-center text-xs">←</span>
+            <span className="qq-chrome-deco inline-flex size-7 items-center justify-center text-xs">→</span>
+            <span className="qq-chrome-deco qq-chrome-deco-label hidden px-2 py-1 text-xs lg:inline">文件</span>
+            <span className="qq-chrome-deco qq-chrome-deco-label hidden px-2 py-1 text-xs lg:inline">编辑</span>
+            <span className="qq-chrome-deco qq-chrome-deco-label hidden px-2 py-1 text-xs lg:inline">视图</span>
+            <span className="qq-chrome-deco qq-chrome-deco-label hidden px-2 py-1 text-xs lg:inline">帮助</span>
+          </div>
+          <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-1.5">
+            <StatusPill status={status} compact />
+            {/* 设计决策：手机只有会话抽屉，收栏无桌面侧栏可折叠；重置属低频桌面动作 */}
             <button
-              className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-md)] bg-accent px-3 text-sm font-semibold text-accent-fg transition hover:bg-accent-strong motion-safe:active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={isRunning || isSelectingWorkspace}
+              className="qq-window-action hidden items-center justify-center min-[900px]:inline-flex"
               type="button"
-              onClick={startNewSession}
+              aria-label={isSidebarCollapsed ? "展开左侧会话栏" : "折叠左侧会话栏"}
+              title={isSidebarCollapsed ? "展开会话栏" : "折叠会话栏"}
+              onClick={() => setIsSidebarCollapsed((current) => !current)}
             >
-              <Plus className="size-4" aria-hidden strokeWidth={2} />
-              新会话
+              {isSidebarCollapsed ? "侧栏" : "收栏"}
+            </button>
+            <button
+              className="qq-window-action inline-flex items-center justify-center"
+              type="button"
+              aria-label={isFullscreen ? "退出浏览器全屏" : "浏览器全屏"}
+              title={isFullscreen ? "退出全屏" : "浏览器全屏"}
+              onClick={() => void toggleFullscreen()}
+            >
+              {isFullscreen ? "还原" : "全屏"}
+            </button>
+            <button
+              className="qq-window-action qq-window-action-danger hidden items-center justify-center sm:inline-flex"
+              type="button"
+              aria-label="重置布局：展开侧栏并退出全屏"
+              title="重置布局（不会关闭标签页）"
+              onClick={() => void resetWindowLayout()}
+            >
+              重置
             </button>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col px-3 py-3">
-            {renderSessionList()}
-          </div>
-        </aside>
+        </header>
 
-        {/* 移动端会话抽屉（T1） */}
-        {isSessionDrawerOpen ? (
-          <div className="fixed inset-0 z-40 lg:hidden" role="presentation">
-            <button
-              aria-label="关闭会话列表"
-              className="absolute inset-0 bg-text-1/40"
-              type="button"
-              onClick={() => setIsSessionDrawerOpen(false)}
-            />
-            <div
-              ref={sessionDrawerPanelRef}
-              role="dialog"
-              aria-modal="true"
-              aria-label="会话列表"
-              className="absolute inset-y-0 left-0 flex w-[min(20rem,88vw)] flex-col border-r border-line bg-panel shadow-dock"
-            >
-              <div className="flex items-center justify-between border-b border-line px-4 py-3">
-                <div>
-                  <p className="text-xs font-medium text-text-3">会话</p>
-                  <p className="text-sm font-semibold text-text-1">选择或管理任务</p>
-                </div>
-                <button
-                  aria-label="关闭"
-                  className="inline-flex size-9 items-center justify-center rounded-lg border border-line text-text-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-                  type="button"
-                  onClick={() => setIsSessionDrawerOpen(false)}
-                >
-                  <X className="size-4" aria-hidden />
-                </button>
-              </div>
-              <div className="border-b border-line px-3 py-3">
-                <button
-                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-md)] bg-accent text-sm font-semibold text-accent-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-45"
-                  disabled={isRunning || isSelectingWorkspace}
-                  type="button"
-                  onClick={startNewSession}
-                >
-                  <Plus className="size-4" aria-hidden />
-                  新会话
-                </button>
-              </div>
-              <div className="flex min-h-0 flex-1 flex-col px-3 py-3">
-                {renderSessionList({ onAfterSelect: () => setIsSessionDrawerOpen(false) })}
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header className="shrink-0 border-b border-line bg-panel">
-            {/* 顶栏压缩：标题/状态一行，任务前置（模型·推理·工作区）一行 */}
-            <div className="flex flex-wrap items-center gap-2 px-4 py-2 sm:px-6">
-              <button
-                ref={sessionMenuButtonRef}
-                aria-label="打开会话列表"
-                aria-expanded={isSessionDrawerOpen}
-                aria-haspopup="dialog"
-                className="inline-flex size-8 items-center justify-center rounded-lg border border-line text-text-2 transition hover:border-line-strong hover:text-text-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 lg:hidden"
-                type="button"
-                onClick={() => setIsSessionDrawerOpen(true)}
-              >
-                <Menu className="size-4" aria-hidden />
-              </button>
-              <h2 className="min-w-0 flex-1 truncate text-base font-semibold text-text-1 sm:flex-none sm:max-w-[16rem]">
-                {currentSession?.title || (sessionId ? "当前会话" : "未命名任务")}
-              </h2>
-              <div aria-live="polite">
-                <StatusPill status={status} />
-              </div>
-              {isArchivedView ? (
-                <span className="rounded-md border border-running/30 bg-running-soft px-2 py-0.5 text-xs text-running">
-                  归档只读
-                </span>
-              ) : null}
-              {sessionId ? (
-                <p
-                  className="hidden max-w-[10rem] truncate font-mono text-xs text-text-3 sm:block"
-                  title={sessionId}
-                >
-                  {sessionId.slice(0, 8)}…
-                </p>
-              ) : null}
-            </div>
-
-            {!isRunning ? (
-              <div className="grid gap-2 border-t border-line/80 px-4 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,8rem)_minmax(0,1.2fr)] sm:items-end sm:px-6">
-                <label className="block min-w-0 text-xs font-medium text-text-3">
-                  模型
-                  <input
-                    id="model-input"
-                    className="mt-1 h-8 w-full rounded-[var(--radius-sm)] border border-line bg-panel-elevated px-2.5 font-mono text-xs text-text-1 outline-none transition placeholder:text-text-3 focus:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
-                    placeholder="例如 gpt-4.1"
-                    value={modelName}
-                    onChange={(event) => setModelName(event.target.value)}
-                  />
-                </label>
-                <label className="block min-w-0 text-xs font-medium text-text-3">
-                  推理
-                  <select
-                    className="mt-1 h-8 w-full rounded-[var(--radius-sm)] border border-line bg-panel-elevated px-2 text-xs text-text-1 outline-none transition focus:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
-                    value={reasoningEffort}
-                    onChange={(event) => setReasoningEffort(event.target.value)}
-                  >
-                    {REASONING_OPTIONS.map((option) => (
-                      <option key={option.value || "default"} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+        <div
+          className={`grid min-h-0 flex-1 ${
+            desktopSidebarVisible
+              ? "min-[900px]:max-[1179px]:grid-cols-[minmax(240px,292px)_minmax(0,1fr)] min-[1180px]:grid-cols-[292px_minmax(0,1fr)_210px]"
+              : "min-[900px]:max-[1179px]:grid-cols-[minmax(0,1fr)] min-[1180px]:grid-cols-[minmax(0,1fr)_210px]"
+          }`}
+        >
+          {/* 桌面侧栏：联系人式会话索引 */}
+          {desktopSidebarVisible ? (
+            <aside className="qq-sidebar hidden min-h-0 min-[900px]:flex min-[900px]:flex-col">
+              <div className="qq-profile">
+                <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={44} height={44} decoding="async" className="qq-profile-avatar" />
                 <div className="min-w-0">
-                  <WorkspaceBar
-                    displayedPath={displayedWorkspacePath}
-                    statusText={workspaceStatusText}
-                    canSelect={!sessionId && !isLoadingHistory && !isArchivedView}
-                    isSelecting={isSelectingWorkspace}
-                    errorMessage={workspaceMessage}
-                    onSelect={() => void selectWorkspace()}
-                    onClear={clearPendingWorkspace}
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            {isRunning ? (
-              <div
-                className="flex flex-wrap items-center justify-between gap-2 border-t border-running/25 bg-running-soft px-4 py-2 text-sm text-running sm:px-6"
-                aria-live="polite"
-              >
-                <div className="min-w-0">
-                  <span className="font-medium">运行中</span>
-                  <span className="mx-2 text-running/50">·</span>
-                  <span className="truncate">
-                    {activeTool
-                      ? `工具：${getToolLabel(activeTool.toolName)}${
-                          activeTool.status === "waiting_approval"
-                            ? "（等待授权）"
-                            : activeTool.status === "submitting"
-                              ? "（处理授权）"
-                              : activeTool.status === "started"
-                                ? "（执行中）"
-                                : ""
-                        }`
-                      : activeTurnId
-                        ? "正在生成回复"
-                        : "正在连接"}
-                  </span>
-                </div>
-                <button
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-running/40 bg-panel px-3 text-xs font-medium text-running focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-running/40"
-                  type="button"
-                  onClick={stopCurrentRun}
-                >
-                  <Square className="size-3 fill-current" aria-hidden />
-                  停止
-                </button>
-              </div>
-            ) : null}
-
-            {errorMessage ? (
-              <div className="border-t border-danger/20 bg-danger-soft px-4 py-2 sm:px-6" role="alert">
-                <p className="text-sm text-danger">{errorMessage}</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/30 bg-panel px-2.5 text-xs text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40"
-                    type="button"
-                    onClick={() => void copyError()}
-                  >
-                    <Copy className="size-3.5" aria-hidden />
-                    复制错误
-                  </button>
-                  {lastFailedInput ? (
-                    <button
-                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/30 bg-panel px-2.5 text-xs text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40"
-                      type="button"
-                      onClick={retryLastInput}
-                    >
-                      <RotateCcw className="size-3.5" aria-hidden />
-                      回填上次输入
-                    </button>
-                  ) : null}
-                  <button
-                    className="inline-flex h-8 items-center rounded-lg border border-line bg-panel px-2.5 text-xs text-text-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                    type="button"
-                    onClick={() => {
-                      setErrorMessage("");
-                      setConnectionState("idle");
-                    }}
-                  >
-                    清除错误
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {sessionMessage ? (
-              <p className="border-t border-running/20 bg-running-soft px-4 py-2 text-sm text-running lg:hidden sm:px-6" role="status">
-                {sessionMessage}
-              </p>
-            ) : null}
-          </header>
-
-          <div
-            ref={messagesViewportRef}
-            className="console-scroll relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6 sm:px-8 [scrollbar-gutter:stable]"
-            onScroll={updateStickToBottom}
-          >
-            {isLoadingHistory ? (
-              <div className="mx-auto flex min-h-[340px] max-w-[46rem] items-center justify-center rounded-[var(--radius-md)] border border-dashed border-line bg-panel/80 text-center">
-                <div>
-                  <LoaderCircle className="mx-auto size-5 motion-safe:animate-spin text-accent" aria-hidden />
-                  <p className="mt-3 text-sm font-medium text-text-1">正在回显历史</p>
-                  <p className="mt-1 text-xs text-text-3">读取会话事件</p>
-                </div>
-              </div>
-            ) : messages.length === 0 ? (
-              <div className="mx-auto flex min-h-[340px] max-w-[46rem] flex-col justify-center rounded-[var(--radius-md)] border border-line bg-panel-elevated px-6 py-10 shadow-panel sm:px-8">
-                <p className="text-xs font-medium text-text-3">尚未开始</p>
-                <h3 className="mt-2 text-xl font-semibold text-text-1">先确认工作区与模型</h3>
-                <p className="mt-2 max-w-md text-sm leading-7 text-text-2">
-                  确认前置条件后，在下方写下任务目标。主区域优先展示长回复与工具轨迹。
-                </p>
-                <ol className="mt-6 space-y-2.5 text-sm text-text-2">
-                  <li className="flex gap-2 rounded-[var(--radius-sm)] border border-line bg-canvas/60 px-3 py-2.5">
-                    <span className="font-medium text-text-1">1.</span>
-                    <span className="min-w-0 flex-1">
-                      工作区：
-                      <span className={displayedWorkspacePath ? "text-ok" : "text-text-3"}>
-                        {displayedWorkspacePath
-                          ? displayedWorkspacePath
-                          : sessionId
-                            ? "当前会话未设置路径"
-                            : "未选择（将使用默认工作区）"}
-                      </span>
-                      {!sessionId && !displayedWorkspacePath ? (
-                        <button
-                          className="ml-2 text-xs font-medium text-text-1 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                          type="button"
-                          disabled={isSelectingWorkspace}
-                          onClick={() => void selectWorkspace()}
-                        >
-                          选择目录
-                        </button>
-                      ) : null}
-                    </span>
-                  </li>
-                  <li className="flex gap-2 rounded-[var(--radius-sm)] border border-line bg-canvas/60 px-3 py-2.5">
-                    <span className="font-medium text-text-1">2.</span>
-                    <span className="min-w-0 flex-1">
-                      模型：
-                      <span className={modelName.trim() ? "font-mono text-text-1" : "text-text-3"}>
-                        {modelName.trim() || "未填写"}
-                      </span>
-                      {!modelName.trim() ? (
-                        <button
-                          className="ml-2 text-xs font-medium text-text-1 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                          type="button"
-                          onClick={() => document.getElementById("model-input")?.focus()}
-                        >
-                          去填写
-                        </button>
-                      ) : null}
-                    </span>
-                  </li>
-                  <li className="flex gap-2 rounded-[var(--radius-sm)] border border-line bg-canvas/60 px-3 py-2.5">
-                    <span className="font-medium text-text-1">3.</span>
-                    <span>
-                      会话：
-                      <span className="text-text-1">
-                        {sessionId
-                          ? currentSession?.title || "当前会话"
-                          : "新任务（发送后创建）"}
-                      </span>
-                    </span>
-                  </li>
-                </ol>
-                <div className="mt-6 border-t border-line pt-4">
-                  <p className="text-xs font-medium text-text-3">快速填入示例</p>
-                  <ul className="mt-2 space-y-1">
-                    {["梳理代码结构", "定位构建失败", "补一版接口说明"].map((hint) => (
-                      <li key={hint}>
-                        <button
-                          className="w-full rounded-[var(--radius-sm)] px-2 py-2 text-left text-sm text-text-2 transition hover:bg-panel-muted hover:text-text-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                          type="button"
-                          onClick={() => setInput(hint)}
-                        >
-                          {hint}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            ) : (
-              <div className="mx-auto flex max-w-[46rem] flex-col gap-5 pb-4">
-                {messages.map((message) => (
-                  <div key={message.id} className="message-item">
-                    <MessageBubble message={message} onResolveApproval={resolveToolApproval} />
-                  </div>
-                ))}
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-            {showJumpToBottom ? (
-              <button
-                className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-line bg-panel-elevated px-3.5 py-1.5 text-xs font-medium text-text-2 shadow-panel transition hover:border-line-strong hover:text-text-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                type="button"
-                onClick={scrollMessagesToBottom}
-              >
-                回到底部
-              </button>
-            ) : null}
-          </div>
-
-          <div className="shrink-0 px-4 pb-4 pt-1 sm:px-8">
-            {isArchivedView ? (
-              <div className="mx-auto max-w-[46rem] rounded-[var(--radius-lg)] border border-running/25 bg-running-soft px-4 py-3 text-sm text-running shadow-dock">
-                当前为归档会话，仅支持回看。可在会话列表中取消归档后继续对话。
-              </div>
-            ) : (
-              <form
-                className="mx-auto max-w-[46rem] rounded-[var(--radius-md)] border border-line-strong/50 bg-panel-elevated p-3 shadow-dock"
-                onSubmit={sendMessage}
-              >
-                <label className="sr-only" htmlFor="task-input">
-                  任务输入
-                </label>
-                <textarea
-                  id="task-input"
-                  className="min-h-[6.5rem] w-full resize-none rounded-[var(--radius-md)] border border-transparent bg-canvas/80 px-3.5 py-3 text-sm leading-7 text-text-1 outline-none transition placeholder:text-text-3 focus:border-accent/50 focus:bg-canvas focus-visible:ring-2 focus-visible:ring-accent/30"
-                  disabled={isRunning || isLoadingHistory || isSelectingWorkspace}
-                  placeholder="写下任务目标，或继续追问…（⌘/Ctrl + Enter 发送）"
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                />
-                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-xs text-text-3">
-                    {isRunning
-                      ? "生成中，可按 Esc 停止"
-                      : !modelName.trim()
-                        ? "请先填写模型名称"
-                        : "发送前请确认工作区与模型"}
+                  <p className="qq-profile-name truncate">Mboo Code</p>
+                  <p className="qq-profile-status">
+                    <span className="qq-status-dot-online" aria-hidden />
+                    我在线上
                   </p>
-                  <div className="flex gap-2">
-                    {isRunning ? (
+                  <p className="mt-0.5 truncate font-mono text-[11px] text-text-3" title={modelName || "未选择模型"}>
+                    {modelName.trim() || "未选择模型"}
+                    {reasoningEffort ? ` · ${reasoningEffort}` : ""}
+                  </p>
+                </div>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col px-2 py-2">
+                {renderSessionList()}
+              </div>
+            </aside>
+          ) : null}
+
+          {/* 移动端会话抽屉 */}
+          {isSessionDrawerOpen ? (
+            <div className="fixed inset-0 z-40 min-[900px]:hidden" role="presentation">
+              <button
+                aria-label="关闭会话列表"
+                className="absolute inset-0 bg-text-1/35"
+                type="button"
+                onClick={() => setIsSessionDrawerOpen(false)}
+              />
+              <div
+                ref={sessionDrawerPanelRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label="会话列表"
+                className="qq-sidebar absolute inset-y-0 left-0 flex w-[min(20rem,88vw)] max-w-[100vw] flex-col pt-[env(safe-area-inset-top)] shadow-dock"
+              >
+                <div className="qq-profile justify-between gap-2 pr-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={44} height={44} decoding="async" className="qq-profile-avatar" />
+                    <div className="min-w-0">
+                      <p className="qq-profile-name truncate">会话</p>
+                      <p className="qq-profile-status">
+                        <span className="qq-status-dot-online" aria-hidden />
+                        选择或管理任务
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    aria-label="关闭会话列表"
+                    className="qq-button inline-flex size-11 shrink-0 items-center justify-center text-text-2"
+                    type="button"
+                    onClick={() => setIsSessionDrawerOpen(false)}
+                  >
+                    <X className="size-4" aria-hidden />
+                  </button>
+                </div>
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2">
+                  {renderSessionList({ onAfterSelect: () => setIsSessionDrawerOpen(false) })}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <section className="qq-main-surface flex min-h-0 min-w-0 flex-col">
+            <div className="shrink-0 border-b border-line bg-panel">
+              <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:px-4">
+                <button
+                  ref={sessionMenuButtonRef}
+                  aria-label="打开会话列表"
+                  aria-expanded={isSessionDrawerOpen}
+                  aria-haspopup="dialog"
+                  className="qq-button inline-flex size-11 items-center justify-center text-text-2 min-[900px]:hidden"
+                  type="button"
+                  onClick={() => setIsSessionDrawerOpen(true)}
+                >
+                  <Menu className="size-4" aria-hidden />
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <h1 className="truncate text-sm font-semibold text-text-1">
+                      {currentSession?.title || (sessionId ? "当前会话" : "新任务")}
+                    </h1>
+                    {isArchivedView ? (
+                      <span className="rounded-[2px] border border-running/30 bg-running-soft px-1.5 py-0.5 text-[11px] text-running">
+                        归档只读
+                      </span>
+                    ) : null}
+                    {/* 设计决策：空闲态标题栏已有状态；中栏只在异常/连接中补第二枚，避免三处“空闲” */}
+                    {status.running || status.label === "异常" || status.label === "连接中" ? (
+                      <StatusPill status={status} />
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              {isRunning ? (
+                <div
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-running/25 bg-running-soft px-3 py-2 text-sm text-running sm:px-4"
+                  aria-live="polite"
+                >
+                  <div className="min-w-0">
+                    <span className="font-medium">运行中</span>
+                    <span className="mx-2 text-running/50">·</span>
+                    <span className="truncate">
+                      {activeTool
+                        ? `工具：${getToolLabel(activeTool.toolName)}${
+                            activeTool.status === "waiting_approval"
+                              ? "（等待授权）"
+                              : activeTool.status === "submitting"
+                                ? "（处理授权）"
+                                : activeTool.status === "started"
+                                  ? "（执行中）"
+                                  : ""
+                          }`
+                        : activeTurnId
+                          ? "正在生成回复"
+                          : "正在连接"}
+                    </span>
+                  </div>
+                  <button
+                    className="qq-button inline-flex h-10 items-center gap-1.5 px-3 text-xs font-medium text-running min-[900px]:h-8"
+                    type="button"
+                    onClick={stopCurrentRun}
+                  >
+                    <Square className="size-3 fill-current" aria-hidden />
+                    停止
+                  </button>
+                </div>
+              ) : null}
+
+              {errorMessage ? (
+                <div className="border-t border-danger/20 bg-danger-soft px-3 py-2 sm:px-4" role="alert">
+                  <p className="text-sm text-danger">{errorMessage}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      className="qq-button inline-flex h-8 items-center gap-1.5 px-2.5 text-xs text-danger"
+                      type="button"
+                      onClick={() => void copyError()}
+                    >
+                      <Copy className="size-3.5" aria-hidden />
+                      复制错误
+                    </button>
+                    {lastFailedInput ? (
                       <button
-                        className="inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-md)] border border-running/35 bg-running-soft px-4 text-sm font-medium text-running transition motion-safe:active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-running/40"
+                        className="qq-button inline-flex h-8 items-center gap-1.5 px-2.5 text-xs text-danger"
                         type="button"
-                        onClick={stopCurrentRun}
+                        onClick={retryLastInput}
                       >
-                        <Square className="size-3.5 fill-current" aria-hidden />
-                        停止
+                        <RotateCcw className="size-3.5" aria-hidden />
+                        回填上次输入
                       </button>
                     ) : null}
                     <button
-                      className="inline-flex h-10 items-center rounded-[var(--radius-md)] bg-accent px-5 text-sm font-semibold text-accent-fg transition hover:bg-accent-strong motion-safe:active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={isRunning || isLoadingHistory || isSelectingWorkspace || !input.trim() || !modelName.trim()}
-                      type="submit"
+                      className="qq-button inline-flex h-8 items-center gap-1.5 px-2.5 text-xs text-text-2"
+                      type="button"
+                      onClick={() => {
+                        setErrorMessage("");
+                        setConnectionState("idle");
+                      }}
                     >
-                      {isRunning ? "发送中" : "发送"}
+                      清除
                     </button>
                   </div>
                 </div>
-              </form>
-            )}
-          </div>
-        </section>
+              ) : null}
+            </div>
+
+            <div className="relative min-h-0 flex-1">
+              {isLoadingHistory ? (
+                <div className="qq-scrollbar console-scroll qq-thread h-full overflow-y-auto px-3 py-4 sm:px-6">
+                  <div className="mx-auto flex max-w-[46rem] flex-col items-center gap-2 py-16 text-text-3">
+                    <LoaderCircle className="size-5 motion-safe:animate-spin" aria-hidden />
+                    <p className="text-sm">读取会话事件</p>
+                  </div>
+                </div>
+              ) : messages.length === 0 ? (
+                <div className="qq-scrollbar console-scroll qq-thread h-full overflow-y-auto px-3 py-4 sm:px-6">
+                  <div className="mx-auto max-w-[46rem] rounded-[var(--radius-md)] border border-line bg-panel px-4 py-5 shadow-panel sm:px-5 sm:py-6">
+                    {/* 设计决策：缺模型只在输入器保留一个主阻断；空态只给下一步与示例 */}
+                    <div className="flex items-center gap-3">
+                      <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={48} height={48} decoding="async" className="size-12 rounded-[4px] border border-line object-cover" />
+                      <div className="min-w-0">
+                        <p className="text-base font-semibold text-text-1">等待新的任务指令</p>
+                        <p className="mt-1 text-xs leading-5 text-text-3">
+                          {modelName.trim()
+                            ? "在下方输入目标并发送即可开始"
+                            : "下一步：在下方任务设置填写模型"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {modelName.trim() ? (
+                      <div className="mt-4 flex flex-wrap gap-1.5">
+                        <span className="rounded-[3px] border border-ok/30 bg-ok-soft px-2 py-1 text-[11px] text-ok">
+                          模型 · {modelName.trim()}
+                        </span>
+                        <span className="rounded-[3px] border border-line bg-panel-elevated px-2 py-1 font-mono text-[11px] text-text-2">
+                          工作区 ·{" "}
+                          {displayedWorkspacePath
+                            ? workspaceBasename(displayedWorkspacePath)
+                            : sessionId
+                              ? "未设置路径"
+                              : "使用默认"}
+                        </span>
+                      </div>
+                    ) : null}
+
+                    <div className="mt-5 border-t border-line pt-4">
+                      <p className="text-xs font-medium text-text-3">快速填入示例</p>
+                      <ul className="mt-2 space-y-1">
+                        {["梳理代码结构", "定位构建失败", "补一版接口说明"].map((hint) => (
+                          <li key={hint}>
+                            <button
+                              className="min-h-11 w-full rounded-[var(--radius-sm)] px-2 py-2.5 text-left text-sm text-text-2 hover:bg-panel-muted hover:text-text-1 sm:min-h-0 sm:py-2"
+                              type="button"
+                              onClick={() => {
+                                setInput(hint);
+                                if (!modelName.trim()) {
+                                  focusModelInput();
+                                }
+                              }}
+                            >
+                              {hint}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <Virtuoso
+                  key={sessionId || PENDING_SESSION_KEY}
+                  ref={virtuosoRef}
+                  className="h-full"
+                  style={{ height: "100%" }}
+                  data={messages}
+                  computeItemKey={(_index, message) => message.id}
+                  defaultItemHeight={120}
+                  increaseViewportBy={{ top: 320, bottom: 480 }}
+                  alignToBottom
+                  initialTopMostItemIndex={Math.max(0, messages.length - 1)}
+                  followOutput={followOutput}
+                  atBottomThreshold={96}
+                  atBottomStateChange={handleAtBottomStateChange}
+                  components={{
+                    Scroller: MessageListScroller,
+                    Header: MessageListTopSpacer,
+                    Footer: MessageListBottomSpacer,
+                  }}
+                  itemContent={(_index, message) => (
+                    <div className="message-item mx-auto max-w-[46rem] px-3 pb-4 sm:px-6">
+                      <MessageBubble message={message} onResolveApproval={resolveToolApproval} />
+                    </div>
+                  )}
+                />
+              )}
+              {showJumpToBottom ? (
+                <button
+                  className="qq-button absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-1/2 z-10 min-h-10 -translate-x-1/2 px-4 py-2 text-xs font-medium text-text-2 shadow-panel min-[900px]:min-h-0 min-[900px]:px-3 min-[900px]:py-1.5"
+                  type="button"
+                  aria-label="回到消息列表底部"
+                  onClick={scrollMessagesToBottom}
+                >
+                  回到底部
+                </button>
+              ) : null}
+            </div>
+
+            <div className="shrink-0 border-t border-line bg-panel px-3 py-2 sm:px-4">
+              {isArchivedView ? (
+                <div className="mx-auto max-w-[46rem] rounded-[var(--radius-sm)] border border-running/30 bg-running-soft px-4 py-3 text-sm text-running">
+                  当前为归档会话，仅支持回看。可在会话列表中取消归档后继续对话。
+                </div>
+              ) : (
+                <form className="qq-composer mx-auto w-full max-w-[46rem]" onSubmit={sendMessage}>
+                  {!modelName.trim() ? (
+                    <div className="flex items-center justify-between gap-2 border-b border-running/30 bg-running-soft px-2.5 py-1.5 text-[11px] text-running">
+                      <span>请先填写模型名称后再发送</span>
+                      <button
+                        className="rounded-[2px] font-medium underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]"
+                        type="button"
+                        onClick={focusModelInput}
+                      >
+                        去填写
+                      </button>
+                    </div>
+                  ) : null}
+                  {!isRunning ? (
+                    <div className="border-b border-line bg-panel">
+                      <button
+                        className="flex min-h-11 w-full items-center justify-between gap-2 px-2.5 py-2 text-left text-xs text-text-2 sm:hidden"
+                        type="button"
+                        aria-expanded={isComposerSettingsOpen || !modelName.trim()}
+                        onClick={() => setIsComposerSettingsOpen((current) => !current)}
+                      >
+                        <span className="min-w-0 truncate">
+                          任务设置 · {modelName.trim() || "未填模型"} ·{" "}
+                          {workspaceBasename(displayedWorkspacePath) || workspaceStatusText}
+                        </span>
+                        <ChevronDown
+                          className={`size-3.5 shrink-0 transition-transform ${
+                            isComposerSettingsOpen || !modelName.trim() ? "" : "-rotate-90"
+                          }`}
+                          aria-hidden
+                        />
+                      </button>
+                      <div
+                        className={`grid gap-2 px-2.5 py-2 sm:grid-cols-[minmax(0,11rem)_7rem_minmax(0,1fr)] ${
+                          isComposerSettingsOpen || !modelName.trim() ? "grid" : "hidden"
+                        } sm:grid`}
+                      >
+                        <label className="block min-w-0 text-[11px] font-medium text-text-3">
+                          模型
+                          <input
+                            id="model-input"
+                            className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
+                            placeholder="例如 gpt-4.1"
+                            value={modelName}
+                            onChange={(event) => setModelName(event.target.value)}
+                          />
+                        </label>
+                        <label className="block min-w-0 text-[11px] font-medium text-text-3">
+                          推理
+                          <select
+                            className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
+                            value={reasoningEffort}
+                            onChange={(event) => setReasoningEffort(event.target.value)}
+                          >
+                            {REASONING_OPTIONS.map((option) => (
+                              <option key={option.value || "default"} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="min-w-0">
+                          <WorkspaceBar
+                            compact
+                            displayedPath={displayedWorkspacePath}
+                            statusText={workspaceStatusText}
+                            canSelect={!sessionId && !isLoadingHistory && !isArchivedView}
+                            isSelecting={isSelectingWorkspace}
+                            errorMessage={workspaceMessage}
+                            onSelect={() => void selectWorkspace()}
+                            onClear={clearPendingWorkspace}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="qq-composer-toolbar">
+                    <div className="qq-composer-toolbar-actions">
+                      <button
+                        className="qq-button inline-flex h-8 items-center gap-1 px-2.5 text-xs text-text-2 sm:h-6 sm:px-2 sm:text-[11px]"
+                        type="button"
+                        disabled={!input.trim() || isRunning}
+                        onClick={() => setInput("")}
+                        title="清空输入"
+                        aria-label="清空输入"
+                      >
+                        清空
+                      </button>
+                      <span className="max-w-[12rem] truncate text-[11px] text-text-3">
+                        {isRunning ? (
+                          <span className="sm:hidden">生成中，可点停止</span>
+                        ) : (
+                          <span className="sm:hidden">填好后点发送</span>
+                        )}
+                        <span className="hidden sm:inline">
+                          {isRunning ? "生成中，Esc 可停止" : "⌘/Ctrl + Enter 发送"}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                  <label className="sr-only" htmlFor="task-input">
+                    任务输入
+                  </label>
+                  <div className="qq-composer-editor">
+                    <textarea
+                      id="task-input"
+                      disabled={isRunning || isLoadingHistory || isSelectingWorkspace}
+                      placeholder="写下任务目标，或继续追问…"
+                      value={input}
+                      onChange={(event) => setInput(event.target.value)}
+                    />
+                  </div>
+                  <div className="qq-composer-statusbar">
+                    <p className="min-w-0 truncate text-[11px] text-text-3">
+                      {workspaceBasename(displayedWorkspacePath) || workspaceStatusText}
+                      {modelName.trim() ? ` · ${modelName.trim()}` : ""}
+                    </p>
+                    <div className="flex shrink-0 gap-1.5">
+                      {isRunning ? (
+                        <button
+                          className="qq-button inline-flex h-10 items-center gap-1 px-3 text-xs font-medium text-running sm:h-[30px]"
+                          type="button"
+                          onClick={stopCurrentRun}
+                        >
+                          <Square className="size-3 fill-current" aria-hidden />
+                          停止
+                        </button>
+                      ) : (
+                        <button
+                          className={`qq-button-primary inline-flex h-10 min-w-[72px] items-center justify-center px-4 text-xs sm:h-[30px] sm:min-w-[64px] ${
+                            !input.trim() || !modelName.trim() || isLoadingHistory || isSelectingWorkspace
+                              ? "qq-button-locked"
+                              : ""
+                          }`}
+                          disabled={isRunning || isLoadingHistory || isSelectingWorkspace || !input.trim() || !modelName.trim()}
+                          type="submit"
+                          title={
+                            !modelName.trim()
+                              ? "请先填写模型名称"
+                              : !input.trim()
+                                ? "请先输入任务"
+                                : "发送"
+                          }
+                        >
+                          发送
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </form>
+              )}
+            </div>
+          </section>
+
+          <AgentInfoRail
+            status={status}
+            modelName={modelName}
+            workspacePath={displayedWorkspacePath}
+            workspaceStatusText={workspaceStatusText}
+            recentSessions={recentSessions}
+            sessionPreviews={sessionPreviews}
+            sessionId={sessionId}
+            pendingApprovalCount={pendingApprovalCount}
+            errorMessage={errorMessage}
+            isRunning={isRunning}
+            onNewSession={startNewSession}
+            onRefresh={() => void refreshSessions()}
+            onOpenArchived={() => {
+              setSessionListTab("archived");
+              setIsSidebarCollapsed(false);
+            }}
+            onOpenSession={(id) => void openSession(id, "active")}
+          />
+        </div>
       </div>
     </main>
   );
@@ -2095,6 +2346,7 @@ const WorkspaceBar = memo(function WorkspaceBar({
   canSelect = false,
   isSelecting = false,
   errorMessage = "",
+  compact = false,
   onSelect,
   onClear,
 }: {
@@ -2103,22 +2355,32 @@ const WorkspaceBar = memo(function WorkspaceBar({
   canSelect?: boolean;
   isSelecting?: boolean;
   errorMessage?: string;
+  compact?: boolean;
   onSelect?: () => void;
   onClear?: () => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-end sm:justify-between sm:gap-2">
+    <div
+      className={`flex min-w-0 flex-col gap-1 sm:flex-row sm:items-end sm:justify-between sm:gap-2 ${
+        compact ? "sm:items-center" : ""
+      }`}
+    >
       <div className="min-w-0">
-        <p className="text-xs font-medium text-text-3">工作区</p>
-        <p className="mt-0.5 truncate font-mono text-xs text-text-2" title={displayedPath || statusText}>
+        <p className={`${compact ? "text-[11px]" : "text-xs"} font-medium text-text-3`}>工作区</p>
+        <p
+          className={`mt-0.5 truncate font-mono ${compact ? "text-[11px]" : "text-xs"} text-text-2`}
+          title={displayedPath || statusText}
+        >
           {statusText}
         </p>
         {errorMessage ? <p className="mt-1 text-xs text-danger">{errorMessage}</p> : null}
       </div>
-      <div className="flex shrink-0 gap-1.5">
+      <div className="flex shrink-0 gap-1">
         {canSelect ? (
           <button
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel-elevated px-2.5 text-xs font-medium text-text-2 transition hover:border-line-strong hover:text-text-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-45"
+            className={`qq-button inline-flex items-center gap-1.5 px-2.5 font-medium text-text-2 ${
+              compact ? "h-7 text-[11px]" : "h-8 text-xs"
+            }`}
             disabled={isSelecting}
             type="button"
             onClick={onSelect}
@@ -2133,7 +2395,9 @@ const WorkspaceBar = memo(function WorkspaceBar({
         ) : null}
         {canSelect && displayedPath ? (
           <button
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-xs text-text-2 transition hover:border-danger hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40"
+            className={`qq-button inline-flex items-center gap-1.5 px-2.5 text-text-2 ${
+              compact ? "h-7 text-[11px]" : "h-8 text-xs"
+            }`}
             type="button"
             onClick={onClear}
           >
@@ -2146,6 +2410,22 @@ const WorkspaceBar = memo(function WorkspaceBar({
   );
 });
 
+// 虚拟列表滚动容器：保留 QQ 经典滚动条材质
+const MessageListScroller = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"div">>(
+  function MessageListScroller({ className, ...props }, ref) {
+    return (
+      <div
+        ref={ref}
+        {...props}
+        className={["qq-scrollbar console-scroll qq-thread", className].filter(Boolean).join(" ")}
+      />
+    );
+  },
+);
+
+const MessageListTopSpacer = () => <div className="h-4" aria-hidden />;
+const MessageListBottomSpacer = () => <div className="h-2" aria-hidden />;
+
 const MessageBubble = memo(function MessageBubble({
   message,
   onResolveApproval,
@@ -2154,22 +2434,35 @@ const MessageBubble = memo(function MessageBubble({
   onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void>;
 }) {
   if (message.role === "assistant") {
-    // 设计决策：助手消息接近文档流，少卡片阴影，长回复优先阅读
+    // 设计决策：助手像 QQ 聊天记录里的文档流，少卡片阴影，长回复优先
     return (
-      <article className="border-l-2 border-line-strong/70 pl-4 sm:pl-5">
-        <div className="mb-1.5 flex items-baseline justify-between gap-3">
-          <span className="text-xs font-medium text-text-3">助手</span>
-          {message.state ? (
-            <span className="text-xs text-text-3">{stateLabel(message.state)}</span>
-          ) : null}
-        </div>
-        <div className="text-[15px] leading-8 text-text-1">
-          <div className="whitespace-pre-wrap break-words">
-            {message.text || (message.state === "streaming" ? "生成中…" : " ")}
+      <article className="flex gap-2.5">
+        <img
+          src="/qq2007/sidebar-avatar.png"
+          alt=""
+          aria-hidden
+          width={32}
+          height={32}
+          decoding="async"
+          loading="lazy"
+          className="mt-0.5 size-8 shrink-0 rounded-[3px] border border-line object-cover"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex items-baseline gap-2">
+            <span className="text-xs font-semibold text-accent">Mboo Bot</span>
+            {message.state ? <span className="text-[11px] text-text-3">{stateLabel(message.state)}</span> : null}
+            {message.createdAt ? (
+              <span className="text-[11px] text-text-3">{formatSessionTime(message.createdAt)}</span>
+            ) : null}
           </div>
-          {message.toolCalls && message.toolCalls.length > 0 ? (
-            <ToolTrace toolCalls={message.toolCalls} onResolveApproval={onResolveApproval} />
-          ) : null}
+          <div className="text-[15px] leading-8 text-text-1">
+            <div className="whitespace-pre-wrap break-words">
+              {message.text || (message.state === "streaming" ? "生成中…" : " ")}
+            </div>
+            {message.toolCalls && message.toolCalls.length > 0 ? (
+              <ToolTrace toolCalls={message.toolCalls} onResolveApproval={onResolveApproval} />
+            ) : null}
+          </div>
         </div>
       </article>
     );
@@ -2177,7 +2470,13 @@ const MessageBubble = memo(function MessageBubble({
 
   if (message.role === "user") {
     return (
-      <article className="ml-auto max-w-[min(34rem,100%)] rounded-[var(--radius-md)] bg-panel-muted px-3.5 py-2.5">
+      <article className="rounded-[var(--radius-sm)] border border-line bg-panel-muted/70 px-3 py-2">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="text-xs font-semibold text-text-2">我</span>
+          {message.createdAt ? (
+            <span className="text-[11px] text-text-3">{formatSessionTime(message.createdAt)}</span>
+          ) : null}
+        </div>
         <p className="whitespace-pre-wrap break-words text-sm leading-7 text-text-1">
           {message.text || " "}
         </p>
@@ -2186,12 +2485,10 @@ const MessageBubble = memo(function MessageBubble({
   }
 
   return (
-    <article className="mx-auto max-w-[min(34rem,100%)] rounded-[var(--radius-md)] border border-running/25 bg-running-soft px-4 py-3">
+    <article className="rounded-[var(--radius-sm)] border border-running/30 bg-running-soft px-3 py-2.5">
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-running">系统</span>
-        {message.state ? (
-          <span className="text-xs text-running">{stateLabel(message.state)}</span>
-        ) : null}
+        {message.state ? <span className="text-[11px] text-running">{stateLabel(message.state)}</span> : null}
       </div>
       <p className="whitespace-pre-wrap break-words text-sm leading-6 text-text-1">
         {message.text || " "}
@@ -2207,7 +2504,7 @@ const ToolTrace = memo(function ToolTrace({
   toolCalls: ToolCallView[];
   onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void>;
 }) {
-  // 最近 1–2 条（或运行中/待授权）默认展开，其余折叠（T3）
+  // 最近 1–2 条（或运行中/待授权）默认展开，其余折叠
   const recentIds = new Set(toolCalls.slice(-2).map((tool) => tool.id));
   const hasActive = toolCalls.some(
     (tool) =>
@@ -2217,8 +2514,8 @@ const ToolTrace = memo(function ToolTrace({
   );
 
   return (
-    <div className="mt-4 space-y-2">
-      <p className="text-xs font-medium text-text-3">工具轨迹 · {toolCalls.length}</p>
+    <div className="mt-3 space-y-1.5">
+      <p className="text-[11px] font-medium text-text-3">工具轨迹 · {toolCalls.length}</p>
       {toolCalls.map((toolCall) => {
         const toolLabel = getToolLabel(toolCall.toolName);
         const needsAttention =
@@ -2266,33 +2563,33 @@ const ToolTraceItem = memo(function ToolTraceItem({
   }, [initiallyOpen]);
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-line bg-canvas/70">
+    <div className="overflow-hidden rounded-[var(--radius-sm)] border border-line bg-panel">
       <button
-        className="flex w-full cursor-pointer select-none items-center gap-2 px-3 py-2 text-left text-xs font-medium text-text-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="flex w-full cursor-pointer select-none items-center gap-2 bg-panel-muted/60 px-2.5 py-1.5 text-left text-xs font-medium text-text-2"
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <span className="text-text-1">{toolLabel}</span>
-        <span className={`rounded-md px-1.5 py-0.5 text-xs ${toolStatusClassName(toolCall.status)}`}>
+        <span className="text-text-1">🔧 {toolLabel}</span>
+        <span className={`rounded-[2px] px-1.5 py-0.5 text-[11px] ${toolStatusClassName(toolCall.status)}`}>
           {toolStatusLabel(toolCall.status)}
         </span>
         {typeof toolCall.durationMs === "number" ? (
-          <span className="font-mono text-xs text-text-3">{toolCall.durationMs}ms</span>
+          <span className="font-mono text-[11px] text-text-3">{toolCall.durationMs}ms</span>
         ) : null}
       </button>
       {open ? (
-        <div className="space-y-2 border-t border-line px-3 py-3">
+        <div className="space-y-2 border-t border-line bg-panel-elevated px-2.5 py-2.5">
           {toolLabel !== toolCall.toolName ? (
-            <p className="font-mono text-xs text-text-3">{toolCall.toolName}</p>
+            <p className="font-mono text-[11px] text-text-3">{toolCall.toolName}</p>
           ) : null}
           {toolCall.argumentsText ? (
-            <pre className="console-scroll max-h-32 overflow-auto rounded-lg bg-panel-muted p-2 font-mono text-xs leading-5 text-text-2">
+            <pre className="console-scroll max-h-32 overflow-auto rounded-[3px] border border-line bg-panel-muted p-2 font-mono text-[11px] leading-5 text-text-2">
               {toolCall.argumentsText}
             </pre>
           ) : null}
           {toolCall.resultPreview ? (
-            <pre className="console-scroll max-h-40 overflow-auto rounded-lg bg-panel-muted p-2 font-mono text-xs leading-5 text-text-2">
+            <pre className="console-scroll max-h-40 overflow-auto rounded-[3px] border border-line bg-panel-muted p-2 font-mono text-[11px] leading-5 text-text-2">
               {toolCall.resultPreview}
             </pre>
           ) : null}
@@ -2300,7 +2597,7 @@ const ToolTraceItem = memo(function ToolTraceItem({
             <p className="break-words text-xs text-danger">{toolCall.errorMessage}</p>
           ) : null}
           {awaitingApproval ? (
-            <div className="rounded-[var(--radius-md)] border border-running/30 bg-running-soft p-3">
+            <div className="rounded-[var(--radius-sm)] border border-running/35 bg-running-soft p-2.5">
               <p className="text-sm font-medium text-running">
                 {toolCall.approvalTitle || "需要工具授权"}
               </p>
@@ -2309,14 +2606,14 @@ const ToolTraceItem = memo(function ToolTraceItem({
               ) : null}
               {toolCall.grantPath &&
               (toolCall.permissionType === "READ" || toolCall.permissionType === "WRITE") ? (
-                <div className="mt-2 rounded-lg border border-running/20 bg-panel/70 px-2.5 py-2">
-                  <p className="font-mono text-xs leading-5 text-text-1 break-all">{toolCall.grantPath}</p>
-                  <p className="mt-1 text-xs text-text-3">包含其子目录</p>
+                <div className="mt-2 rounded-[3px] border border-running/20 bg-panel-elevated px-2.5 py-2">
+                  <p className="break-all font-mono text-xs leading-5 text-text-1">{toolCall.grantPath}</p>
+                  <p className="mt-1 text-[11px] text-text-3">包含其子目录</p>
                 </div>
               ) : null}
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
                 <button
-                  className="rounded-lg bg-accent px-3 py-2 text-xs font-medium text-accent-fg disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  className="qq-button-primary px-3 py-1.5 text-xs disabled:opacity-50"
                   disabled={toolCall.status === "submitting"}
                   type="button"
                   onClick={() => void onResolveApproval(toolCall, "ALLOW_ONCE")}
@@ -2324,7 +2621,7 @@ const ToolTraceItem = memo(function ToolTraceItem({
                   仅允许本次
                 </button>
                 <button
-                  className="rounded-lg border border-ok/40 bg-panel px-3 py-2 text-xs font-medium text-ok disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ok/40"
+                  className="qq-button px-3 py-1.5 text-xs text-ok disabled:opacity-50"
                   disabled={toolCall.status === "submitting"}
                   type="button"
                   onClick={() => void onResolveApproval(toolCall, "ALLOW_SESSION")}
@@ -2332,7 +2629,7 @@ const ToolTraceItem = memo(function ToolTraceItem({
                   {sessionAllowLabel(toolCall.permissionType)}
                 </button>
                 <button
-                  className="rounded-lg border border-danger/40 bg-panel px-3 py-2 text-xs font-medium text-danger disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40"
+                  className="qq-button px-3 py-1.5 text-xs text-danger disabled:opacity-50"
                   disabled={toolCall.status === "submitting"}
                   type="button"
                   onClick={() => void onResolveApproval(toolCall, "DENY")}
@@ -2350,20 +2647,137 @@ const ToolTraceItem = memo(function ToolTraceItem({
 
 const StatusPill = memo(function StatusPill({
   status,
+  compact = false,
 }: {
   status: { label: string; className: string; running?: boolean };
+  /** 标题栏深色底上的紧凑态；中栏浅色面不要套 titlebar 皮肤 */
+  compact?: boolean;
 }) {
   return (
     <span
-      className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium ${status.className}`}
+      className={`inline-flex h-6 max-w-full items-center gap-1.5 rounded-[3px] border px-2 text-[11px] font-medium ${
+        compact ? "qq-titlebar-status min-w-0 shrink" : ""
+      } ${status.className}`}
       aria-live="polite"
+      title={status.label}
+      data-running={status.running ? "true" : undefined}
+      data-error={status.label === "异常" ? "true" : undefined}
     >
       <span
-        className={`size-1.5 rounded-full bg-current ${status.running ? "motion-safe:animate-pulse" : ""}`}
+        className={`qq-status-dot shrink-0 bg-current ${status.running ? "motion-safe:animate-pulse" : ""}`}
         aria-hidden
       />
-      {status.label}
+      <span className={`min-w-0 truncate ${compact ? "qq-titlebar-status-label" : ""}`}>{status.label}</span>
     </span>
+  );
+});
+
+// 宽屏右栏：只展示真实 Agent 状态，不造虚假社交数据
+const AgentInfoRail = memo(function AgentInfoRail({
+  modelName,
+  workspacePath,
+  workspaceStatusText,
+  recentSessions,
+  sessionPreviews,
+  sessionId,
+  pendingApprovalCount,
+  errorMessage,
+  isRunning,
+  onOpenSession,
+}: {
+  status?: { label: string; className: string; running?: boolean };
+  modelName: string;
+  workspacePath: string;
+  workspaceStatusText: string;
+  recentSessions: SessionInfo[];
+  sessionPreviews: Record<string, string>;
+  sessionId: string;
+  pendingApprovalCount: number;
+  errorMessage: string;
+  isRunning: boolean;
+  onNewSession?: () => void;
+  onRefresh?: () => void;
+  onOpenArchived?: () => void;
+  onOpenSession: (sessionId: string) => void;
+}) {
+  return (
+    <aside className="qq-right-rail qq-right-rail-desktop qq-scrollbar console-scroll hidden min-h-0 flex-col overflow-y-auto min-[1180px]:flex">
+      {/* 设计决策：立绘压缩为识别点缀，不再抢资料与通知的扫描空间 */}
+      <div className="qq-right-show" aria-hidden="true" />
+
+      <section className="border-b border-line/70">
+        <div className="qq-right-label-fallback" data-label="profile">
+          当前上下文
+        </div>
+        <div className="space-y-1 px-2.5 py-2">
+          <p className="truncate text-sm font-semibold text-text-1">Mboo Bot</p>
+          <p className="truncate text-[11px] text-text-3" title={modelName || "模型在中栏配置"}>
+            模型：{modelName.trim() || "未配置"}
+          </p>
+          <p className="truncate text-[11px] text-text-3" title={workspacePath || workspaceStatusText}>
+            工作区：{workspaceBasename(workspacePath) || workspaceStatusText}
+          </p>
+        </div>
+      </section>
+
+      {recentSessions.length > 0 ? (
+        <section className="border-b border-line/70">
+          <div className="qq-right-label-fallback" data-label="recent">
+            最近会话
+          </div>
+          <div className="space-y-0.5 p-1.5">
+            {recentSessions.map((session) => {
+              const selected = session.id === sessionId;
+              return (
+                <button
+                  key={session.id}
+                  className={`flex w-full items-center gap-2 rounded-[3px] px-1.5 py-1.5 text-left ${
+                    selected ? "qq-selected-row" : "qq-session-row"
+                  }`}
+                  type="button"
+                  onClick={() => onOpenSession(session.id)}
+                >
+                  <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={24} height={24} decoding="async" loading="lazy" className="size-6 rounded-[2px] border border-line object-cover" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-text-1">
+                      {sessionListTitle(session, sessionPreviews[session.id])}
+                    </span>
+                    <span className="block truncate text-[11px] text-text-3">
+                      {formatSessionTime(session.updatedAt)}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {pendingApprovalCount > 0 || errorMessage || isRunning ? (
+        <section>
+          <div className="qq-right-label-fallback" data-label="notice">
+            通知中心
+          </div>
+          <div className="space-y-1.5 p-2 text-xs text-text-2">
+            {pendingApprovalCount > 0 ? (
+              <p className="rounded-[3px] border border-running/30 bg-running-soft px-2 py-1.5 text-running">
+                待授权工具：{pendingApprovalCount}
+              </p>
+            ) : null}
+            {errorMessage ? (
+              <p className="rounded-[3px] border border-danger/30 bg-danger-soft px-2 py-1.5 text-danger">
+                最近错误：{errorMessage}
+              </p>
+            ) : null}
+            {isRunning ? (
+              <p className="rounded-[3px] border border-line bg-panel-elevated px-2 py-1.5">
+                当前状态：运行中
+              </p>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+    </aside>
   );
 });
 
@@ -2371,21 +2785,21 @@ function getStatusView(state: ConnectionState, activeTurnId: string | null) {
   if (state === "running") {
     return {
       label: activeTurnId ? "运行中" : "连接中",
-      className: "border-running/30 bg-running-soft text-running",
+      className: "border-running/35 bg-running-soft text-running",
       running: true,
     };
   }
   if (state === "error") {
     return {
       label: "异常",
-      className: "border-danger/30 bg-danger-soft text-danger",
+      className: "border-danger/35 bg-danger-soft text-danger",
       running: false,
     };
   }
-  // 空闲用中性色：绿只留给真正成功态，避免「空闲=成功」误读
+  // 空闲用中性蓝灰，避免「空闲=成功」误读
   return {
     label: "空闲",
-    className: "border-line bg-panel-muted text-text-2",
+    className: "border-line bg-panel-elevated text-text-2",
     running: false,
   };
 }
@@ -2688,6 +3102,7 @@ async function readApiData<T>(response: Response) {
 }
 
 async function readErrorMessage(response: Response) {
+  // 保留状态码作兜底；列表层再 humanize 成人话
   const fallback = `请求失败（${response.status}）`;
   const text = await response.text().catch(() => "");
 
@@ -2711,6 +3126,36 @@ function toErrorMessage(error: unknown) {
     return error.message;
   }
   return "会话请求失败";
+}
+
+// 列表失败文案：把 HTTP 码翻译成可行动的人话
+function humanizeSessionListError(error: unknown) {
+  const message = toErrorMessage(error);
+  const lower = message.toLowerCase();
+  if (
+    message.includes("请求失败（500）") ||
+    message.includes("请求失败（502）") ||
+    message.includes("请求失败（503）") ||
+    message.includes("请求失败（504）") ||
+    /50[0-4]/.test(message)
+  ) {
+    return "无法加载会话列表：后端暂时不可用";
+  }
+  if (
+    lower.includes("failed to fetch") ||
+    lower.includes("network") ||
+    lower.includes("load failed") ||
+    message.includes("网络")
+  ) {
+    return "无法连接会话服务，请确认后端已启动";
+  }
+  if (message.includes("请求失败（404）") || /404/.test(message)) {
+    return "会话接口不存在，请检查前后端代理配置";
+  }
+  if (message.startsWith("无法")) {
+    return message;
+  }
+  return `无法加载会话列表：${message}`;
 }
 
 function saveLocalValue(key: string, value: string) {
