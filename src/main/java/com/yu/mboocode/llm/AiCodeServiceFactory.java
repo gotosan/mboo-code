@@ -5,10 +5,10 @@ import com.yu.mboocode.config.Setting;
 import com.yu.mboocode.llm.listener.MyAiServiceCompletedListener;
 import com.yu.mboocode.llm.listener.MyChatModelListener;
 import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
-import com.yu.mboocode.llm.tool.FileWritePermissionDemoTool;
 import com.yu.mboocode.llm.tool.PermissionToolExecutor;
-import com.yu.mboocode.llm.tool.WeatherTool;
+import com.yu.mboocode.llm.tool.file.FileToolRequestValidator;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionRegistry;
+import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.agent.tool.ToolSpecifications;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
@@ -20,12 +20,13 @@ import dev.langchain4j.model.openai.OpenAiResponsesStreamingChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.tool.AiServiceTool;
 import jakarta.annotation.Resource;
+import org.springframework.aop.support.AopUtils;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 @Configuration
 public class AiCodeServiceFactory {
@@ -39,6 +40,10 @@ public class AiCodeServiceFactory {
     private ToolApprovalService toolApprovalService;
     @Resource
     private ToolPermissionRegistry toolPermissionRegistry;
+    @Resource
+    private FileToolRequestValidator fileToolRequestValidator;
+    @Resource
+    private ApplicationContext applicationContext;
 
     @Bean
     public ChatMemoryProvider chatMemoryProvider() {
@@ -68,9 +73,7 @@ public class AiCodeServiceFactory {
                 .listeners(List.of(new MyChatModelListener()))
                 .build();
 
-        List<AiServiceTool> tools = new ArrayList<>();
-        tools.add(buildPermissionTool(new WeatherTool(), WeatherTool.class, "getWeather", String.class));
-        tools.add(buildPermissionTool(new FileWritePermissionDemoTool(), FileWritePermissionDemoTool.class, "demoWriteFile", String.class));
+        List<AiServiceTool> tools = discoverTools();
 
         return AiServices
                 .builder(AiCodeService.class)
@@ -82,16 +85,31 @@ public class AiCodeServiceFactory {
                 .build();
     }
 
-    private AiServiceTool buildPermissionTool(Object toolInstance, Class<?> toolClass, String methodName, Class<?>... parameterTypes) {
-        Method method;
-        try {
-            method = toolClass.getDeclaredMethod(methodName, parameterTypes);
-        } catch (NoSuchMethodException e) {
-            throw new IllegalStateException("工具定义无效: " + toolClass.getSimpleName() + "#" + methodName, e);
+    private List<AiServiceTool> discoverTools() {
+        List<ToolMethod> methods = new ArrayList<>();
+        Set<Object> seenBeans = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Object bean : applicationContext.getBeansOfType(Object.class).values()) {
+            if (!seenBeans.add(bean)) continue;
+            Class<?> targetClass = AopUtils.getTargetClass(bean);
+            for (Method method : targetClass.getMethods()) {
+                Tool tool = method.getAnnotation(Tool.class);
+                if (tool == null) continue;
+                String toolName = tool.name() == null || tool.name().isBlank() ? method.getName() : tool.name();
+                methods.add(new ToolMethod(toolName, bean, method));
+            }
         }
+        methods.sort(Comparator.comparing(ToolMethod::toolName).thenComparing(item -> item.method().toGenericString()));
+        return methods.stream().map(this::buildPermissionTool).toList();
+    }
+
+    private AiServiceTool buildPermissionTool(ToolMethod toolMethod) {
+        Method method = toolMethod.method();
         toolPermissionRegistry.register(method);
         ToolSpecification specification = ToolSpecifications.toolSpecificationFrom(method);
-        PermissionToolExecutor executor = new PermissionToolExecutor(toolInstance, method, toolApprovalService);
+        PermissionToolExecutor executor = new PermissionToolExecutor(toolMethod.bean(), method, toolApprovalService, fileToolRequestValidator);
         return AiServiceTool.builder().toolSpecification(specification).toolExecutor(executor).build();
+    }
+
+    private record ToolMethod(String toolName, Object bean, Method method) {
     }
 }

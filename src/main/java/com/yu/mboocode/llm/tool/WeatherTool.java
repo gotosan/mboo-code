@@ -15,7 +15,9 @@ import dev.langchain4j.agent.tool.Tool;
 import java.math.BigDecimal;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import org.springframework.stereotype.Component;
 
+@Component
 public class WeatherTool {
     private static final int REQUEST_TIMEOUT = 5000;
     private static final String GEOCODING_API = "https://geocoding-api.open-meteo.com/v1/search";

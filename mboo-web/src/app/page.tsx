@@ -44,9 +44,21 @@ const REASONING_OPTIONS = [
 ];
 
 const TOOL_LABELS: Record<string, string> = {
+  glob_files: "查找文件",
+  search_text: "搜索文本",
+  read_file: "读取文件",
+  edit_file: "编辑文件",
+  write_file: "写入文件",
   getWeather: "查询天气",
-  demoWriteFile: "演示写入权限",
 };
+
+const FILE_TOOL_NAMES = new Set([
+  "glob_files",
+  "search_text",
+  "read_file",
+  "edit_file",
+  "write_file",
+]);
 
 /** 新建会话在拿到后端 sessionId 前，消息暂存用的本地键 */
 const PENDING_SESSION_KEY = "__pending__";
@@ -61,7 +73,10 @@ type ToolCallView = {
   toolName: string;
   status: ToolCallStatus;
   argumentsText: string;
+  parsedArguments?: Record<string, unknown>;
+  pathText?: string;
   resultPreview: string;
+  errorCode?: string;
   errorMessage: string;
   durationMs?: number;
   createdAt?: string;
@@ -2565,17 +2580,27 @@ const ToolTraceItem = memo(function ToolTraceItem({
   return (
     <div className="overflow-hidden rounded-[var(--radius-sm)] border border-line bg-panel">
       <button
-        className="flex w-full cursor-pointer select-none items-center gap-2 bg-panel-muted/60 px-2.5 py-1.5 text-left text-xs font-medium text-text-2"
+        className="flex w-full min-w-0 cursor-pointer select-none items-center gap-2 bg-panel-muted/60 px-2.5 py-1.5 text-left text-xs font-medium text-text-2"
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <span className="text-text-1">🔧 {toolLabel}</span>
-        <span className={`rounded-[2px] px-1.5 py-0.5 text-[11px] ${toolStatusClassName(toolCall.status)}`}>
+        <span className="shrink-0 text-text-1">🔧 {toolLabel}</span>
+        {toolCall.pathText ? (
+          <span
+            className="min-w-0 flex-1 truncate font-mono text-[11px] font-normal text-text-3"
+            title={toolCall.pathText}
+          >
+            · {toolCall.pathText}
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1" />
+        )}
+        <span className={`shrink-0 rounded-[2px] px-1.5 py-0.5 text-[11px] ${toolStatusClassName(toolCall.status)}`}>
           {toolStatusLabel(toolCall.status)}
         </span>
         {typeof toolCall.durationMs === "number" ? (
-          <span className="font-mono text-[11px] text-text-3">{toolCall.durationMs}ms</span>
+          <span className="shrink-0 font-mono text-[11px] text-text-3">{toolCall.durationMs}ms</span>
         ) : null}
       </button>
       {open ? (
@@ -2584,17 +2609,24 @@ const ToolTraceItem = memo(function ToolTraceItem({
             <p className="font-mono text-[11px] text-text-3">{toolCall.toolName}</p>
           ) : null}
           {toolCall.argumentsText ? (
-            <pre className="console-scroll max-h-32 overflow-auto rounded-[3px] border border-line bg-panel-muted p-2 font-mono text-[11px] leading-5 text-text-2">
-              {toolCall.argumentsText}
-            </pre>
+            <CopyableToolText
+              ariaLabel="复制工具参数"
+              text={toolCall.argumentsText}
+              className="max-h-32"
+            />
           ) : null}
           {toolCall.resultPreview ? (
-            <pre className="console-scroll max-h-40 overflow-auto rounded-[3px] border border-line bg-panel-muted p-2 font-mono text-[11px] leading-5 text-text-2">
-              {toolCall.resultPreview}
-            </pre>
+            <ToolResultPreview toolName={toolCall.toolName} text={toolCall.resultPreview} />
           ) : null}
-          {toolCall.errorMessage ? (
-            <p className="break-words text-xs text-danger">{toolCall.errorMessage}</p>
+          {toolCall.errorMessage || toolCall.errorCode ? (
+            <div className="space-y-1">
+              {toolCall.errorMessage ? (
+                <p className="break-words text-xs text-danger">{toolCall.errorMessage}</p>
+              ) : null}
+              {toolCall.errorCode ? (
+                <p className="font-mono text-[11px] text-text-3">{toolCall.errorCode}</p>
+              ) : null}
+            </div>
           ) : null}
           {awaitingApproval ? (
             <div className="rounded-[var(--radius-sm)] border border-running/35 bg-running-soft p-2.5">
@@ -2642,6 +2674,98 @@ const ToolTraceItem = memo(function ToolTraceItem({
         </div>
       ) : null}
     </div>
+  );
+});
+
+const CopyableToolText = memo(function CopyableToolText({
+  text,
+  ariaLabel,
+  className = "max-h-40",
+}: {
+  text: string;
+  ariaLabel: string;
+  className?: string;
+}) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+    window.setTimeout(() => setCopyState("idle"), 1600);
+  }, [text]);
+
+  return (
+    <div className="relative overflow-hidden rounded-[3px] border border-line bg-panel-muted">
+      <button
+        className="absolute right-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded-[3px] border border-line bg-panel-elevated px-1.5 py-1 text-[10px] text-text-3 hover:text-text-1"
+        type="button"
+        aria-label={ariaLabel}
+        onClick={() => void copy()}
+      >
+        <Copy className="size-3" aria-hidden />
+        {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}
+      </button>
+      <pre className={`console-scroll overflow-auto p-2 pr-16 font-mono text-[11px] leading-5 text-text-2 ${className}`}>
+        {text}
+      </pre>
+    </div>
+  );
+});
+
+const ToolResultPreview = memo(function ToolResultPreview({
+  toolName,
+  text,
+}: {
+  toolName: string;
+  text: string;
+}) {
+  const showDiff = (toolName === "edit_file" || toolName === "write_file") && hasDiffContent(text);
+
+  if (!showDiff) {
+    return <CopyableToolText ariaLabel="复制工具结果" text={text} />;
+  }
+
+  return (
+    <div className="relative overflow-hidden rounded-[3px] border border-line bg-panel-muted">
+      <DiffCopyButton text={text} />
+      <div className="console-scroll max-h-56 overflow-auto py-2 pr-16 font-mono text-[11px] leading-5 text-text-2">
+        {text.split("\n").map((line, index) => (
+          <div key={`${index}_${line.slice(0, 16)}`} className={`min-w-max whitespace-pre px-2 ${diffLineClassName(line)}`}>
+            {line || " "}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+const DiffCopyButton = memo(function DiffCopyButton({ text }: { text: string }) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+    window.setTimeout(() => setCopyState("idle"), 1600);
+  }, [text]);
+
+  return (
+    <button
+      className="absolute right-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded-[3px] border border-line bg-panel-elevated px-1.5 py-1 text-[10px] text-text-3 hover:text-text-1"
+      type="button"
+      aria-label="复制工具结果"
+      onClick={() => void copy()}
+    >
+      <Copy className="size-3" aria-hidden />
+      {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}
+    </button>
   );
 });
 
@@ -2824,6 +2948,92 @@ function payloadDisplayText(value: unknown) {
   }
 }
 
+function parseToolArguments(toolName: string, value: unknown) {
+  const rawText = payloadDisplayText(value);
+  if (!rawText) {
+    return { argumentsText: "" };
+  }
+
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return { argumentsText: rawText };
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { argumentsText: rawText };
+  }
+
+  const parsedArguments = sanitizeToolArguments(toolName, parsed as Record<string, unknown>);
+  return {
+    argumentsText: JSON.stringify(parsedArguments, null, 2),
+    parsedArguments,
+    pathText:
+      FILE_TOOL_NAMES.has(toolName) && typeof parsedArguments.path === "string"
+        ? parsedArguments.path
+        : undefined,
+  };
+}
+
+function sanitizeToolArguments(toolName: string, argumentsObject: Record<string, unknown>) {
+  if (toolName === "edit_file") {
+    const { oldText, newText, ...safe } = argumentsObject;
+    return {
+      ...safe,
+      oldTextLength:
+        typeof safe.oldTextLength === "number"
+          ? safe.oldTextLength
+          : typeof oldText === "string"
+            ? oldText.length
+            : 0,
+      newTextLength:
+        typeof safe.newTextLength === "number"
+          ? safe.newTextLength
+          : typeof newText === "string"
+            ? newText.length
+            : 0,
+    };
+  }
+  if (toolName === "write_file") {
+    const { content, ...safe } = argumentsObject;
+    return {
+      ...safe,
+      contentLength:
+        typeof safe.contentLength === "number"
+          ? safe.contentLength
+          : typeof content === "string"
+            ? content.length
+            : 0,
+    };
+  }
+  return argumentsObject;
+}
+
+function hasDiffContent(text: string) {
+  return text.split("\n").some((line) => line.startsWith("@@") || line.startsWith("--- "));
+}
+
+function diffLineClassName(line: string) {
+  if (line.includes("已截断，省略")) {
+    return "bg-panel-elevated text-text-3";
+  }
+  if (line.startsWith("--- ") || line.startsWith("+++ ")) {
+    return "bg-running-soft text-running";
+  }
+  if (line.startsWith("@@")) {
+    return "bg-running-soft/60 text-running";
+  }
+  if (line.startsWith("+")) {
+    return "bg-ok/10 text-ok";
+  }
+  if (line.startsWith("-")) {
+    return "bg-danger-soft text-danger";
+  }
+  return "text-text-2";
+}
+
 function isToolCallEvent(event: SessionEvent): event is ToolCallEvent {
   return (
     event.type === "TOOL_CALL_STARTED" ||
@@ -2835,6 +3045,7 @@ function isToolCallEvent(event: SessionEvent): event is ToolCallEvent {
 function toToolCallView(event: ToolCallEvent): ToolCallView {
   const { payload } = event;
   const toolName = payload.toolName || "unknown_tool";
+  const parsed = parseToolArguments(toolName, payload.arguments);
 
   if (event.type === "TOOL_APPROVAL_REQUIRED") {
     return {
@@ -2842,7 +3053,9 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
       turnId: event.turnId,
       toolName,
       status: "waiting_approval",
-      argumentsText: payloadDisplayText(payload.arguments),
+      argumentsText: parsed.argumentsText,
+      parsedArguments: parsed.parsedArguments,
+      pathText: parsed.pathText,
       resultPreview: "",
       errorMessage: "",
       createdAt: event.createdAt,
@@ -2860,8 +3073,11 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
     turnId: event.turnId,
     toolName,
     status: started ? "started" : event.payload.status,
-    argumentsText: payloadDisplayText(payload.arguments),
+    argumentsText: parsed.argumentsText,
+    parsedArguments: parsed.parsedArguments,
+    pathText: parsed.pathText,
     resultPreview: started ? "" : payloadDisplayText(event.payload.resultPreview),
+    errorCode: started ? undefined : event.payload.errorCode || undefined,
     errorMessage: started ? "" : event.payload.errorMessage || "",
     durationMs: started ? undefined : event.payload.durationMs,
     createdAt: event.createdAt,

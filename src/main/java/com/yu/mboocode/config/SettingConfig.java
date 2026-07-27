@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 @Configuration
 public class SettingConfig {
@@ -26,7 +27,7 @@ public class SettingConfig {
             writeDefaultSetting(settingPath, Setting.defaultSetting());
         }
 
-        return readSetting(settingPath);
+        return mergeDefaults(readSetting(settingPath));
     }
 
     private void writeDefaultSetting(Path settingPath, Setting setting) {
@@ -51,5 +52,18 @@ public class SettingConfig {
         } catch (IOException e) {
             throw new IllegalStateException("读取配置文件失败: " + settingPath, e);
         }
+    }
+
+    private Setting mergeDefaults(Setting setting) {
+        Setting defaults = Setting.defaultSetting();
+        List<String> ignoredPatterns = setting.getIgnoredFilePatterns() == null ? Setting.defaultIgnoredFilePatterns() : setting.getIgnoredFilePatterns();
+        List<String> ignoredExceptions = setting.getIgnoredFilePatternExceptions() == null ? Setting.defaultIgnoredFilePatternExceptions() : setting.getIgnoredFilePatternExceptions();
+        return Setting.builder()
+                .provider(setting.getProvider() == null ? defaults.getProvider() : setting.getProvider())
+                .apiKey(setting.getApiKey() == null ? defaults.getApiKey() : setting.getApiKey())
+                .baseUrl(setting.getBaseUrl() == null ? defaults.getBaseUrl() : setting.getBaseUrl())
+                .ignoredFilePatterns(ignoredPatterns)
+                .ignoredFilePatternExceptions(ignoredExceptions)
+                .build();
     }
 }

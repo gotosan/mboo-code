@@ -7,6 +7,7 @@ import com.alibaba.fastjson2.JSON;
 import com.yu.mboocode.agent.model.payload.*;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.AiCodeService;
+import com.yu.mboocode.llm.tool.event.ToolEventFormatterRegistry;
 import com.yu.mboocode.agent.base.TurnProcess;
 import com.yu.mboocode.agent.enums.SessionEventSource;
 import com.yu.mboocode.agent.enums.SessionEventType;
@@ -49,6 +50,8 @@ public class TurnService {
     private ToolApprovalService toolApprovalService;
     @Resource
     private ChatMemoryProvider chatMemoryProvider;
+    @Resource
+    private ToolEventFormatterRegistry toolEventFormatterRegistry;
 
     //todo 取消竞态处理 cas
 
@@ -186,28 +189,29 @@ public class TurnService {
                                                 .messageId(assistantMessageId)
                                                 .toolCallId(request.id())
                                                 .toolName(request.name())
-                                                .arguments(request.arguments())
+                                                .arguments(toolEventFormatterRegistry.formatArguments(request.name(), request.arguments()))
                                                 .build()
                                 ));
-                        boolean waitingApproval = toolApprovalService.requestIfNeeded(sessionTurn, assistantMessageId, request, sink::next, toolStartedEmitter);
-                        if (!waitingApproval) {
+                        ToolApprovalService.ApprovalRequestStatus approvalStatus = toolApprovalService.requestIfNeeded(sessionTurn, assistantMessageId, request, sink::next, toolStartedEmitter);
+                        if (approvalStatus == ToolApprovalService.ApprovalRequestStatus.ALLOWED) {
                             toolStartedEmitter.run();
                         }
                     })
                     .onToolExecuted(toolExecution -> {
                         ToolExecutionRequest request = toolExecution.request();
                         boolean failed = toolExecution.hasFailed();
-                        String resultPreview = toolResultPreview(toolExecution);
+                        String resultText = toolResultText(toolExecution);
+                        ToolEventFormatterRegistry.EndedFormat endedFormat = toolEventFormatterRegistry.formatEnded(request.name(), resultText, failed);
                         ToolCallEndedPayload.ToolCallStatus status = failed ? ToolCallEndedPayload.ToolCallStatus.FAILED : ToolCallEndedPayload.ToolCallStatus.COMPLETED;
                         ToolCallEndedPayload payload = ToolCallEndedPayload.builder()
                                 .messageId(assistantMessageId)
                                 .toolCallId(request.id())
                                 .toolName(request.name())
-                                .arguments(request.arguments())
+                                .arguments(toolEventFormatterRegistry.formatArguments(request.name(), request.arguments()))
                                 .status(status)
-                                .resultPreview(resultPreview)
-                                .errorCode(failed ? "TOOL_EXECUTION_FAILED" : null)
-                                .errorMessage(failed ? resultPreview : null)
+                                .resultPreview(endedFormat.resultPreview())
+                                .errorCode(failed ? StrUtil.blankToDefault(endedFormat.errorCode(), "TOOL_EXECUTION_FAILED") : null)
+                                .errorMessage(failed ? StrUtil.blankToDefault(endedFormat.errorMessage(), endedFormat.resultPreview()) : null)
                                 .durationMs(toolExecution.duration().toMillis())
                                 .build();
 
@@ -300,35 +304,23 @@ public class TurnService {
         }
     }
 
-    private String toolResultPreview(ToolExecution toolExecution) {
-        //todo 返回结构处理
+    private String toolResultText(ToolExecution toolExecution) {
         try {
             Object resultObject = toolExecution.resultObject();
             if (resultObject instanceof CharSequence text) {
-                return truncateToolText(text.toString());
+                return text.toString();
             }
             if (resultObject != null) {
-                return truncateToolText(JSON.toJSONString(resultObject));
+                return JSON.toJSONString(resultObject);
             }
         } catch (RuntimeException ignored) {
             // 部分工具只提供文本结果，继续尝试读取 result()。
         }
 
         try {
-            return truncateToolText(toolExecution.result());
+            return toolExecution.result();
         } catch (RuntimeException e) {
             return "";
         }
-    }
-
-    private String truncateToolText(String text) {
-        if (text == null) {
-            return "";
-        }
-        int maxLength = 2000;
-        if (text.length() <= maxLength) {
-            return text;
-        }
-        return text.substring(0, maxLength) + "\n...（结果已截断）";
     }
 }

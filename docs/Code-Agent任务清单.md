@@ -1,11 +1,13 @@
 # Code Agent 任务清单
 
 ## 当前
-- 新增工具
 - 上下文压缩
 - 完成todo
 - mcp
 - skill
+
+## 已完成
+- 新增文件工具：`glob_files`、`search_text`、`read_file`、`edit_file`、`write_file`
 
 ## 目标定位
 

@@ -2,10 +2,10 @@
 
 ## 1. 文档状态
 
-- 状态：设计已确认，待实施。
-- 更新时间：2026-07-24。
+- 状态：已实施。
+- 更新时间：2026-07-27。
 - 适用范围：当前 `mboo-code` 本地 Code Agent 后端。
-- 工具设计来源：`docs/Code-Agent工具与权限设计.md`。
+- 工具设计来源：`docs/工具与工作区权限方案.md`。
 - 权限设计基线：现有 `ToolPermissionType`、`ToolApprovalService`、`PermissionToolExecutor`、`FilePermissionUtil` 和会话权限持久化实现。
 - 本文只描述后端设计。前端授权卡片、工具状态和结果展示另行编写前端文档。
 
@@ -794,4 +794,3 @@ DTO、record 和枚举按项目要求添加 Swagger `@Schema` 注解。函数名
 - `docs/工具与工作区权限方案.md` 继续描述当前已经实现的权限内核。
 - 本文是五个文件工具接入现有权限内核的后端实施设计，已确认结论以本文为准。
 - 前端交互另行编写独立文档。
-

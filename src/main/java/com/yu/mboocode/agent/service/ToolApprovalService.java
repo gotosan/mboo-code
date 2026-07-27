@@ -21,6 +21,9 @@ import com.yu.mboocode.llm.tool.permission.ToolPermissionErrorCode;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionRegistry;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionSpec;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
+import com.yu.mboocode.llm.tool.event.ToolEventFormatterRegistry;
+import com.yu.mboocode.llm.tool.file.FileToolException;
+import com.yu.mboocode.llm.tool.file.FileToolRequestValidator;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -46,6 +49,10 @@ public class ToolApprovalService {
     private SessionService sessionService;
     @Resource
     private ToolPermissionRegistry toolPermissionRegistry;
+    @Resource
+    private FileToolRequestValidator fileToolRequestValidator;
+    @Resource
+    private ToolEventFormatterRegistry toolEventFormatterRegistry;
 
     /** 按 approvalId 索引的待处理授权。 */
     private final Map<String, PendingApproval> pendingByApprovalId = new ConcurrentHashMap<>();
@@ -53,14 +60,21 @@ public class ToolApprovalService {
     private final Map<String, PendingApproval> pendingByToolCall = new ConcurrentHashMap<>();
 
     /**
-     * 工具执行前检查权限：不足时登记待授权、发出 TOOL_APPROVAL_REQUIRED 事件并返回 true；
-     * 已满足权限或评估失败时返回 false（错误交由 awaitAuthorization 返回明确错误码）。
+     * 工具执行前检查权限：返回允许、等待授权或参数/路径无效三种状态。
      */
-    public boolean requestIfNeeded(SessionTurn sessionTurn, String messageId, ToolExecutionRequest request, Consumer<SessionEvent> eventEmitter, Runnable toolStartedEmitter) {
+    public ApprovalRequestStatus requestIfNeeded(SessionTurn sessionTurn, String messageId, ToolExecutionRequest request, Consumer<SessionEvent> eventEmitter, Runnable toolStartedEmitter) {
+        try {
+            fileToolRequestValidator.validate(sessionTurn.sessionId(), request);
+        } catch (FileToolException e) {
+            return ApprovalRequestStatus.INVALID;
+        }
         ToolPermissionSpec spec = toolPermissionRegistry.get(request.name());
         PermissionCheck check = evaluate(sessionTurn.sessionId(), request, spec);
-        if (check.status() == PermissionCheck.CheckStatus.ALLOWED || check.status() == PermissionCheck.CheckStatus.ERROR) {
-            return false;
+        if (check.status() == PermissionCheck.CheckStatus.ALLOWED) {
+            return ApprovalRequestStatus.ALLOWED;
+        }
+        if (check.status() == PermissionCheck.CheckStatus.ERROR) {
+            return ApprovalRequestStatus.INVALID;
         }
 
         String approvalId = IdUtil.getSnowflakeNextIdStr();
@@ -77,7 +91,7 @@ public class ToolApprovalService {
         String toolCallKey = toolCallKey(sessionTurn.sessionId(), request.id());
         PendingApproval existing = pendingByToolCall.putIfAbsent(toolCallKey, pending);
         if (existing != null) {
-            return true;
+            return ApprovalRequestStatus.WAITING;
         }
         pendingByApprovalId.put(approvalId, pending);
 
@@ -92,7 +106,7 @@ public class ToolApprovalService {
                         .approvalId(approvalId)
                         .toolCallId(request.id())
                         .toolName(request.name())
-                        .arguments(request.arguments())
+                        .arguments(toolEventFormatterRegistry.formatArguments(request.name(), request.arguments()))
                         .title(buildTitle(spec, check.grantPath()))
                         .description(buildDescription(spec, check.grantPath()))
                         .permissionType(spec.permissionType())
@@ -100,7 +114,7 @@ public class ToolApprovalService {
                         .build()
         );
         eventEmitter.accept(event);
-        return true;
+        return ApprovalRequestStatus.WAITING;
     }
 
     /**
@@ -362,6 +376,12 @@ public class ToolApprovalService {
             throw new ServiceException("工具调用 ID 不能为空");
         }
         return sessionId + ":" + toolCallId;
+    }
+
+    public enum ApprovalRequestStatus {
+        ALLOWED,
+        WAITING,
+        INVALID
     }
 }
 

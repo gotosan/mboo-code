@@ -14,6 +14,8 @@
 - 事件类型与 Payload Java 类型由 `SessionEventType` 一一绑定，追加和读取时都会校验类型匹配。
 - `ASSISTANT_MESSAGE_DELTA` 只通过 SSE 推送，不写入 JSONL。
 - `TOOL_APPROVAL_REQUIRED` 会写入 JSONL，但可处理的待授权上下文只保存在当前应用进程内。
+- 工具事件在写入 JSONL 前统一完成参数脱敏和结果格式化，写入 JSONL 与通过 SSE 推送的是同一份 `SessionEvent` 内容。
+- 普通工具结果摘要最多 2,000 字符，五个文件工具最多 4,000 字符；前端历史回放不再进行第二次内容截断。
 - 旧版事件数据整体不保证兼容，也不提供迁移。
 
 ## 事件集合

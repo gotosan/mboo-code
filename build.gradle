@@ -39,6 +39,7 @@ dependencies {
     implementation 'org.xerial:sqlite-jdbc:3.53.2.0'
 
     implementation("cn.hutool:hutool-all:5.8.46")
+    implementation 'io.github.java-diff-utils:java-diff-utils:4.15'
 }
 
 tasks.named('test') {

@@ -354,9 +354,18 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
 
     private String normalizeWorkspacePath(String workspacePath) {
         try {
-            return Path.of(workspacePath).toAbsolutePath().normalize().toString();
+            Path path = Path.of(workspacePath).toAbsolutePath().normalize();
+            if (!Files.exists(path)) {
+                throw new ServiceException("工作区路径不存在");
+            }
+            if (!Files.isDirectory(path)) {
+                throw new ServiceException("工作区路径不是目录");
+            }
+            return path.toRealPath().toString();
         } catch (InvalidPathException e) {
             throw new ServiceException("工作区路径格式错误");
+        } catch (IOException e) {
+            throw new ServiceException("无法解析工作区真实路径");
         }
     }
 }

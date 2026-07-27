@@ -116,7 +116,7 @@
 | `messageId` | `String` | 是 | 所属助手消息 ID |
 | `toolCallId` | `String` | 是 | 单次工具调用 ID |
 | `toolName` | `String` | 是 | 稳定工具名称 |
-| `arguments` | `String` | 是 | 工具参数 JSON 字符串 |
+| `arguments` | `String` | 是 | 工具参数 JSON 字符串；文件工具使用格式化后的安全参数摘要，`edit_file` 和 `write_file` 不记录正文内容 |
 
 不需要授权或已有会话权限时，该事件在工具执行前直接产生。需要授权时，只有用户允许后才产生；拒绝、超时或授权校验失败时可能没有对应的 `TOOL_CALL_STARTED`。
 
@@ -128,7 +128,7 @@
 | `approvalId` | `String` | 是 | 授权请求 ID，用于调用授权处理接口 |
 | `toolCallId` | `String` | 是 | 待授权的工具调用 ID |
 | `toolName` | `String` | 是 | 待授权的工具名称 |
-| `arguments` | `String` | 是 | 工具参数 JSON 字符串 |
+| `arguments` | `String` | 是 | 工具参数 JSON 字符串；与对应开始事件使用同一份安全参数摘要 |
 | `title` | `String` | 是 | 授权卡片标题 |
 | `description` | `String` | 是 | 授权卡片说明 |
 | `permissionType` | `String` | 是 | 当前为 `TOOL`、`READ` 或 `WRITE`；`NONE` 不会触发授权事件 |
@@ -162,11 +162,11 @@ Content-Type: application/json
 | `messageId` | `String` | 是 | 所属助手消息 ID |
 | `toolCallId` | `String` | 是 | 单次工具调用 ID |
 | `toolName` | `String` | 是 | 稳定工具名称 |
-| `arguments` | `String` | 是 | 工具参数 JSON 字符串 |
+| `arguments` | `String` | 是 | 工具参数 JSON 字符串；文件工具使用格式化后的安全参数摘要 |
 | `status` | `String` | 是 | `completed` 或 `failed` |
-| `resultPreview` | `String` | 否 | 工具结果摘要；正文最多保留前 2000 个字符，超长时附加截断提示 |
-| `errorCode` | `String` | 否 | 当前失败时统一为 `TOOL_EXECUTION_FAILED` |
-| `errorMessage` | `String` | 否 | 失败时与 `resultPreview` 相同的错误摘要 |
+| `resultPreview` | `String` | 否 | 工具结果摘要；普通工具最多 2,000 字符，五个文件工具最多 4,000 字符，超限时保留头尾并插入省略字符数提示 |
+| `errorCode` | `String` | 否 | 失败时优先记录真实文件工具或权限错误码；无法提取明确错误码时回退为 `TOOL_EXECUTION_FAILED` |
+| `errorMessage` | `String` | 否 | 面向用户的错误说明；可与 `resultPreview` 不同 |
 | `durationMs` | `Long` | 否 | 工具调用耗时，单位毫秒 |
 
 授权被拒绝、授权超时或权限校验失败时，权限执行器会返回失败的工具结果，随后通常形成 `TOOL_CALL_ENDED(status=failed)`。该工具调用可能没有 `TOOL_CALL_STARTED`。
