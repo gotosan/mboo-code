@@ -2472,10 +2472,14 @@ const MessageBubble = memo(function MessageBubble({
           </div>
           <div className="text-[15px] leading-8 text-text-1">
             <div className="whitespace-pre-wrap break-words">
-              {message.text || (message.state === "streaming" ? "生成中…" : " ")}
+              {message.text || (message.state === "streaming" && !message.toolCalls?.length ? "生成中…" : "")}
             </div>
             {message.toolCalls && message.toolCalls.length > 0 ? (
-              <ToolTrace toolCalls={message.toolCalls} onResolveApproval={onResolveApproval} />
+              <ToolTrace
+                toolCalls={message.toolCalls}
+                isRunning={message.state === "streaming"}
+                onResolveApproval={onResolveApproval}
+              />
             ) : null}
           </div>
         </div>
@@ -2514,43 +2518,61 @@ const MessageBubble = memo(function MessageBubble({
 
 const ToolTrace = memo(function ToolTrace({
   toolCalls,
+  isRunning,
   onResolveApproval,
 }: {
   toolCalls: ToolCallView[];
+  isRunning: boolean;
   onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void>;
 }) {
-  // 最近 1–2 条（或运行中/待授权）默认展开，其余折叠
-  const recentIds = new Set(toolCalls.slice(-2).map((tool) => tool.id));
-  const hasActive = toolCalls.some(
-    (tool) =>
-      tool.status === "started" ||
-      tool.status === "waiting_approval" ||
-      tool.status === "submitting",
+  const [open, setOpen] = useState(false);
+  const hasPendingApproval = toolCalls.some(
+    (tool) => tool.status === "waiting_approval" || tool.status === "submitting",
   );
+  const summaryText = isRunning
+    ? "调用工具中"
+    : toolCalls.length > 1
+      ? "调用了多个工具"
+      : "调用了一个工具";
 
   return (
-    <div className="mt-3 space-y-1.5">
-      <p className="text-[11px] font-medium text-text-3">工具轨迹 · {toolCalls.length}</p>
-      {toolCalls.map((toolCall) => {
-        const toolLabel = getToolLabel(toolCall.toolName);
-        const needsAttention =
-          toolCall.status === "started" ||
-          toolCall.status === "waiting_approval" ||
-          toolCall.status === "submitting";
-        const openByDefault = hasActive
-          ? needsAttention || recentIds.has(toolCall.id)
-          : recentIds.has(toolCall.id);
-
-        return (
-          <ToolTraceItem
-            key={toolCall.id}
-            toolCall={toolCall}
-            toolLabel={toolLabel}
-            initiallyOpen={openByDefault}
-            onResolveApproval={onResolveApproval}
-          />
-        );
-      })}
+    <div className="mt-3 overflow-hidden rounded-[var(--radius-sm)] border border-line bg-panel">
+      <button
+        className="flex w-full min-w-0 cursor-pointer select-none items-center gap-2 bg-panel-muted/60 px-2.5 py-2 text-left text-xs font-medium text-text-2"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {open ? (
+          <ChevronDown className="size-3.5 shrink-0 text-text-3" aria-hidden />
+        ) : (
+          <ChevronRight className="size-3.5 shrink-0 text-text-3" aria-hidden />
+        )}
+        {isRunning ? (
+          <LoaderCircle className="size-3.5 shrink-0 animate-spin text-running" aria-hidden />
+        ) : (
+          <span className="shrink-0" aria-hidden>🔧</span>
+        )}
+        <span className="min-w-0 flex-1 truncate text-text-1">{summaryText}</span>
+        {hasPendingApproval ? (
+          <span className="shrink-0 rounded-[2px] bg-running-soft px-1.5 py-0.5 text-[11px] text-running">
+            等待授权
+          </span>
+        ) : null}
+        <span className="shrink-0 font-mono text-[11px] text-text-3">{toolCalls.length}</span>
+      </button>
+      {open ? (
+        <div className="space-y-1.5 border-t border-line bg-panel-elevated p-2">
+          {toolCalls.map((toolCall) => (
+            <ToolTraceItem
+              key={toolCall.id}
+              toolCall={toolCall}
+              toolLabel={getToolLabel(toolCall.toolName)}
+              onResolveApproval={onResolveApproval}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -2558,24 +2580,16 @@ const ToolTrace = memo(function ToolTrace({
 const ToolTraceItem = memo(function ToolTraceItem({
   toolCall,
   toolLabel,
-  initiallyOpen,
   onResolveApproval,
 }: {
   toolCall: ToolCallView;
   toolLabel: string;
-  initiallyOpen: boolean;
   onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void>;
 }) {
-  const [open, setOpen] = useState(initiallyOpen);
+  const [open, setOpen] = useState(false);
   const awaitingApproval =
     Boolean(toolCall.approvalId) &&
     (toolCall.status === "waiting_approval" || toolCall.status === "submitting");
-
-  useEffect(() => {
-    if (initiallyOpen) {
-      setOpen(true);
-    }
-  }, [initiallyOpen]);
 
   return (
     <div className="overflow-hidden rounded-[var(--radius-sm)] border border-line bg-panel">
