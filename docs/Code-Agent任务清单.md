@@ -5,9 +5,14 @@
 - 完成todo
 - mcp
 - skill
-
-## 已完成
-- 新增文件工具：`glob_files`、`search_text`、`read_file`、`edit_file`、`write_file`
+- 子agent独立skill mcp等 独立创建
+- 上下文管理升级 长期中期短期
+- 提示词缓存 成本优化
+- skill渐进加载 skill增加域路由
+- 前端分页加载
+- 工具调用记录 作为tool可复查
+- 长期记忆工具 llm自动调用 向量化去重
+- langg框架使用
 
 ## 目标定位
 
