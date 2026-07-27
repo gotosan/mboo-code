@@ -1,5 +1,6 @@
 package com.yu.mboocode.llm.tool.file;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Set;
 
 @Component
+@Slf4j
 public class TextFileSupport {
     private static final int BINARY_PROBE_BYTES = 8000;
     private static final byte[] UTF8_BOM = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
@@ -248,7 +250,16 @@ public class TextFileSupport {
         FileOwnerAttributeView owner = Files.getFileAttributeView(source, FileOwnerAttributeView.class);
         FileOwnerAttributeView targetOwner = Files.getFileAttributeView(target, FileOwnerAttributeView.class);
         if (owner != null && targetOwner != null) {
-            targetOwner.setOwner(owner.getOwner());
+            var sourceOwner = owner.getOwner();
+            var currentTargetOwner = targetOwner.getOwner();
+            if (!sourceOwner.equals(currentTargetOwner)) {
+                try {
+                    targetOwner.setOwner(sourceOwner);
+                } catch (AccessDeniedException e) {
+                    // Windows 普通用户通常没有 WRITE_OWNER 权限，Owner 复制失败不应阻断文件内容写入。
+                    log.warn("复制文件所有者失败，继续写入 source:{} target:{} owner:{}", source, target, sourceOwner, e);
+                }
+            }
         }
         DosFileAttributeView dos = Files.getFileAttributeView(source, DosFileAttributeView.class);
         if (dos != null) {
