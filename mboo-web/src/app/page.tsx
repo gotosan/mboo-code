@@ -90,6 +90,21 @@ type ToolCallView = {
   grantPath?: string;
 };
 
+// 助手消息按事件序交错：text / tool，避免工具永远沉底
+type AssistantTextPart = {
+  type: "text";
+  id: string;
+  text: string;
+};
+
+type AssistantToolPart = {
+  type: "tool";
+  id: string;
+  toolCall: ToolCallView;
+};
+
+type AssistantPart = AssistantTextPart | AssistantToolPart;
+
 type ChatMessage = {
   id: string;
   role: MessageRole;
@@ -97,6 +112,9 @@ type ChatMessage = {
   state?: MessageState;
   turnId?: string | null;
   createdAt?: string;
+  /** 助手时间线；有值时渲染以 parts 为准 */
+  parts?: AssistantPart[];
+  /** 由 parts 派生，供授权统计等复用 */
   toolCalls?: ToolCallView[];
 };
 
@@ -494,17 +512,16 @@ export default function Home() {
         const index = current.findIndex((message) => message.id === messageId);
 
         if (index < 0) {
-          return [
-            ...current,
-            {
-              id: messageId,
-              role: "assistant",
-              text,
-              state: "streaming",
-              turnId: event.turnId,
-              createdAt: event.createdAt,
-            },
-          ];
+          const created = withAssistantDerivedFields({
+            id: messageId,
+            role: "assistant",
+            text: "",
+            state: "streaming",
+            turnId: event.turnId,
+            createdAt: event.createdAt,
+            parts: appendAssistantTextPart(undefined, text, messageId),
+          });
+          return [...current, created];
         }
 
         const next = [...current];
@@ -516,13 +533,13 @@ export default function Home() {
         ) {
           return current;
         }
-        next[index] = {
+        next[index] = withAssistantDerivedFields({
           ...existing,
-          text: `${existing.text}${text}`,
           state: "streaming",
           turnId: event.turnId,
           createdAt: existing.createdAt || event.createdAt,
-        };
+          parts: appendAssistantTextPart(existing.parts, text, messageId),
+        });
         return next;
       });
     },
@@ -600,36 +617,27 @@ export default function Home() {
         if (index < 0) {
           return [
             ...current,
-            {
+            withAssistantDerivedFields({
               id: messageId,
               role: "assistant",
               text: "",
               state: "streaming",
               turnId: event.turnId,
               createdAt: event.createdAt,
-              toolCalls: [toolCall],
-            },
+              parts: upsertAssistantToolPart(undefined, toolCall),
+            }),
           ];
         }
 
         const next = [...current];
         const existing = next[index];
-        const toolCalls = existing.toolCalls ?? [];
-        const toolIndex = toolCalls.findIndex((item) => item.id === toolCall.id);
-        const nextToolCalls =
-          toolIndex < 0
-            ? [...toolCalls, toolCall]
-            : toolCalls.map((item, itemIndex) =>
-                itemIndex === toolIndex ? { ...item, ...toolCall } : item,
-              );
-
-        next[index] = {
+        next[index] = withAssistantDerivedFields({
           ...existing,
           state: existing.state ?? "streaming",
           turnId: existing.turnId || event.turnId,
           createdAt: existing.createdAt || event.createdAt,
-          toolCalls: nextToolCalls,
-        };
+          parts: upsertAssistantToolPart(existing.parts, toolCall),
+        });
         return next;
       });
     },
@@ -647,12 +655,25 @@ export default function Home() {
 
       const updateToolCall = (status: ToolCallStatus, errorMessage = "") => {
         commitSessionMessages(targetSessionId, (current) =>
-          current.map((message) => ({
-            ...message,
-            toolCalls: message.toolCalls?.map((item) =>
-              item.id === toolCall.id ? { ...item, status, errorMessage } : item,
-            ),
-          })),
+          current.map((message) => {
+            if (!message.parts?.some((part) => part.type === "tool" && part.toolCall.id === toolCall.id) &&
+              !message.toolCalls?.some((item) => item.id === toolCall.id)) {
+              return message;
+            }
+            const nextParts = (message.parts ?? toolCallsToParts(message.toolCalls)).map((part) => {
+              if (part.type !== "tool" || part.toolCall.id !== toolCall.id) {
+                return part;
+              }
+              return {
+                ...part,
+                toolCall: { ...part.toolCall, status, errorMessage },
+              };
+            });
+            return withAssistantDerivedFields({
+              ...message,
+              parts: nextParts,
+            });
+          }),
         );
       };
 
@@ -759,17 +780,37 @@ export default function Home() {
       }
 
       if (event.type === "ASSISTANT_MESSAGE") {
-        // 完整消息以服务端文本为准，丢弃未刷入的 delta，避免拼接重复
+        // 完整消息以服务端文本为准；保留已按事件序排好的 tool parts
         const messageId = event.payload.messageId || event.eventId;
         dropPendingAssistantDelta(targetKey, messageId);
         flushPendingAssistantDeltas();
-        upsertMessage(targetKey, {
-          id: messageId,
-          role: "assistant",
-          text: event.payload.text || "",
-          state: event.payload.state,
-          turnId: event.turnId,
-          createdAt: event.createdAt,
+        commitSessionMessages(targetKey, (current) => {
+          const index = current.findIndex((item) => item.id === messageId);
+          const finalText = event.payload.text || "";
+          if (index < 0) {
+            return [
+              ...current,
+              withAssistantDerivedFields({
+                id: messageId,
+                role: "assistant",
+                text: "",
+                state: event.payload.state,
+                turnId: event.turnId,
+                createdAt: event.createdAt,
+                parts: applyFinalAssistantText(undefined, finalText, messageId),
+              }),
+            ];
+          }
+          const next = [...current];
+          const existing = next[index];
+          next[index] = withAssistantDerivedFields({
+            ...existing,
+            state: event.payload.state,
+            turnId: existing.turnId || event.turnId,
+            createdAt: existing.createdAt || event.createdAt,
+            parts: applyFinalAssistantText(existing.parts, finalText, messageId),
+          });
+          return next;
         });
         if (!isViewingSessionKey(targetKey)) {
           return;
@@ -1487,7 +1528,7 @@ export default function Home() {
   const pendingApprovalTools = useMemo(() => {
     const tools: ToolCallView[] = [];
     for (const message of messages) {
-      for (const tool of message.toolCalls ?? []) {
+      for (const tool of collectMessageToolCalls(message)) {
         if (
           tool.approvalId &&
           (tool.status === "waiting_approval" || tool.status === "submitting")
@@ -1580,9 +1621,8 @@ export default function Home() {
   // 运行中最近工具（T3）
   const activeTool = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      const tools = message.toolCalls;
-      if (!tools?.length) continue;
+      const tools = collectMessageToolCalls(messages[index]);
+      if (!tools.length) continue;
       const reversed = [...tools].reverse();
       const pending = reversed.find(
         (tool) => tool.status === "waiting_approval" || tool.status === "submitting",
@@ -2605,20 +2645,53 @@ const MessageBubble = memo(function MessageBubble({
               <span className="text-[11px] text-text-3">{formatSessionTime(message.createdAt)}</span>
             ) : null}
           </div>
-          <div className="min-w-0 text-text-1">
-            {message.text || message.state === "streaming" ? (
-              <AssistantMarkdown
-                content={message.text}
-                messageId={message.id}
-                isStreaming={message.state === "streaming"}
-              />
-            ) : null}
-            {message.toolCalls && message.toolCalls.length > 0 ? (
-              <ToolTrace
-                toolCalls={message.toolCalls}
-                isRunning={message.state === "streaming"}
-              />
-            ) : null}
+          <div className="min-w-0 space-y-3 text-text-1">
+            {message.parts && message.parts.length > 0 ? (
+              message.parts.map((part, partIndex) => {
+                if (part.type === "text") {
+                  if (!part.text && message.state !== "streaming") {
+                    return null;
+                  }
+                  const isLastPart = partIndex === message.parts!.length - 1;
+                  return (
+                    <AssistantMarkdown
+                      key={part.id}
+                      content={part.text}
+                      messageId={`${message.id}:${part.id}`}
+                      isStreaming={message.state === "streaming" && isLastPart}
+                    />
+                  );
+                }
+                return (
+                  <ToolTrace
+                    key={part.id}
+                    toolCalls={[part.toolCall]}
+                    isRunning={
+                      message.state === "streaming" &&
+                      (part.toolCall.status === "started" ||
+                        part.toolCall.status === "waiting_approval" ||
+                        part.toolCall.status === "submitting")
+                    }
+                  />
+                );
+              })
+            ) : (
+              <>
+                {message.text || message.state === "streaming" ? (
+                  <AssistantMarkdown
+                    content={message.text}
+                    messageId={message.id}
+                    isStreaming={message.state === "streaming"}
+                  />
+                ) : null}
+                {message.toolCalls && message.toolCalls.length > 0 ? (
+                  <ToolTrace
+                    toolCalls={message.toolCalls}
+                    isRunning={message.state === "streaming"}
+                  />
+                ) : null}
+              </>
+            )}
           </div>
         </div>
       </article>
@@ -3220,6 +3293,176 @@ function diffLineClassName(line: string) {
   return "text-text-2";
 }
 
+function collectMessageToolCalls(message: ChatMessage): ToolCallView[] {
+  if (message.parts?.length) {
+    return message.parts.filter((part): part is AssistantToolPart => part.type === "tool").map((part) => part.toolCall);
+  }
+  return message.toolCalls ?? [];
+}
+
+function toolCallsToParts(toolCalls?: ToolCallView[]): AssistantPart[] {
+  return (toolCalls ?? []).map((toolCall) => ({
+    type: "tool" as const,
+    id: toolCall.id,
+    toolCall,
+  }));
+}
+
+function assistantPartsToText(parts?: AssistantPart[]): string {
+  if (!parts?.length) {
+    return "";
+  }
+  return parts
+    .filter((part): part is AssistantTextPart => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
+function withAssistantDerivedFields(message: ChatMessage): ChatMessage {
+  if (message.role !== "assistant") {
+    return message;
+  }
+  const parts = message.parts;
+  if (!parts) {
+    return message;
+  }
+  return {
+    ...message,
+    text: assistantPartsToText(parts),
+    toolCalls: parts
+      .filter((part): part is AssistantToolPart => part.type === "tool")
+      .map((part) => part.toolCall),
+    parts,
+  };
+}
+
+/** 文本 delta：若末尾已是 text part 则追加，否则在时间线末尾新开一段（可出现在 tool 之后） */
+function appendAssistantTextPart(
+  parts: AssistantPart[] | undefined,
+  text: string,
+  messageId: string,
+): AssistantPart[] {
+  if (!text) {
+    return parts ?? [];
+  }
+  const current = parts ?? [];
+  const last = current[current.length - 1];
+  if (last?.type === "text") {
+    return [
+      ...current.slice(0, -1),
+      {
+        ...last,
+        text: `${last.text}${text}`,
+      },
+    ];
+  }
+  return [
+    ...current,
+    {
+      type: "text",
+      id: `text_${messageId}_${current.length}`,
+      text,
+    },
+  ];
+}
+
+/** 同一 toolCallId 只占一个 part，STARTED/ENDED/APPROVAL 原地更新 */
+function upsertAssistantToolPart(
+  parts: AssistantPart[] | undefined,
+  toolCall: ToolCallView,
+): AssistantPart[] {
+  const current = parts ?? [];
+  const index = current.findIndex(
+    (part) => part.type === "tool" && part.toolCall.id === toolCall.id,
+  );
+  if (index < 0) {
+    return [
+      ...current,
+      {
+        type: "tool",
+        id: toolCall.id,
+        toolCall,
+      },
+    ];
+  }
+  const existing = current[index];
+  if (existing.type !== "tool") {
+    return current;
+  }
+  const next = current.slice();
+  next[index] = {
+    ...existing,
+    toolCall: {
+      ...existing.toolCall,
+      ...toolCall,
+      // 结束事件可能不带 approval 字段，避免把进行中的授权元数据抹掉
+      approvalId: toolCall.approvalId ?? existing.toolCall.approvalId,
+      approvalTitle: toolCall.approvalTitle ?? existing.toolCall.approvalTitle,
+      approvalDescription:
+        toolCall.approvalDescription ?? existing.toolCall.approvalDescription,
+      permissionType: toolCall.permissionType ?? existing.toolCall.permissionType,
+      grantPath: toolCall.grantPath ?? existing.toolCall.grantPath,
+    },
+  };
+  return next;
+}
+
+/**
+ * 最终 ASSISTANT_MESSAGE：
+ * - 已有交错 parts 时保留 tool 位置，不把全文再追加一份
+ * - 只有 tool、尚无 text 时，把最终文本接在 tool 后
+ * - 完全没有 parts 时，退化为单段 text
+ */
+function applyFinalAssistantText(
+  parts: AssistantPart[] | undefined,
+  finalText: string,
+  messageId: string,
+): AssistantPart[] {
+  const current = parts ?? [];
+  const hasTool = current.some((part) => part.type === "tool");
+  const hasText = current.some((part) => part.type === "text");
+
+  // 空消息：整段终稿作为唯一 text part
+  if (!hasTool && !hasText) {
+    return finalText
+      ? [
+          {
+            type: "text",
+            id: `text_${messageId}_0`,
+            text: finalText,
+          },
+        ]
+      : [];
+  }
+
+  // 已有文本时间线（来自 delta）：必须保留 tool/text 交错，不能用终稿重排
+  if (hasText) {
+    if (!hasTool && finalText) {
+      // 纯文本助手消息：终稿覆盖，避免 delta 与终稿微差
+      return [
+        {
+          type: "text",
+          id: `text_${messageId}_0`,
+          text: finalText,
+        },
+      ];
+    }
+    return current;
+  }
+
+  // 仅有 tool（常见于历史未落 delta）：正文接在工具之后
+  return finalText
+    ? [
+        ...current,
+        {
+          type: "text",
+          id: `text_${messageId}_${current.length}`,
+          text: finalText,
+        },
+      ]
+    : current;
+}
+
 function isToolCallEvent(event: SessionEvent): event is ToolCallEvent {
   return (
     event.type === "TOOL_CALL_STARTED" ||
@@ -3305,20 +3548,77 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
       continue;
     }
 
+    if (event.type === "ASSISTANT_MESSAGE_DELTA") {
+      const messageId = event.payload.messageId || event.eventId;
+      const delta = event.payload.text || "";
+      if (!delta) {
+        continue;
+      }
+      const index = messages.findIndex((message) => message.id === messageId);
+      if (index < 0) {
+        messages = [
+          ...messages,
+          withAssistantDerivedFields({
+            id: messageId,
+            role: "assistant",
+            text: "",
+            state: "streaming",
+            turnId: event.turnId,
+            createdAt: event.createdAt,
+            parts: appendAssistantTextPart(undefined, delta, messageId),
+          }),
+        ];
+      } else {
+        const existing = messages[index];
+        const next = messages.slice();
+        next[index] = withAssistantDerivedFields({
+          ...existing,
+          state: existing.state === "complete" || existing.state === "cancel" || existing.state === "error"
+            ? existing.state
+            : "streaming",
+          turnId: existing.turnId || event.turnId,
+          createdAt: existing.createdAt || event.createdAt,
+          parts: appendAssistantTextPart(existing.parts, delta, messageId),
+        });
+        messages = next;
+      }
+      continue;
+    }
+
     if (isToolCallEvent(event)) {
       messages = upsertToolCallSnapshot(messages, event);
       continue;
     }
 
     if (event.type === "ASSISTANT_MESSAGE") {
-      messages = upsertMessageSnapshot(messages, {
-        id: event.payload.messageId || event.eventId,
-        role: "assistant",
-        text: event.payload.text,
-        state: event.payload.state,
-        turnId: event.turnId,
-        createdAt: event.createdAt,
-      });
+      const messageId = event.payload.messageId || event.eventId;
+      const finalText = event.payload.text || "";
+      const index = messages.findIndex((message) => message.id === messageId);
+      if (index < 0) {
+        messages = upsertMessageSnapshot(
+          messages,
+          withAssistantDerivedFields({
+            id: messageId,
+            role: "assistant",
+            text: "",
+            state: event.payload.state,
+            turnId: event.turnId,
+            createdAt: event.createdAt,
+            parts: applyFinalAssistantText(undefined, finalText, messageId),
+          }),
+        );
+      } else {
+        const next = messages.slice();
+        const existing = next[index];
+        next[index] = withAssistantDerivedFields({
+          ...existing,
+          state: event.payload.state,
+          turnId: existing.turnId || event.turnId,
+          createdAt: existing.createdAt || event.createdAt,
+          parts: applyFinalAssistantText(existing.parts, finalText, messageId),
+        });
+        messages = next;
+      }
       continue;
     }
 
@@ -3360,9 +3660,8 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
   }
 
   // 历史回放中尚未结束的授权卡片已失效，禁止再次点击
-  return messages.map((message) => ({
-    ...message,
-    toolCalls: message.toolCalls?.map((toolCall) =>
+  return messages.map((message) => {
+    const invalidate = (toolCall: ToolCallView): ToolCallView =>
       toolCall.status === "waiting_approval" || toolCall.status === "submitting"
         ? {
             ...toolCall,
@@ -3370,9 +3669,19 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
             errorMessage: toolCall.errorMessage || "授权请求已失效",
             approvalId: undefined,
           }
-        : toolCall,
-    ),
-  }));
+        : toolCall;
+
+    if (!message.parts?.length && !message.toolCalls?.length) {
+      return message;
+    }
+    const parts = (message.parts ?? toolCallsToParts(message.toolCalls)).map((part) =>
+      part.type === "tool" ? { ...part, toolCall: invalidate(part.toolCall) } : part,
+    );
+    return withAssistantDerivedFields({
+      ...message,
+      parts,
+    });
+  });
 }
 
 function upsertMessageSnapshot(
@@ -3408,36 +3717,27 @@ function upsertToolCallSnapshot(
   if (index < 0) {
     return [
       ...messages,
-      {
+      withAssistantDerivedFields({
         id: messageId,
         role: "assistant" as const,
         text: "",
         state: "streaming" as const,
         turnId: event.turnId,
         createdAt: event.createdAt,
-        toolCalls: [toolCall],
-      },
+        parts: upsertAssistantToolPart(undefined, toolCall),
+      }),
     ];
   }
 
   const next = [...messages];
   const existing = next[index];
-  const toolCalls = existing.toolCalls ?? [];
-  const toolIndex = toolCalls.findIndex((item) => item.id === toolCall.id);
-  const nextToolCalls =
-    toolIndex < 0
-      ? [...toolCalls, toolCall]
-      : toolCalls.map((item, itemIndex) =>
-          itemIndex === toolIndex ? { ...item, ...toolCall } : item,
-        );
-
-  next[index] = {
+  next[index] = withAssistantDerivedFields({
     ...existing,
     state: existing.state ?? "streaming",
     turnId: existing.turnId || event.turnId,
     createdAt: existing.createdAt || event.createdAt,
-    toolCalls: nextToolCalls,
-  };
+    parts: upsertAssistantToolPart(existing.parts, toolCall),
+  });
   return next;
 }
 
