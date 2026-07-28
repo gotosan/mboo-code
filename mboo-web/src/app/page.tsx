@@ -1,8 +1,7 @@
 "use client";
 
-import type { ComponentPropsWithoutRef, FormEvent } from "react";
-import { forwardRef, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import type { FormEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ChevronDown,
@@ -17,6 +16,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import AssistantMarkdown from "@/components/assistant-markdown";
 import { readSessionEventStream } from "@/lib/session-stream";
 import type {
   AssistantMessageState,
@@ -62,6 +62,9 @@ const FILE_TOOL_NAMES = new Set([
 
 /** 新建会话在拿到后端 sessionId 前，消息暂存用的本地键 */
 const PENDING_SESSION_KEY = "__pending__";
+
+/** 距底部小于该值视为贴底，用于流式跟随与“回到底部”按钮 */
+const NEAR_BOTTOM_PX = 120;
 
 type MessageRole = "user" | "assistant" | "system";
 type MessageState = AssistantMessageState | "streaming" | "info";
@@ -152,6 +155,8 @@ export default function Home() {
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  // 正在打开的目标会话：拉取完成前不切换主线程，只做侧栏高亮与轻量进度
+  const [openingSessionId, setOpeningSessionId] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   const [viewingSessionStatus, setViewingSessionStatus] =
@@ -186,11 +191,16 @@ export default function Home() {
   // 当前 SSE 归属的会话键（新建时先为 pending）
   const streamSessionKeyRef = useRef<string>(PENDING_SESSION_KEY);
   const pendingLocalUserIdRef = useRef<string | null>(null);
+  // 会话历史加载代数：快速切换时丢弃过期响应，避免 loading/内容来回闪
+  const historyLoadVersionRef = useRef(0);
   // 移动抽屉 a11y：焦点陷阱与关闭后归还焦点
   const sessionDrawerPanelRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const isRunning = connectionState === "running";
+  const highlightedSessionId = openingSessionId || sessionId;
+  const isSessionSwitching = Boolean(openingSessionId) || isLoadingHistory;
+
 
   useEffect(() => {
     const syncFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -237,38 +247,11 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [reasoningEffort]);
 
-  // 设计决策：长消息用 react-virtuoso 虚拟列表；贴底跟随与动态高度交给库，避免手写测量
-  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-  const stickToBottomRef = useRef(true);
-  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   // 流式 delta 按帧合并，降低 setState 频率（optimize）
   const pendingDeltasRef = useRef<
     Map<string, { sessionKey: string; messageId: string; text: string; event: SessionEvent }>
   >(new Map());
   const deltaRafRef = useRef<number | null>(null);
-
-  const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
-    stickToBottomRef.current = atBottom;
-    setShowJumpToBottom((prev) => {
-      const next = !atBottom;
-      return prev === next ? prev : next;
-    });
-  }, []);
-
-  const scrollMessagesToBottom = useCallback(() => {
-    stickToBottomRef.current = true;
-    setShowJumpToBottom(false);
-    virtuosoRef.current?.scrollToIndex({
-      index: "LAST",
-      align: "end",
-      behavior: "smooth",
-    });
-  }, []);
-
-  const followOutput = useCallback((isAtBottom: boolean) => {
-    // 仅贴底时跟随流式增长/新消息，用户上翻阅读不被拽走
-    return stickToBottomRef.current || isAtBottom ? "auto" : false;
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -845,6 +828,7 @@ export default function Home() {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     workspaceSelectionVersionRef.current += 1;
+    historyLoadVersionRef.current += 1;
     shouldLoadSessionRef.current = false;
     currentSessionIdRef.current = "";
     streamSessionKeyRef.current = PENDING_SESSION_KEY;
@@ -853,6 +837,8 @@ export default function Home() {
     setMessages([]);
     setInput("");
     setSessionId("");
+    setOpeningSessionId(null);
+    setIsLoadingHistory(false);
     setErrorMessage("");
     setActiveTurnId(null);
     setEditingSessionId(null);
@@ -919,12 +905,23 @@ export default function Home() {
     }
   }, [clearCurrentSession]);
 
-  const loadSessionEvents = useCallback(async (nextSessionId: string) => {
+  const loadSessionEvents = useCallback(async (
+    nextSessionId: string,
+    options?: { quiet?: boolean; status?: SessionStatus },
+  ) => {
     if (!nextSessionId) {
       return;
     }
 
-    setIsLoadingHistory(true);
+    // fetch-first：先拉数据，成功后再一次提交视图；quiet 用于有缓存时的后台对齐
+    const quiet = options?.quiet === true;
+    const loadVersion = ++historyLoadVersionRef.current;
+
+    if (!quiet) {
+      setIsLoadingHistory(true);
+      setOpeningSessionId((current) => current ?? nextSessionId);
+    }
+
     try {
       // 并行拉详情+事件：详情补齐 workspace/status，避免仅依赖列表缓存
       const [detailResponse, eventsResponse] = await Promise.all([
@@ -938,8 +935,15 @@ export default function Home() {
       const detail = await readApiData<SessionInfo>(detailResponse);
       const events = await readApiData<SessionEvent[]>(eventsResponse);
 
+      // 用户已切走：丢弃过期结果，防止旧 loading/内容回跳
+      if (loadVersion !== historyLoadVersionRef.current) {
+        return;
+      }
+
+      let nextStatus = options?.status;
       if (detail) {
         const normalized = normalizeSessionInfo(detail);
+        nextStatus = nextStatus ?? normalized.status;
         if (normalized.status === "active") {
           setSessions((current) => upsertSession(current, normalized));
           setArchivedSessions((current) =>
@@ -951,33 +955,54 @@ export default function Home() {
             current.filter((session) => session.id !== normalized.id),
           );
         }
-        setViewingSessionStatus(normalized.status);
       }
 
-      currentSessionIdRef.current = nextSessionId;
-      streamSessionKeyRef.current = nextSessionId;
-      setSessionId(nextSessionId);
+      const streamingThisSession =
+        connectionStateRef.current === "running" &&
+        streamSessionKeyRef.current === nextSessionId;
       const historyMessages = reduceSessionEventsToMessages(events ?? []);
-      messagesBySessionRef.current[nextSessionId] = historyMessages;
-      setMessages(historyMessages);
+
+      // 一次提交视图状态：避免“清空 → loading 壳 → 内容”多次挂载 qq-thread
+      currentSessionIdRef.current = nextSessionId;
+      if (!streamingThisSession) {
+        streamSessionKeyRef.current = nextSessionId;
+        messagesBySessionRef.current[nextSessionId] = historyMessages;
+        setMessages(historyMessages);
+      } else if (!quiet) {
+        setMessages(messagesBySessionRef.current[nextSessionId] ?? historyMessages);
+      }
+      setSessionId(nextSessionId);
+      if (nextStatus) {
+        setViewingSessionStatus(nextStatus);
+      }
+
       const firstUser = historyMessages.find((item) => item.role === "user" && item.text.trim());
       if (firstUser) {
         rememberSessionPreview(nextSessionId, firstUser.text);
       }
-      setInput("");
-      setErrorMessage("");
-      setSessionMessage("");
-      setEditingSessionId(null);
-      setConnectionState((current) => (current === "running" ? current : "idle"));
-      if (connectionStateRef.current !== "running") {
-        setActiveTurnId(null);
+
+      // quiet 后台对齐只更新消息/元数据，不打断输入区
+      if (!quiet) {
+        setInput("");
+        setErrorMessage("");
+        setSessionMessage("");
+        setEditingSessionId(null);
+        setConnectionState((current) => (current === "running" ? current : "idle"));
+        if (connectionStateRef.current !== "running") {
+          setActiveTurnId(null);
+        }
       }
     } catch (error) {
+      if (loadVersion !== historyLoadVersionRef.current) {
+        return;
+      }
+      // 失败时保留当前画面，不把线程清空成 loading/空壳
       setSessionMessage(toErrorMessage(error));
-      messagesBySessionRef.current[nextSessionId] = [];
-      setMessages([]);
     } finally {
-      setIsLoadingHistory(false);
+      if (loadVersion === historyLoadVersionRef.current) {
+        setIsLoadingHistory(false);
+        setOpeningSessionId((current) => (current === nextSessionId ? null : current));
+      }
     }
   }, [rememberSessionPreview]);
 
@@ -1018,6 +1043,7 @@ export default function Home() {
       }
       if (
         nextSessionId === currentSessionIdRef.current &&
+        !openingSessionId &&
         (!status || status === viewingSessionStatus)
       ) {
         return;
@@ -1025,31 +1051,55 @@ export default function Home() {
 
       shouldLoadSessionRef.current = false;
       workspaceSelectionVersionRef.current += 1;
-      currentSessionIdRef.current = nextSessionId;
-      streamSessionKeyRef.current = nextSessionId;
-      setSessionId(nextSessionId);
       setPendingWorkspacePath("");
       setWorkspaceMessage("");
       setIsSelectingWorkspace(false);
-      if (status) {
-        setViewingSessionStatus(status);
-      }
       setIsSessionDrawerOpen(false);
-      // 先展示本地缓存（含进行中的流式内容），再与服务端历史对齐
-      const cached = messagesBySessionRef.current[nextSessionId];
-      if (cached) {
-        setMessages(cached);
-      }
-      // 该会话正在流式输出时不要用服务端历史覆盖未落盘的 DELTA
+      setSessionMessage("");
+      setEditingSessionId(null);
+
+      // 该会话正在流式输出：直接展示本地流式缓存，避免历史快照盖掉未落盘 delta
       if (
         connectionStateRef.current === "running" &&
         streamSessionKeyRef.current === nextSessionId
       ) {
+        historyLoadVersionRef.current += 1;
+        currentSessionIdRef.current = nextSessionId;
+        setSessionId(nextSessionId);
+        setMessages(messagesBySessionRef.current[nextSessionId] ?? []);
+        if (status) {
+          setViewingSessionStatus(status);
+        }
+        setOpeningSessionId(null);
+        setIsLoadingHistory(false);
+        setInput("");
         return;
       }
-      await loadSessionEvents(nextSessionId);
+
+      const cached = messagesBySessionRef.current[nextSessionId];
+      if (cached && cached.length > 0) {
+        // 本地已有数据：一次提交后静默对齐，不先卸主线程
+        historyLoadVersionRef.current += 1;
+        currentSessionIdRef.current = nextSessionId;
+        streamSessionKeyRef.current = nextSessionId;
+        setSessionId(nextSessionId);
+        setMessages(cached);
+        if (status) {
+          setViewingSessionStatus(status);
+        }
+        setOpeningSessionId(null);
+        setIsLoadingHistory(false);
+        setInput("");
+        setErrorMessage("");
+        await loadSessionEvents(nextSessionId, { quiet: true, status });
+        return;
+      }
+
+      // 无缓存：保持当前会话画面，等接口返回后再一次切换
+      setOpeningSessionId(nextSessionId);
+      await loadSessionEvents(nextSessionId, { quiet: false, status });
     },
-    [loadSessionEvents, viewingSessionStatus],
+    [loadSessionEvents, openingSessionId, viewingSessionStatus],
   );
 
   const beginRenameSession = useCallback((session: SessionInfo) => {
@@ -1223,7 +1273,7 @@ export default function Home() {
       const userMessage = input.trim();
       const selectedModelName = modelName.trim();
 
-      if (!userMessage || isRunning || isLoadingHistory || isSelectingWorkspace) {
+      if (!userMessage || isRunning || isSessionSwitching || isSelectingWorkspace) {
         return;
       }
 
@@ -1433,18 +1483,23 @@ export default function Home() {
     [sessions],
   );
 
-  const pendingApprovalCount = useMemo(
-    () =>
-      messages.reduce(
-        (count, message) =>
-          count +
-          (message.toolCalls?.filter(
-            (tool) => tool.status === "waiting_approval" || tool.status === "submitting",
-          ).length ?? 0),
-        0,
-      ),
-    [messages],
-  );
+  // 可操作授权请求：仅当前实时会话中仍带 approvalId 的项
+  const pendingApprovalTools = useMemo(() => {
+    const tools: ToolCallView[] = [];
+    for (const message of messages) {
+      for (const tool of message.toolCalls ?? []) {
+        if (
+          tool.approvalId &&
+          (tool.status === "waiting_approval" || tool.status === "submitting")
+        ) {
+          tools.push(tool);
+        }
+      }
+    }
+    return tools;
+  }, [messages]);
+
+  const pendingApprovalCount = pendingApprovalTools.length;
 
   const toggleFullscreen = useCallback(async () => {
     try {
@@ -1692,7 +1747,7 @@ export default function Home() {
           </div>
         ) : (
           visibleSessions.map((session) => {
-            const selected = session.id === sessionId;
+            const selected = session.id === highlightedSessionId;
             const editing = editingSessionId === session.id;
             const isArchivedItem = sessionListTab === "archived";
 
@@ -1738,7 +1793,7 @@ export default function Home() {
                   <>
                     <button
                       className="flex w-full min-w-0 items-start gap-2 text-left focus-visible:outline-none"
-                      disabled={isLoadingHistory || isSelectingWorkspace}
+                      disabled={isSessionSwitching || isSelectingWorkspace}
                       type="button"
                       onClick={() => {
                         void openSession(session.id, isArchivedItem ? "archived" : "active");
@@ -1783,7 +1838,7 @@ export default function Home() {
                         <>
                           <button
                             className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
-                            disabled={isLoadingHistory || isSelectingWorkspace}
+                            disabled={isSessionSwitching || isSelectingWorkspace}
                             type="button"
                             onClick={() => void unarchiveSession(session)}
                           >
@@ -1791,7 +1846,7 @@ export default function Home() {
                           </button>
                           <button
                             className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-danger min-[900px]:h-7"
-                            disabled={isLoadingHistory || isSelectingWorkspace}
+                            disabled={isSessionSwitching || isSelectingWorkspace}
                             type="button"
                             onClick={() => void deleteSession(session)}
                           >
@@ -1803,7 +1858,7 @@ export default function Home() {
                         <>
                           <button
                             className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
-                            disabled={isLoadingHistory || isSelectingWorkspace}
+                            disabled={isSessionSwitching || isSelectingWorkspace}
                             type="button"
                             onClick={() => beginRenameSession(session)}
                           >
@@ -1811,7 +1866,7 @@ export default function Home() {
                           </button>
                           <button
                             className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-text-2 min-[900px]:h-7"
-                            disabled={isLoadingHistory || isSelectingWorkspace || (selected && isRunning)}
+                            disabled={isSessionSwitching || isSelectingWorkspace || (selected && isRunning)}
                             type="button"
                             onClick={() => void archiveSession(session)}
                           >
@@ -2068,105 +2123,85 @@ export default function Home() {
               ) : null}
             </div>
 
-            <div className="relative min-h-0 flex-1">
-              {isLoadingHistory ? (
-                <div className="qq-scrollbar console-scroll qq-thread h-full overflow-y-auto px-3 py-4 sm:px-6">
-                  <div className="mx-auto flex max-w-[46rem] flex-col items-center gap-2 py-16 text-text-3">
-                    <LoaderCircle className="size-5 motion-safe:animate-spin" aria-hidden />
-                    <p className="text-sm">读取会话事件</p>
-                  </div>
-                </div>
-              ) : messages.length === 0 ? (
-                <div className="qq-scrollbar console-scroll qq-thread h-full overflow-y-auto px-3 py-4 sm:px-6">
-                  <div className="mx-auto max-w-[46rem] rounded-[var(--radius-md)] border border-line bg-panel px-4 py-5 shadow-panel sm:px-5 sm:py-6">
-                    {/* 设计决策：缺模型只在输入器保留一个主阻断；空态只给下一步与示例 */}
-                    <div className="flex items-center gap-3">
-                      <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={48} height={48} decoding="async" className="size-12 rounded-[4px] border border-line object-cover" />
-                      <div className="min-w-0">
-                        <p className="text-base font-semibold text-text-1">等待新的任务指令</p>
-                        <p className="mt-1 text-xs leading-5 text-text-3">
-                          {modelName.trim()
-                            ? "在下方输入目标并发送即可开始"
-                            : "下一步：在下方任务设置填写模型"}
-                        </p>
-                      </div>
+            <div className="relative min-h-0 flex-1 qq-thread-host">
+              {/* 外层 scroller 结构保持稳定：加载中不切换到另一套 qq-thread 壳，避免闪烁 */}
+              {messages.length === 0 ? (
+                <div className="qq-scrollbar console-scroll qq-thread qq-thread-scroller h-full overflow-y-auto px-3 py-4 sm:px-6">
+                  {isSessionSwitching ? (
+                    <div className="mx-auto flex max-w-[46rem] flex-col items-center gap-2 py-16 text-text-3">
+                      <LoaderCircle className="size-5 motion-safe:animate-spin" aria-hidden />
+                      <p className="text-sm">读取会话事件</p>
                     </div>
-
-                    {modelName.trim() ? (
-                      <div className="mt-4 flex flex-wrap gap-1.5">
-                        <span className="rounded-[3px] border border-ok/30 bg-ok-soft px-2 py-1 text-[11px] text-ok">
-                          模型 · {modelName.trim()}
-                        </span>
-                        <span className="rounded-[3px] border border-line bg-panel-elevated px-2 py-1 font-mono text-[11px] text-text-2">
-                          工作区 ·{" "}
-                          {displayedWorkspacePath
-                            ? workspaceBasename(displayedWorkspacePath)
-                            : sessionId
-                              ? "未设置路径"
-                              : "使用默认"}
-                        </span>
+                  ) : (
+                    <div className="mx-auto max-w-[46rem] rounded-[var(--radius-md)] border border-line bg-panel px-4 py-5 shadow-panel sm:px-5 sm:py-6">
+                      {/* 设计决策：缺模型只在输入器保留一个主阻断；空态只给下一步与示例 */}
+                      <div className="flex items-center gap-3">
+                        <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={48} height={48} decoding="async" className="size-12 rounded-[4px] border border-line object-cover" />
+                        <div className="min-w-0">
+                          <p className="text-base font-semibold text-text-1">等待新的任务指令</p>
+                          <p className="mt-1 text-xs leading-5 text-text-3">
+                            {modelName.trim()
+                              ? "在下方输入目标并发送即可开始"
+                              : "下一步：在下方任务设置填写模型"}
+                          </p>
+                        </div>
                       </div>
-                    ) : null}
 
-                    <div className="mt-5 border-t border-line pt-4">
-                      <p className="text-xs font-medium text-text-3">快速填入示例</p>
-                      <ul className="mt-2 space-y-1">
-                        {["梳理代码结构", "定位构建失败", "补一版接口说明"].map((hint) => (
-                          <li key={hint}>
-                            <button
-                              className="min-h-11 w-full rounded-[var(--radius-sm)] px-2 py-2.5 text-left text-sm text-text-2 hover:bg-panel-muted hover:text-text-1 sm:min-h-0 sm:py-2"
-                              type="button"
-                              onClick={() => {
-                                setInput(hint);
-                                if (!modelName.trim()) {
-                                  focusModelInput();
-                                }
-                              }}
-                            >
-                              {hint}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <Virtuoso
-                  key={sessionId || PENDING_SESSION_KEY}
-                  ref={virtuosoRef}
-                  className="h-full"
-                  style={{ height: "100%" }}
-                  data={messages}
-                  computeItemKey={(_index, message) => message.id}
-                  defaultItemHeight={120}
-                  increaseViewportBy={{ top: 320, bottom: 480 }}
-                  alignToBottom
-                  initialTopMostItemIndex={Math.max(0, messages.length - 1)}
-                  followOutput={followOutput}
-                  atBottomThreshold={96}
-                  atBottomStateChange={handleAtBottomStateChange}
-                  components={{
-                    Scroller: MessageListScroller,
-                    Header: MessageListTopSpacer,
-                    Footer: MessageListBottomSpacer,
-                  }}
-                  itemContent={(_index, message) => (
-                    <div className="message-item mx-auto max-w-[46rem] px-3 pb-4 sm:px-6">
-                      <MessageBubble message={message} onResolveApproval={resolveToolApproval} />
+                      {modelName.trim() ? (
+                        <div className="mt-4 flex flex-wrap gap-1.5">
+                          <span className="rounded-[3px] border border-ok/30 bg-ok-soft px-2 py-1 text-[11px] text-ok">
+                            模型 · {modelName.trim()}
+                          </span>
+                          <span className="rounded-[3px] border border-line bg-panel-elevated px-2 py-1 font-mono text-[11px] text-text-2">
+                            工作区 ·{" "}
+                            {displayedWorkspacePath
+                              ? workspaceBasename(displayedWorkspacePath)
+                              : sessionId
+                                ? "未设置路径"
+                                : "使用默认"}
+                          </span>
+                        </div>
+                      ) : null}
+
+                      <div className="mt-5 border-t border-line pt-4">
+                        <p className="text-xs font-medium text-text-3">快速填入示例</p>
+                        <ul className="mt-2 space-y-1">
+                          {["梳理代码结构", "定位构建失败", "补一版接口说明"].map((hint) => (
+                            <li key={hint}>
+                              <button
+                                className="min-h-11 w-full rounded-[var(--radius-sm)] px-2 py-2.5 text-left text-sm text-text-2 hover:bg-panel-muted hover:text-text-1 sm:min-h-0 sm:py-2"
+                                type="button"
+                                onClick={() => {
+                                  setInput(hint);
+                                  if (!modelName.trim()) {
+                                    focusModelInput();
+                                  }
+                                }}
+                              >
+                                {hint}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     </div>
                   )}
+                </div>
+              ) : (
+                <SessionMessageList
+                  sessionId={sessionId || PENDING_SESSION_KEY}
+                  messages={messages}
                 />
               )}
-              {showJumpToBottom ? (
-                <button
-                  className="qq-button absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-1/2 z-10 min-h-10 -translate-x-1/2 px-4 py-2 text-xs font-medium text-text-2 shadow-panel min-[900px]:min-h-0 min-[900px]:px-3 min-[900px]:py-1.5"
-                  type="button"
-                  aria-label="回到消息列表底部"
-                  onClick={scrollMessagesToBottom}
+              {isSessionSwitching && messages.length > 0 ? (
+                <div
+                  className="pointer-events-none absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-[3px] border border-line bg-panel/95 px-2 py-1 text-[11px] text-text-3 shadow-panel"
+                  role="status"
+                  aria-live="polite"
                 >
-                  回到底部
-                </button>
+                  <LoaderCircle className="size-3 motion-safe:animate-spin" aria-hidden />
+                  同步会话
+                </div>
               ) : null}
             </div>
 
@@ -2176,6 +2211,19 @@ export default function Home() {
                   当前为归档会话，仅支持回看。可在会话列表中取消归档后继续对话。
                 </div>
               ) : (
+                <>
+                  {pendingApprovalTools.length > 0 ? (
+                    <div className="mx-auto mb-2 w-full max-w-[46rem] space-y-2">
+                      {pendingApprovalTools.map((toolCall) => (
+                        <ToolApprovalCard
+                          key={toolCall.approvalId || toolCall.id}
+                          toolCall={toolCall}
+                          toolLabel={getToolLabel(toolCall.toolName)}
+                          onResolveApproval={resolveToolApproval}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
                 <form className="qq-composer mx-auto w-full max-w-[46rem]" onSubmit={sendMessage}>
                   {!modelName.trim() ? (
                     <div className="flex items-center justify-between gap-2 border-b border-running/30 bg-running-soft px-2.5 py-1.5 text-[11px] text-running">
@@ -2242,7 +2290,7 @@ export default function Home() {
                             compact
                             displayedPath={displayedWorkspacePath}
                             statusText={workspaceStatusText}
-                            canSelect={!sessionId && !isLoadingHistory && !isArchivedView}
+                            canSelect={!sessionId && !isSessionSwitching && !isArchivedView}
                             isSelecting={isSelectingWorkspace}
                             errorMessage={workspaceMessage}
                             onSelect={() => void selectWorkspace()}
@@ -2282,7 +2330,7 @@ export default function Home() {
                   <div className="qq-composer-editor">
                     <textarea
                       id="task-input"
-                      disabled={isRunning || isLoadingHistory || isSelectingWorkspace}
+                      disabled={isRunning || isSessionSwitching || isSelectingWorkspace}
                       placeholder="写下任务目标，或继续追问…"
                       value={input}
                       onChange={(event) => setInput(event.target.value)}
@@ -2306,11 +2354,11 @@ export default function Home() {
                       ) : (
                         <button
                           className={`qq-button-primary inline-flex h-10 min-w-[72px] items-center justify-center px-4 text-xs sm:h-[30px] sm:min-w-[64px] ${
-                            !input.trim() || !modelName.trim() || isLoadingHistory || isSelectingWorkspace
+                            !input.trim() || !modelName.trim() || isSessionSwitching || isSelectingWorkspace
                               ? "qq-button-locked"
                               : ""
                           }`}
-                          disabled={isRunning || isLoadingHistory || isSelectingWorkspace || !input.trim() || !modelName.trim()}
+                          disabled={isRunning || isSessionSwitching || isSelectingWorkspace || !input.trim() || !modelName.trim()}
                           type="submit"
                           title={
                             !modelName.trim()
@@ -2326,6 +2374,7 @@ export default function Home() {
                     </div>
                   </div>
                 </form>
+                </>
               )}
             </div>
           </section>
@@ -2337,7 +2386,7 @@ export default function Home() {
             workspaceStatusText={workspaceStatusText}
             recentSessions={recentSessions}
             sessionPreviews={sessionPreviews}
-            sessionId={sessionId}
+            sessionId={highlightedSessionId}
             pendingApprovalCount={pendingApprovalCount}
             errorMessage={errorMessage}
             isRunning={isRunning}
@@ -2425,33 +2474,113 @@ const WorkspaceBar = memo(function WorkspaceBar({
   );
 });
 
-// 虚拟列表滚动容器：保留 QQ 经典滚动条材质
-const MessageListScroller = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"div">>(
-  function MessageListScroller({ className, ...props }, ref) {
-    return (
-      <div
-        ref={ref}
-        {...props}
-        className={["qq-scrollbar console-scroll qq-thread", className].filter(Boolean).join(" ")}
-      />
-    );
-  },
-);
+// 普通滚动列表：动态 Markdown 高度下比虚拟列表更稳，避免滚动时整列量高纠偏闪烁
+type SessionMessageListProps = {
+  sessionId: string;
+  messages: ChatMessage[];
+};
 
-const MessageListTopSpacer = () => <div className="h-4" aria-hidden />;
-const MessageListBottomSpacer = () => <div className="h-2" aria-hidden />;
+const SessionMessageList = memo(function SessionMessageList({
+  sessionId,
+  messages,
+}: SessionMessageListProps) {
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+
+  const syncStickState = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) {
+      return;
+    }
+    const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    const atBottom = distance <= NEAR_BOTTOM_PX;
+    stickToBottomRef.current = atBottom;
+    setShowJumpToBottom((prev) => {
+      const next = !atBottom;
+      return prev === next ? prev : next;
+    });
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const scroller = scrollerRef.current;
+    if (!scroller) {
+      return;
+    }
+    stickToBottomRef.current = true;
+    setShowJumpToBottom(false);
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior });
+  }, []);
+
+  useEffect(() => {
+    // 切会话后落到末尾；等一帧让消息完成布局
+    stickToBottomRef.current = true;
+    setShowJumpToBottom(false);
+    const frame = window.requestAnimationFrame(() => {
+      const scroller = scrollerRef.current;
+      if (!scroller) {
+        return;
+      }
+      scroller.scrollTop = scroller.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [sessionId]);
+
+  useEffect(() => {
+    // 仅在用户贴底时跟随内容增长（流式 delta / 历史一次提交）
+    if (!stickToBottomRef.current) {
+      return;
+    }
+    const scroller = scrollerRef.current;
+    if (!scroller) {
+      return;
+    }
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [messages]);
+
+  return (
+    <>
+      <div
+        ref={scrollerRef}
+        className="qq-scrollbar console-scroll qq-thread qq-thread-scroller h-full overflow-y-auto px-3 py-4 sm:px-6"
+        onScroll={syncStickState}
+      >
+        <div className="mx-auto flex min-h-full max-w-[46rem] flex-col">
+          {messages.map((message) => (
+            <div key={message.id} className="message-item pb-4">
+              <MessageBubble message={message} />
+            </div>
+          ))}
+          <div className="h-2 shrink-0" aria-hidden />
+        </div>
+      </div>
+      {showJumpToBottom ? (
+        <button
+          className="qq-button absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-1/2 z-10 min-h-10 -translate-x-1/2 px-4 py-2 text-xs font-medium text-text-2 shadow-panel min-[900px]:min-h-0 min-[900px]:px-3 min-[900px]:py-1.5"
+          type="button"
+          aria-label="回到消息列表底部"
+          onClick={() => scrollToBottom("smooth")}
+        >
+          回到底部
+        </button>
+      ) : null}
+    </>
+  );
+});
 
 const MessageBubble = memo(function MessageBubble({
   message,
-  onResolveApproval,
 }: {
   message: ChatMessage;
-  onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void>;
 }) {
   if (message.role === "assistant") {
     // 设计决策：助手像 QQ 聊天记录里的文档流，少卡片阴影，长回复优先
+    const stateText = message.state ? stateLabel(message.state) : "";
     return (
-      <article className="flex gap-2.5">
+      <article
+        className="flex gap-2.5"
+        aria-label={stateText ? `Mboo Bot，${stateText}` : "Mboo Bot"}
+      >
         <img
           src="/qq2007/sidebar-avatar.png"
           alt=""
@@ -2464,21 +2593,30 @@ const MessageBubble = memo(function MessageBubble({
         />
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-baseline gap-2">
-            <span className="text-xs font-semibold text-accent">Mboo Bot</span>
-            {message.state ? <span className="text-[11px] text-text-3">{stateLabel(message.state)}</span> : null}
+            <span className="text-xs font-semibold text-accent" id={`assistant-label-${message.id}`}>
+              Mboo Bot
+            </span>
+            {message.state ? (
+              <span className="text-[11px] text-text-3" role="status">
+                {stateLabel(message.state)}
+              </span>
+            ) : null}
             {message.createdAt ? (
               <span className="text-[11px] text-text-3">{formatSessionTime(message.createdAt)}</span>
             ) : null}
           </div>
-          <div className="text-[15px] leading-8 text-text-1">
-            <div className="whitespace-pre-wrap break-words">
-              {message.text || (message.state === "streaming" && !message.toolCalls?.length ? "生成中…" : "")}
-            </div>
+          <div className="min-w-0 text-text-1">
+            {message.text || message.state === "streaming" ? (
+              <AssistantMarkdown
+                content={message.text}
+                messageId={message.id}
+                isStreaming={message.state === "streaming"}
+              />
+            ) : null}
             {message.toolCalls && message.toolCalls.length > 0 ? (
               <ToolTrace
                 toolCalls={message.toolCalls}
                 isRunning={message.state === "streaming"}
-                onResolveApproval={onResolveApproval}
               />
             ) : null}
           </div>
@@ -2519,11 +2657,9 @@ const MessageBubble = memo(function MessageBubble({
 const ToolTrace = memo(function ToolTrace({
   toolCalls,
   isRunning,
-  onResolveApproval,
 }: {
   toolCalls: ToolCallView[];
   isRunning: boolean;
-  onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const hasPendingApproval = toolCalls.some(
@@ -2568,7 +2704,6 @@ const ToolTrace = memo(function ToolTrace({
               key={toolCall.id}
               toolCall={toolCall}
               toolLabel={getToolLabel(toolCall.toolName)}
-              onResolveApproval={onResolveApproval}
             />
           ))}
         </div>
@@ -2580,16 +2715,11 @@ const ToolTrace = memo(function ToolTrace({
 const ToolTraceItem = memo(function ToolTraceItem({
   toolCall,
   toolLabel,
-  onResolveApproval,
 }: {
   toolCall: ToolCallView;
   toolLabel: string;
-  onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
-  const awaitingApproval =
-    Boolean(toolCall.approvalId) &&
-    (toolCall.status === "waiting_approval" || toolCall.status === "submitting");
 
   return (
     <div className="overflow-hidden rounded-[var(--radius-sm)] border border-line bg-panel">
@@ -2642,51 +2772,93 @@ const ToolTraceItem = memo(function ToolTraceItem({
               ) : null}
             </div>
           ) : null}
-          {awaitingApproval ? (
-            <div className="rounded-[var(--radius-sm)] border border-running/35 bg-running-soft p-2.5">
-              <p className="text-sm font-medium text-running">
-                {toolCall.approvalTitle || "需要工具授权"}
-              </p>
-              {toolCall.approvalDescription ? (
-                <p className="mt-1 text-xs leading-5 text-text-2">{toolCall.approvalDescription}</p>
-              ) : null}
-              {toolCall.grantPath &&
-              (toolCall.permissionType === "READ" || toolCall.permissionType === "WRITE") ? (
-                <div className="mt-2 rounded-[3px] border border-running/20 bg-panel-elevated px-2.5 py-2">
-                  <p className="break-all font-mono text-xs leading-5 text-text-1">{toolCall.grantPath}</p>
-                  <p className="mt-1 text-[11px] text-text-3">包含其子目录</p>
-                </div>
-              ) : null}
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
-                <button
-                  className="qq-button-primary px-3 py-1.5 text-xs disabled:opacity-50"
-                  disabled={toolCall.status === "submitting"}
-                  type="button"
-                  onClick={() => void onResolveApproval(toolCall, "ALLOW_ONCE")}
-                >
-                  仅允许本次
-                </button>
-                <button
-                  className="qq-button px-3 py-1.5 text-xs text-ok disabled:opacity-50"
-                  disabled={toolCall.status === "submitting"}
-                  type="button"
-                  onClick={() => void onResolveApproval(toolCall, "ALLOW_SESSION")}
-                >
-                  {sessionAllowLabel(toolCall.permissionType)}
-                </button>
-                <button
-                  className="qq-button px-3 py-1.5 text-xs text-danger disabled:opacity-50"
-                  disabled={toolCall.status === "submitting"}
-                  type="button"
-                  onClick={() => void onResolveApproval(toolCall, "DENY")}
-                >
-                  拒绝
-                </button>
-              </div>
-            </div>
+          {toolCall.status === "waiting_approval" || toolCall.status === "submitting" ? (
+            <p className="text-[11px] leading-5 text-running">
+              授权操作在输入框上方，请在底部完成允许或拒绝。
+            </p>
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+});
+
+/** 输入框上方授权区：与消息流中的工具轨迹解耦，避免在折叠工具里找按钮 */
+const ToolApprovalCard = memo(function ToolApprovalCard({
+  toolCall,
+  toolLabel,
+  onResolveApproval,
+}: {
+  toolCall: ToolCallView;
+  toolLabel: string;
+  onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void>;
+}) {
+  const submitting = toolCall.status === "submitting";
+
+  return (
+    <div
+      className="rounded-[var(--radius-sm)] border border-running/40 bg-running-soft px-3 py-2.5 shadow-panel"
+      role="region"
+      aria-label="工具授权请求"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-running">
+            {toolCall.approvalTitle || "需要工具授权"}
+          </p>
+          <p className="mt-0.5 text-[11px] text-text-3">
+            🔧 {toolLabel}
+            {toolCall.pathText ? (
+              <span className="font-mono" title={toolCall.pathText}>
+                {" "}
+                · {toolCall.pathText}
+              </span>
+            ) : null}
+          </p>
+        </div>
+        <span className={`shrink-0 rounded-[2px] px-1.5 py-0.5 text-[11px] ${toolStatusClassName(toolCall.status)}`}>
+          {toolStatusLabel(toolCall.status)}
+        </span>
+      </div>
+      {toolCall.approvalDescription ? (
+        <p className="mt-1.5 text-xs leading-5 text-text-2">{toolCall.approvalDescription}</p>
+      ) : null}
+      {toolCall.grantPath &&
+      (toolCall.permissionType === "READ" || toolCall.permissionType === "WRITE") ? (
+        <div className="mt-2 rounded-[3px] border border-running/20 bg-panel-elevated px-2.5 py-2">
+          <p className="break-all font-mono text-xs leading-5 text-text-1">{toolCall.grantPath}</p>
+          <p className="mt-1 text-[11px] text-text-3">包含其子目录</p>
+        </div>
+      ) : null}
+      {toolCall.errorMessage ? (
+        <p className="mt-2 break-words text-xs text-danger">{toolCall.errorMessage}</p>
+      ) : null}
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <button
+          className="qq-button-primary px-3 py-1.5 text-xs disabled:opacity-50"
+          disabled={submitting}
+          type="button"
+          onClick={() => void onResolveApproval(toolCall, "ALLOW_ONCE")}
+        >
+          仅允许本次
+        </button>
+        <button
+          className="qq-button px-3 py-1.5 text-xs text-ok disabled:opacity-50"
+          disabled={submitting}
+          type="button"
+          onClick={() => void onResolveApproval(toolCall, "ALLOW_SESSION")}
+        >
+          {sessionAllowLabel(toolCall.permissionType)}
+        </button>
+        <button
+          className="qq-button px-3 py-1.5 text-xs text-danger disabled:opacity-50"
+          disabled={submitting}
+          type="button"
+          onClick={() => void onResolveApproval(toolCall, "DENY")}
+        >
+          拒绝
+        </button>
+      </div>
     </div>
   );
 });

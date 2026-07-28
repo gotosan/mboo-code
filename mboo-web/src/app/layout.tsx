@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono } from "next/font/google";
+import "markstream-react/index.css";
 import "./globals.css";
 
 // 设计决策：UI 走系统雅黑/苹方贴近 QQ 2007；仅保留 mono 给路径与代码

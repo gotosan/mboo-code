@@ -137,10 +137,10 @@
   }
 }
 
+/* 消息列表已改为普通滚动；保持 visible，避免滚动时跳绘 */
 .message-item {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 140px;
-  contain: content;
+  content-visibility: visible;
+  contain: none;
 }
 
 .session-item {
@@ -634,8 +634,9 @@ textarea {
   box-shadow: inset 0 0 0 1px #eaf6ff;
 }
 
+/* 底色只画在非滚动宿主上；避免画在 scroller 上随滚动重绘 */
 .qq-thread {
-  background: linear-gradient(180deg, #fbfdff, #fff 22%, #f8fcff 100%);
+  background: transparent;
   color: var(--text-1);
 }
 
@@ -754,6 +755,18 @@ textarea {
 /* 虚拟列表滚动容器：减少整页连带回弹 */
 .qq-thread {
   overscroll-behavior: contain;
+}
+
+/* 会话主列宿主：稳定底色 + 稳定滚动槽，避免 scroller 挂载/量高时闪屏 */
+.qq-thread-host {
+  background: linear-gradient(180deg, #fbfdff, #fff 22%, #f8fcff 100%);
+  color: var(--text-1);
+}
+
+.qq-thread-scroller {
+  background: transparent !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 /* 右栏：QQ Show + 标签皮肤 */
@@ -1071,6 +1084,438 @@ textarea {
   }
 }
 
+
+
+/* 助手消息 MarkStream：QQ2007 文档流 + 主题硬隔离 + 可操作代码块 */
+.mboo-markdown {
+  position: relative;
+  color: var(--text-1);
+  font-size: 15px;
+  line-height: 1.75;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.mboo-markdown .markstream-react {
+  color: inherit !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+  background: transparent !important;
+}
+
+.mboo-markdown .markstream-react > *:first-child {
+  margin-top: 0 !important;
+}
+
+.mboo-markdown .markstream-react > *:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* 压住库 utility 皮肤：只保留我们的 QQ token 表面 */
+.mboo-markdown .markstream-react [class*="bg-"],
+.mboo-markdown .markstream-react [class*="dark:"],
+.mboo-markdown .markstream-react [class*="gray-"],
+.mboo-markdown .markstream-react [class*="slate-"],
+.mboo-markdown .markstream-react [class*="zinc-"],
+.mboo-markdown .markstream-react [class*="neutral-"],
+.mboo-markdown .markstream-react [class*="vscode"],
+.mboo-markdown .markstream-react [class*="rounded-"],
+.mboo-markdown .markstream-react [class*="shadow"] {
+  color: inherit;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  border-radius: var(--radius-sm) !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.mboo-markdown h1,
+.mboo-markdown h2,
+.mboo-markdown h3,
+.mboo-markdown h4,
+.mboo-markdown h5,
+.mboo-markdown h6 {
+  color: var(--text-1);
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0;
+  margin: 1.05em 0 0.28em;
+}
+
+.mboo-markdown h1 {
+  font-size: 1.42em;
+  padding-bottom: 0.18em;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 70%, white);
+}
+
+.mboo-markdown h2 {
+  font-size: 1.24em;
+  color: var(--qq-blue-900);
+}
+
+.mboo-markdown h3 {
+  font-size: 1.12em;
+}
+
+.mboo-markdown h4,
+.mboo-markdown h5,
+.mboo-markdown h6 {
+  font-size: 1.02em;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.mboo-markdown p {
+  margin: 0.42em 0;
+}
+
+.mboo-markdown ul,
+.mboo-markdown ol {
+  margin: 0.42em 0;
+  padding-left: 1.4em;
+}
+
+.mboo-markdown li + li {
+  margin-top: 0.18em;
+}
+
+.mboo-markdown li > ul,
+.mboo-markdown li > ol {
+  margin-top: 0.18em;
+  margin-bottom: 0.18em;
+}
+
+.mboo-markdown a,
+.mboo-markdown .mboo-md-link {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mboo-markdown a:hover,
+.mboo-markdown .mboo-md-link:hover {
+  color: var(--accent);
+}
+
+.mboo-markdown a:focus-visible,
+.mboo-markdown .mboo-md-link:focus-visible,
+.mboo-markdown .mboo-md-copy:focus-visible,
+.mboo-markdown .mboo-md-inline-code:focus-visible,
+.mboo-markdown .mboo-md-table-scroll:focus-visible,
+.mboo-markdown pre:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.mboo-markdown .mboo-md-link.is-external {
+  text-decoration-style: dashed;
+}
+
+.mboo-markdown .mboo-md-link__mark {
+  margin-left: 0.15em;
+  color: var(--text-3);
+  font-size: 0.85em;
+}
+
+.mboo-markdown blockquote {
+  margin: 0.7em 0;
+  padding: 0.45em 0.8em;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--panel-muted) 78%, white);
+  color: var(--text-2);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.7);
+}
+
+.mboo-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1em 0;
+}
+
+.mboo-markdown .mboo-md-table-scroll {
+  max-width: 100%;
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-elevated);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.75);
+}
+
+.mboo-markdown .mboo-md-table-scroll table,
+.mboo-markdown table {
+  display: table;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  background: transparent;
+}
+
+.mboo-markdown thead,
+.mboo-markdown th {
+  background: var(--panel-muted);
+}
+
+.mboo-markdown th,
+.mboo-markdown td {
+  border: 1px solid var(--line);
+  padding: 0.38em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.mboo-markdown th {
+  color: var(--text-1);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mboo-markdown code,
+.mboo-markdown :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 0.08em 0.32em;
+  border: 1px solid color-mix(in oklab, var(--line) 70%, white);
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--panel-muted) 70%, white);
+  color: var(--text-1);
+}
+
+.mboo-markdown .mboo-md-inline-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2em;
+  margin: 0 0.08em;
+  vertical-align: baseline;
+  max-width: 100%;
+}
+
+.mboo-markdown .mboo-md-inline-code code {
+  user-select: text;
+}
+
+.mboo-markdown .mboo-md-inline-code .mboo-md-copy {
+  padding: 0.12rem 0.3rem;
+  font-size: 0.68rem;
+  line-height: 1.1;
+}
+
+.mboo-markdown .mboo-md-codeblock {
+  margin: 0.75em 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #f7fbff;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.75);
+  overflow: hidden;
+}
+
+.mboo-markdown .mboo-md-codeblock__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 28px;
+  padding: 0.2rem 0.45rem 0.2rem 0.55rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 75%, white);
+  background: linear-gradient(180deg, #f8fcff 0%, #e7f4ff 100%);
+}
+
+.mboo-markdown .mboo-md-codeblock__lang {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.mboo-markdown .mboo-md-codeblock__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.mboo-markdown .mboo-md-copy {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--qq-button);
+  color: var(--text-2);
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.28rem 0.45rem;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.75);
+}
+
+.mboo-markdown .mboo-md-copy:hover {
+  color: var(--text-1);
+  border-color: var(--line-strong);
+}
+
+.mboo-markdown .mboo-md-copy:active {
+  transform: translateY(1px);
+}
+
+.mboo-markdown .mboo-md-toggle {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.28rem 0.4rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mboo-markdown .mboo-md-toggle:hover {
+  color: var(--accent);
+  background: color-mix(in oklab, var(--panel-muted) 70%, white);
+  border-color: color-mix(in oklab, var(--line) 55%, white);
+  text-decoration: none;
+}
+
+.mboo-markdown .mboo-md-toggle:active {
+  transform: translateY(1px);
+}
+
+.mboo-markdown .mboo-md-codeblock__more {
+  display: flex;
+  justify-content: center;
+  padding: 0.25rem 0.5rem 0.45rem;
+  border-top: 1px solid color-mix(in oklab, var(--line) 55%, white);
+  background: color-mix(in oklab, var(--panel-muted) 45%, white);
+}
+
+.mboo-markdown .mboo-md-table {
+  margin: 0.75em 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-elevated);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.75);
+  overflow: hidden;
+}
+
+.mboo-markdown .mboo-md-table__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 28px;
+  padding: 0.2rem 0.45rem 0.2rem 0.55rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 75%, white);
+  background: linear-gradient(180deg, #f8fcff 0%, #e7f4ff 100%);
+}
+
+.mboo-markdown .mboo-md-table__label {
+  color: var(--text-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.mboo-markdown .mboo-md-table .mboo-md-table-scroll {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.mboo-markdown .mboo-md-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-muted);
+}
+
+.mboo-markdown .mboo-md-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mboo-markdown .sr-only,
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mboo-markdown .mboo-md-codeblock pre,
+.mboo-markdown pre {
+  margin: 0;
+  padding: 0.7em 0.8em;
+  overflow-x: auto;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-1);
+}
+
+.mboo-markdown .mboo-md-codeblock pre.is-collapsed {
+  max-height: 14.5rem;
+  mask-image: linear-gradient(180deg, #000 70%, transparent 100%);
+}
+
+.mboo-markdown pre code,
+.mboo-markdown .mboo-md-codeblock code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 0.84em;
+  line-height: 1.55;
+  white-space: pre;
+  font-family: var(--font-mono);
+}
+
+.mboo-markdown .mboo-md-stream-caret {
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 0.12em;
+  vertical-align: -0.12em;
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent-strong) 35%, white);
+  animation: mboo-md-caret 1s steps(1, end) infinite;
+}
+
+@keyframes mboo-md-caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mboo-markdown .markstream-react *,
+  .mboo-markdown .mboo-md-stream-caret {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .mboo-markdown .mboo-md-stream-caret {
+    opacity: 1;
+  }
+}
 
 /* polish: 占位符保持可读，避免过浅灰 */
 .qq-input::placeholder,
