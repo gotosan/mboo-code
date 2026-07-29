@@ -43,6 +43,8 @@ public enum SessionEventType {
 
 `POST /session/chat` 返回 `text/event-stream`，每条 SSE 的事件名固定为 `session`，`data` 是完整的 `SessionEvent` JSON。
 
+连接存续期间，后端每 20 秒发送一次 `:keep-alive` SSE comment，避免工具授权等待、工具执行或模型处理期间因响应体长时间无数据而触发代理空闲超时。心跳不属于 `SessionEvent`，不写入 JSONL，前端解析时直接忽略。
+
 正常流式过程：
 
 1. 创建或加载活跃 session，生成 `turnId` 并占用 `active_turn_id`。

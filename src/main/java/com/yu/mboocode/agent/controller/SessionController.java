@@ -27,13 +27,17 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
+import java.time.Duration;
 import java.util.List;
 
 @Tag(name = "会话")
 @RestController
 @RequestMapping("/session")
 public class SessionController {
+    private static final Duration SSE_HEARTBEAT_INTERVAL = Duration.ofSeconds(20);
+
     @Resource
     private TurnService turnService;
     @Resource
@@ -101,7 +105,14 @@ public class SessionController {
     @Operation(summary = "聊天")
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<@NonNull ServerSentEvent<@NonNull SessionEvent>> chat(@Valid @RequestBody ChatReq req) {
-        return turnService.turn(req.sessionId(), req.workspacePath(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), LLMUtil.buildChatReq(req.modelName(), req.reasoningEffort())))
-                .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build());
+        Sinks.One<Void> streamEnded = Sinks.one();
+        Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(req.sessionId(), req.workspacePath(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), LLMUtil.buildChatReq(req.modelName(), req.reasoningEffort())))
+                .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build())
+                .doFinally(_ -> streamEnded.tryEmitEmpty());
+        Flux<ServerSentEvent<SessionEvent>> heartbeatEvents = Flux.interval(SSE_HEARTBEAT_INTERVAL)
+                .map(_ -> ServerSentEvent.<SessionEvent>builder().comment("keep-alive").build())
+                .takeUntilOther(streamEnded.asMono());
+
+        return Flux.merge(sessionEvents, heartbeatEvents);
     }
 }
