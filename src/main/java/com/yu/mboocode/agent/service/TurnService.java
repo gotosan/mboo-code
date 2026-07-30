@@ -201,11 +201,9 @@ public class TurnService {
                         finalText.append(text);
                     })
                     .onPartialThinkingWithContext((thinking, context) -> { // 思考
-                        if (cancelHandle(sink, context.streamingHandle(), runtime)) {
-                            return;
-                        }
-
-                        // todo 记录思考
+//                        if (cancelHandle(sink, context.streamingHandle(), runtime)) {
+//                            return;
+//                        }
                     })
                     .onPartialToolCallWithContext((toolCall, context) -> cancelHandle(sink, context.streamingHandle(), runtime)) // tool call
                     .beforeToolExecution(beforeToolExecution -> { // 工具调用前
