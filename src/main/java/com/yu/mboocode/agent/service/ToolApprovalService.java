@@ -5,8 +5,6 @@ import cn.hutool.core.util.StrUtil;
 import com.yu.mboocode.agent.enums.SessionEventSource;
 import com.yu.mboocode.agent.enums.SessionEventType;
 import com.yu.mboocode.agent.enums.ToolApprovalDecision;
-import com.yu.mboocode.agent.model.PendingApproval;
-import com.yu.mboocode.agent.model.PendingToolAuthorization;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.SessionTurn;
 import com.yu.mboocode.agent.model.payload.ToolApprovalRequiredPayload;
@@ -25,13 +23,17 @@ import com.yu.mboocode.llm.tool.permission.ToolPermissionRegistry;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionSpec;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -41,33 +43,26 @@ import java.util.function.Consumer;
 public class ToolApprovalService {
     private static final long APPROVAL_TIMEOUT_MINUTES = 10;
 
-    private final SessionEventStore sessionEventStore;
-    private final SessionService sessionService;
-    private final ToolPermissionRegistry toolPermissionRegistry;
-    private final ToolPermissionEvaluatorRegistry evaluatorRegistry;
-    private final ToolRequestValidatorRegistry validatorRegistry;
-    private final ToolEventFormatterRegistry toolEventFormatterRegistry;
-    private final RunningCommandRegistry runningCommandRegistry;
-    private final Map<String, PendingApproval> pendingByApprovalId = new ConcurrentHashMap<>();
-    private final Map<String, PendingToolAuthorization> pendingByToolCall = new ConcurrentHashMap<>();
-    private final Map<String, String> invocationTurnIds = new ConcurrentHashMap<>();
-
-    public ToolApprovalService(SessionEventStore sessionEventStore, SessionService sessionService, ToolPermissionRegistry toolPermissionRegistry,
-                               ToolPermissionEvaluatorRegistry evaluatorRegistry, ToolRequestValidatorRegistry validatorRegistry,
-                               ToolEventFormatterRegistry toolEventFormatterRegistry, RunningCommandRegistry runningCommandRegistry) {
-        this.sessionEventStore = sessionEventStore;
-        this.sessionService = sessionService;
-        this.toolPermissionRegistry = toolPermissionRegistry;
-        this.evaluatorRegistry = evaluatorRegistry;
-        this.validatorRegistry = validatorRegistry;
-        this.toolEventFormatterRegistry = toolEventFormatterRegistry;
-        this.runningCommandRegistry = runningCommandRegistry;
-    }
+    @Resource
+    private SessionEventStore sessionEventStore;
+    @Resource
+    private SessionService sessionService;
+    @Resource
+    private ToolPermissionRegistry toolPermissionRegistry;
+    @Resource
+    private ToolPermissionEvaluatorRegistry evaluatorRegistry;
+    @Resource
+    private ToolRequestValidatorRegistry validatorRegistry;
+    @Resource
+    private ToolEventFormatterRegistry toolEventFormatterRegistry;
+    @Resource
+    private RunningCommandRegistry runningCommandRegistry;
+    private final Map<String, PendingApprovalStage> pendingByApprovalId = new ConcurrentHashMap<>();
+    private final Map<String, PendingToolInvocation> invocationsByToolCall = new ConcurrentHashMap<>();
 
     public ApprovalRequestStatus requestIfNeeded(SessionTurn sessionTurn, String messageId, ToolExecutionRequest request,
                                                   Consumer<SessionEvent> eventEmitter, Runnable toolStartedEmitter) {
         String key = toolCallKey(sessionTurn.sessionId(), request.id());
-        invocationTurnIds.put(key, sessionTurn.turnId());
         ToolPermissionChain chain;
         try {
             validatorRegistry.validate(sessionTurn.sessionId(), request);
@@ -76,101 +71,102 @@ public class ToolApprovalService {
             return ApprovalRequestStatus.INVALID;
         }
         if (chain.hasError()) return ApprovalRequestStatus.INVALID;
-        if (!chain.needsApproval()) return ApprovalRequestStatus.ALLOWED;
 
-        PendingToolAuthorization authorization = new PendingToolAuthorization(sessionTurn.sessionId(), sessionTurn.turnId(), sessionTurn.transcriptUri(), messageId, request, chain, eventEmitter, toolStartedEmitter);
-        PendingToolAuthorization existing = pendingByToolCall.putIfAbsent(key, authorization);
-        if (existing != null) return ApprovalRequestStatus.WAITING;
+        PendingToolInvocation invocation = new PendingToolInvocation(sessionTurn.sessionId(), sessionTurn.turnId(), sessionTurn.transcriptUri(), messageId,
+                request, chain, eventEmitter, toolStartedEmitter);
+        PendingToolInvocation existing = invocationsByToolCall.putIfAbsent(key, invocation);
+        if (existing != null) return existing.chain.needsApproval() ? ApprovalRequestStatus.WAITING : ApprovalRequestStatus.ALLOWED;
+        if (!chain.needsApproval()) return ApprovalRequestStatus.ALLOWED;
         int firstIndex = firstApprovalIndex(chain, 0);
-        createApproval(authorization, firstIndex);
+        createApproval(invocation, firstIndex);
         return ApprovalRequestStatus.WAITING;
     }
 
     public ToolAuthorizationResult awaitAuthorization(String sessionId, ToolExecutionRequest request) {
         String key = toolCallKey(sessionId, request.id());
-        PendingToolAuthorization authorization = pendingByToolCall.get(key);
-        if (authorization == null) return evaluateImmediate(sessionId, request);
+        PendingToolInvocation invocation = invocationsByToolCall.get(key);
+        if (invocation == null || !invocation.chain.needsApproval()) return evaluateImmediate(sessionId, request);
 
         PermissionRequirement lastRequirement = null;
         try {
-            for (int index = 0; index < authorization.chain().requirements().size(); index++) {
-                PermissionRequirement requirement = authorization.chain().requirements().get(index);
+            for (int index = 0; index < invocation.chain.requirements().size(); index++) {
+                PermissionRequirement requirement = invocation.chain.requirements().get(index);
                 lastRequirement = requirement;
                 if (requirement.check().status() == PermissionCheck.CheckStatus.ALLOWED) continue;
                 if (requirement.check().status() == PermissionCheck.CheckStatus.ERROR) return error(requirement);
 
-                PendingApproval pending = authorization.currentApproval();
-                if (pending == null || pending.requirementIndex() != index) pending = createApproval(authorization, index);
+                PendingApprovalStage pending = invocation.currentApproval;
+                if (pending == null || pending.requirementIndex() != index) pending = createApproval(invocation, index);
                 ToolApprovalDecision decision = pending.future().get(APPROVAL_TIMEOUT_MINUTES, TimeUnit.MINUTES);
                 cleanupApproval(pending);
-                if (decision == ToolApprovalDecision.DENY || authorization.cancelled()) {
+                if (decision == ToolApprovalDecision.DENY || invocation.cancelled.get()) {
                     return ToolAuthorizationResult.denied(requirement.permissionType(), requirement.grantPath());
                 }
-                authorization.grantedRequirements().add(requirement);
-                int nextIndex = firstApprovalIndex(authorization.chain(), index + 1);
-                if (nextIndex >= 0) createApproval(authorization, nextIndex);
+                invocation.grantedRequirements.add(requirement);
+                int nextIndex = firstApprovalIndex(invocation.chain, index + 1);
+                if (nextIndex >= 0) createApproval(invocation, nextIndex);
             }
 
-            ToolAuthorizationResult verified = verifyFinalPlan(sessionId, request, authorization);
+            ToolAuthorizationResult verified = verifyFinalPlan(sessionId, request, invocation);
             if (!verified.allowed()) return verified;
-            authorization.toolStartedEmitter().run();
+            invocation.toolStartedEmitter.run();
             return ToolAuthorizationResult.allow(ToolApprovalDecision.ALLOW_ONCE,
                     lastRequirement == null ? ToolPermissionType.NONE : lastRequirement.permissionType(),
                     lastRequirement == null ? null : lastRequirement.grantPath());
         } catch (TimeoutException e) {
-            PendingApproval pending = authorization.currentApproval();
-            return ToolAuthorizationResult.timeout(pending == null ? null : pending.permissionType(), pending == null ? null : pending.grantPath());
+            PendingApprovalStage pending = invocation.currentApproval;
+            return ToolAuthorizationResult.timeout(pending == null ? null : pending.requirement.permissionType(), pending == null ? null : pending.requirement.grantPath());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            PendingApproval pending = authorization.currentApproval();
+            PendingApprovalStage pending = invocation.currentApproval;
             return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_INTERRUPTED, "工具授权等待被中断",
-                    pending == null ? null : pending.permissionType(), pending == null ? null : pending.grantPath());
+                    pending == null ? null : pending.requirement.permissionType(), pending == null ? null : pending.requirement.grantPath());
         } catch (Exception e) {
-            PendingApproval pending = authorization.currentApproval();
+            PendingApprovalStage pending = invocation.currentApproval;
             return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_ERROR, "工具授权处理失败",
-                    pending == null ? null : pending.permissionType(), pending == null ? null : pending.grantPath());
+                    pending == null ? null : pending.requirement.permissionType(), pending == null ? null : pending.requirement.grantPath());
         } finally {
-            PendingApproval pending = authorization.currentApproval();
+            PendingApprovalStage pending = invocation.currentApproval;
             if (pending != null) cleanupApproval(pending);
-            pendingByToolCall.remove(key, authorization);
         }
     }
 
     public void resolve(String sessionId, String approvalId, ToolApprovalDecision decision) {
-        PendingApproval pending = pendingByApprovalId.get(approvalId);
-        if (pending == null || !pending.sessionId().equals(sessionId)) throw new ServiceException("工具授权请求不存在或已失效");
+        PendingApprovalStage pending = pendingByApprovalId.get(approvalId);
+        if (pending == null || !pending.invocation.sessionId.equals(sessionId)) throw new ServiceException("工具授权请求不存在或已失效");
         if (decision == ToolApprovalDecision.ALLOW_SESSION) persistSessionGrant(sessionId, pending);
         if (!pending.future().complete(decision)) throw new ServiceException("工具授权请求已处理");
     }
 
     public void cancelTurn(String sessionId, String turnId) {
         runningCommandRegistry.cancelTurn(sessionId, turnId);
-        pendingByToolCall.values().stream()
-                .filter(item -> item.sessionId().equals(sessionId) && item.turnId().equals(turnId))
+        invocationsByToolCall.values().stream()
+                .filter(item -> item.sessionId.equals(sessionId) && item.turnId.equals(turnId))
                 .forEach(item -> {
-                    item.cancel();
-                    PendingApproval pending = item.currentApproval();
+                    item.cancelled.set(true);
+                    PendingApprovalStage pending = item.currentApproval;
                     if (pending != null) pending.future().complete(ToolApprovalDecision.DENY);
                 });
     }
 
     public void clearSession(String sessionId) {
         runningCommandRegistry.clearSession(sessionId);
-        pendingByToolCall.values().stream()
-                .filter(item -> item.sessionId().equals(sessionId))
+        invocationsByToolCall.values().stream()
+                .filter(item -> item.sessionId.equals(sessionId))
                 .forEach(item -> {
-                    item.cancel();
-                    PendingApproval pending = item.currentApproval();
+                    item.cancelled.set(true);
+                    PendingApprovalStage pending = item.currentApproval;
                     if (pending != null) pending.future().complete(ToolApprovalDecision.DENY);
                 });
     }
 
     public String turnId(String sessionId, String toolCallId) {
-        return invocationTurnIds.get(toolCallKey(sessionId, toolCallId));
+        PendingToolInvocation invocation = invocationsByToolCall.get(toolCallKey(sessionId, toolCallId));
+        return invocation == null ? null : invocation.turnId;
     }
 
     public void completeInvocation(String sessionId, String toolCallId) {
-        invocationTurnIds.remove(toolCallKey(sessionId, toolCallId));
+        invocationsByToolCall.remove(toolCallKey(sessionId, toolCallId));
     }
 
     private ToolAuthorizationResult evaluateImmediate(String sessionId, ToolExecutionRequest request) {
@@ -189,7 +185,7 @@ public class ToolApprovalService {
         }
     }
 
-    private ToolAuthorizationResult verifyFinalPlan(String sessionId, ToolExecutionRequest request, PendingToolAuthorization authorization) {
+    private ToolAuthorizationResult verifyFinalPlan(String sessionId, ToolExecutionRequest request, PendingToolInvocation invocation) {
         ToolPermissionChain current;
         try {
             current = evaluate(sessionId, request);
@@ -199,7 +195,7 @@ public class ToolApprovalService {
         for (PermissionRequirement requirement : current.requirements()) {
             if (requirement.check().status() == PermissionCheck.CheckStatus.ERROR) return error(requirement);
             if (requirement.check().status() == PermissionCheck.CheckStatus.ALLOWED) continue;
-            boolean onceGranted = authorization.grantedRequirements().stream().anyMatch(granted -> granted.sameScope(requirement));
+            boolean onceGranted = invocation.grantedRequirements.stream().anyMatch(granted -> granted.sameScope(requirement));
             if (!onceGranted) {
                 ToolPermissionErrorCode code = requirement.permissionType() == ToolPermissionType.COMMAND
                         ? ToolPermissionErrorCode.COMMAND_PERMISSION_CHANGED : ToolPermissionErrorCode.PERMISSION_PATH_CHANGED;
@@ -209,35 +205,34 @@ public class ToolApprovalService {
         return ToolAuthorizationResult.allow(ToolApprovalDecision.ALLOW_ONCE, null, null);
     }
 
-    private PendingApproval createApproval(PendingToolAuthorization authorization, int index) {
-        PermissionRequirement requirement = authorization.chain().requirements().get(index);
+    private PendingApprovalStage createApproval(PendingToolInvocation invocation, int index) {
+        PermissionRequirement requirement = invocation.chain.requirements().get(index);
         String approvalId = IdUtil.getSnowflakeNextIdStr();
-        int approvalIndex = approvalStageIndex(authorization.chain(), index);
-        int approvalCount = approvalStageCount(authorization.chain());
-        PendingApproval pending = new PendingApproval(approvalId, authorization.sessionId(), authorization.turnId(), authorization.request().name(),
-                requirement.permissionType(), requirement.grantPath(), requirement.grantValue(), approvalIndex, approvalCount, index, new CompletableFuture<>());
-        authorization.currentApproval(pending);
+        int approvalIndex = approvalStageIndex(invocation.chain, index);
+        int approvalCount = approvalStageCount(invocation.chain);
+        PendingApprovalStage pending = new PendingApprovalStage(approvalId, invocation, requirement, approvalIndex, approvalCount, index, new CompletableFuture<>());
+        invocation.currentApproval = pending;
         pendingByApprovalId.put(approvalId, pending);
-        SessionEvent event = sessionEventStore.appendSession(authorization.transcriptUri(),
-                authorization.sessionId(), authorization.turnId(), SessionEventType.TOOL_APPROVAL_REQUIRED, SessionEventSource.SYSTEM,
+        SessionEvent event = sessionEventStore.appendSession(invocation.transcriptUri,
+                invocation.sessionId, invocation.turnId, SessionEventType.TOOL_APPROVAL_REQUIRED, SessionEventSource.SYSTEM,
                 ToolApprovalRequiredPayload.builder()
-                        .messageId(authorization.messageId())
+                        .messageId(invocation.messageId)
                         .approvalId(approvalId)
-                        .toolCallId(authorization.request().id())
-                        .toolName(authorization.request().name())
-                        .arguments(toolEventFormatterRegistry.formatArguments(authorization.request().name(), authorization.request().arguments()))
-                        .title(buildTitle(requirement, authorization.request().name()))
-                        .description(buildDescription(requirement, authorization.request().name()))
+                        .toolCallId(invocation.request.id())
+                        .toolName(invocation.request.name())
+                        .arguments(toolEventFormatterRegistry.formatArguments(invocation.request.name(), invocation.request.arguments()))
+                        .title(buildTitle(requirement, invocation.request.name()))
+                        .description(buildDescription(requirement, invocation.request.name()))
                         .permissionType(requirement.permissionType())
                         .grantPath(requirement.grantPath())
                         .approvalIndex(approvalIndex)
                         .approvalCount(approvalCount)
                         .build());
-        authorization.eventEmitter().accept(event);
+        invocation.eventEmitter.accept(event);
         return pending;
     }
 
-    private void cleanupApproval(PendingApproval pending) {
+    private void cleanupApproval(PendingApprovalStage pending) {
         pendingByApprovalId.remove(pending.approvalId(), pending);
     }
 
@@ -267,12 +262,13 @@ public class ToolApprovalService {
         return evaluatorRegistry.evaluate(sessionId, request, spec);
     }
 
-    private void persistSessionGrant(String sessionId, PendingApproval pending) {
-        switch (pending.permissionType()) {
-            case TOOL -> sessionService.grantToolPermission(sessionId, pending.toolName());
-            case READ -> sessionService.grantReadPath(sessionId, pending.grantPath());
-            case WRITE -> sessionService.grantWritePath(sessionId, pending.grantPath());
-            case COMMAND -> sessionService.grantCommandPermission(sessionId, pending.grantValue());
+    private void persistSessionGrant(String sessionId, PendingApprovalStage pending) {
+        PermissionRequirement requirement = pending.requirement;
+        switch (requirement.permissionType()) {
+            case TOOL -> sessionService.grantToolPermission(sessionId, pending.invocation.request.name());
+            case READ -> sessionService.grantReadPath(sessionId, requirement.grantPath());
+            case WRITE -> sessionService.grantWritePath(sessionId, requirement.grantPath());
+            case COMMAND -> sessionService.grantCommandPermission(sessionId, requirement.grantValue());
             case NONE -> {
             }
         }
@@ -305,6 +301,36 @@ public class ToolApprovalService {
     private String toolCallKey(String sessionId, String toolCallId) {
         if (StrUtil.isBlank(toolCallId)) throw new ServiceException("工具调用 ID 不能为空");
         return sessionId + ":" + toolCallId;
+    }
+
+    private static final class PendingToolInvocation {
+        private final String sessionId;
+        private final String turnId;
+        private final String transcriptUri;
+        private final String messageId;
+        private final ToolExecutionRequest request;
+        private final ToolPermissionChain chain;
+        private final Consumer<SessionEvent> eventEmitter;
+        private final Runnable toolStartedEmitter;
+        private final List<PermissionRequirement> grantedRequirements = new ArrayList<>();
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+        private volatile PendingApprovalStage currentApproval;
+
+        private PendingToolInvocation(String sessionId, String turnId, String transcriptUri, String messageId, ToolExecutionRequest request,
+                                      ToolPermissionChain chain, Consumer<SessionEvent> eventEmitter, Runnable toolStartedEmitter) {
+            this.sessionId = sessionId;
+            this.turnId = turnId;
+            this.transcriptUri = transcriptUri;
+            this.messageId = messageId;
+            this.request = request;
+            this.chain = chain;
+            this.eventEmitter = eventEmitter;
+            this.toolStartedEmitter = toolStartedEmitter;
+        }
+    }
+
+    private record PendingApprovalStage(String approvalId, PendingToolInvocation invocation, PermissionRequirement requirement, int approvalIndex,
+                                        int approvalCount, int requirementIndex, CompletableFuture<ToolApprovalDecision> future) {
     }
 
     public enum ApprovalRequestStatus {

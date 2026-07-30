@@ -1,32 +1,22 @@
 package com.yu.mboocode.llm.tool.permission;
 
 /**
- * 单次工具权限评估结果：状态、建议授权路径、错误码与错误信息。
+ * 单次工具权限评估结果：状态、错误码与错误信息。
  */
-public record PermissionCheck(CheckStatus status, String grantPath, ToolPermissionErrorCode errorCode, String message) {
+public record PermissionCheck(CheckStatus status, ToolPermissionErrorCode errorCode, String message) {
     /** 构造成功放行结果（无路径）。 */
     public static PermissionCheck allowed() {
-        return new PermissionCheck(CheckStatus.ALLOWED, null, null, null);
-    }
-
-    /** 构造成功放行结果。 */
-    public static PermissionCheck allowed(String grantPath) {
-        return new PermissionCheck(CheckStatus.ALLOWED, grantPath, null, null);
+        return new PermissionCheck(CheckStatus.ALLOWED, null, null);
     }
 
     /** 构造需要用户授权结果（无路径）。 */
     public static PermissionCheck needAsk() {
-        return new PermissionCheck(CheckStatus.NEED_ASK, null, null, null);
-    }
-
-    /** 构造需要用户授权结果。 */
-    public static PermissionCheck needAsk(String grantPath) {
-        return new PermissionCheck(CheckStatus.NEED_ASK, grantPath, null, null);
+        return new PermissionCheck(CheckStatus.NEED_ASK, null, null);
     }
 
     /** 构造评估失败结果（参数/配置/路径等硬错误，不发起用户授权）。 */
     public static PermissionCheck error(ToolPermissionErrorCode errorCode, String message) {
-        return new PermissionCheck(CheckStatus.ERROR, null, errorCode, message);
+        return new PermissionCheck(CheckStatus.ERROR, errorCode, message);
     }
 
     /**

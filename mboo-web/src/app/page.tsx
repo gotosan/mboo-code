@@ -2909,9 +2909,6 @@ const ToolApprovalCard = memo(function ToolApprovalCard({
           <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-text-1">
             {toolCall.parsedArguments.command}
           </pre>
-          <p className="mt-1 text-[11px] text-danger">
-            命令可访问工作目录之外的文件和网络
-          </p>
         </div>
       ) : null}
       {toolCall.grantPath &&

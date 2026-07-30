@@ -1,17 +1,15 @@
 package com.yu.mboocode.llm.tool;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 
 @Component
 public class ToolRequestValidatorRegistry {
-    private final List<ToolRequestValidator> validators;
-
-    public ToolRequestValidatorRegistry(List<ToolRequestValidator> validators) {
-        this.validators = List.copyOf(validators);
-    }
+    @Resource
+    private List<ToolRequestValidator> validators;
 
     public void validate(String sessionId, ToolExecutionRequest request) {
         for (ToolRequestValidator validator : validators) {

@@ -1,6 +1,7 @@
 package com.yu.mboocode.llm.tool.command;
 
 import jakarta.annotation.PreDestroy;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.util.Locale;
@@ -12,11 +13,10 @@ import java.util.concurrent.TimeUnit;
 public class RunningCommandRegistry {
     private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
     private final Map<String, RunningCommand> commands = new ConcurrentHashMap<>();
-    private final ProcessTreeTerminator terminator;
-
-    public RunningCommandRegistry(WindowsProcessTreeTerminator windowsTerminator, UnixProcessTreeTerminator unixTerminator) {
-        this.terminator = WINDOWS ? windowsTerminator : unixTerminator;
-    }
+    @Resource
+    private WindowsProcessTreeTerminator windowsTerminator;
+    @Resource
+    private UnixProcessTreeTerminator unixTerminator;
 
     public RunningCommand register(String sessionId, String turnId, String toolCallId) {
         RunningCommand command = new RunningCommand(sessionId, turnId, toolCallId, Thread.currentThread());
@@ -44,6 +44,7 @@ public class RunningCommandRegistry {
             }
         }
         try {
+            ProcessTreeTerminator terminator = WINDOWS ? windowsTerminator : unixTerminator;
             boolean complete = terminator.terminate(process, CommandExecutor.TERMINATION_GRACE_MS);
             command.terminationComplete(complete);
             command.terminationResult().complete(complete);

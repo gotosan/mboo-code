@@ -6,6 +6,7 @@ import com.yu.mboocode.agent.service.SessionService;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.tool.ToolCommonErrorCode;
 import com.yu.mboocode.llm.tool.permission.FilePermissionUtil;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
@@ -15,13 +16,10 @@ import java.nio.file.Path;
 public class FileToolSupport {
     public static final long MAX_FILE_BYTES = 10L * 1024 * 1024;
 
-    private final SessionService sessionService;
-    private final IgnoredFileMatcher ignoredFileMatcher;
-
-    public FileToolSupport(SessionService sessionService, IgnoredFileMatcher ignoredFileMatcher) {
-        this.sessionService = sessionService;
-        this.ignoredFileMatcher = ignoredFileMatcher;
-    }
+    @Resource
+    private SessionService sessionService;
+    @Resource
+    private IgnoredFileMatcher ignoredFileMatcher;
 
     public WorkspacePaths resolve(String sessionId, String rawPath) {
         try {

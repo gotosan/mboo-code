@@ -5,6 +5,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.yu.mboocode.llm.tool.ToolCommonErrorCode;
 import com.yu.mboocode.llm.tool.ToolRequestValidator;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
@@ -12,11 +13,8 @@ import java.util.Set;
 @Component
 public class FileToolRequestValidator implements ToolRequestValidator {
     private static final Set<String> FILE_TOOLS = Set.of("glob_files", "search_text", "read_file", "edit_file", "write_file");
-    private final FileToolSupport fileToolSupport;
-
-    public FileToolRequestValidator(FileToolSupport fileToolSupport) {
-        this.fileToolSupport = fileToolSupport;
-    }
+    @Resource
+    private FileToolSupport fileToolSupport;
 
     public boolean supports(String toolName) {
         return FILE_TOOLS.contains(toolName);

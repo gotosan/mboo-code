@@ -1,6 +1,8 @@
 package com.yu.mboocode.llm.tool.command;
 
-public enum CommandToolErrorCode {
+import com.yu.mboocode.llm.tool.ToolErrorCode;
+
+public enum CommandToolErrorCode implements ToolErrorCode {
     COMMAND_SHELL_NOT_FOUND,
     COMMAND_START_FAILED,
     COMMAND_EXIT_NON_ZERO,
@@ -9,5 +11,10 @@ public enum CommandToolErrorCode {
     COMMAND_INTERRUPTED,
     COMMAND_OUTPUT_READ_FAILED,
     COMMAND_TERMINATION_FAILED,
-    COMMAND_EXECUTION_ERROR
+    COMMAND_EXECUTION_ERROR;
+
+    @Override
+    public String getCode() {
+        return name();
+    }
 }

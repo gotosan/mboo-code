@@ -1,5 +1,6 @@
 package com.yu.mboocode.llm.tool.command;
 
+import com.yu.mboocode.llm.tool.command.ReadOnlyCommandClassifier.CommandAnalysis;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;

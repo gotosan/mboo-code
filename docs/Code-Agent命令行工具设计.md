@@ -141,7 +141,7 @@
 | `ToolPermissionSpec` | 描述工具名称、权限类型、路径参数语义和授权文案 |
 | `PermissionCheck` | 表达单个权限阶段的 `ALLOWED/NEED_ASK/ERROR` |
 | `ToolAuthorizationResult` | 表达用户授权、拒绝、超时和执行前复核结果 |
-| `PendingApproval` | 保存当前可操作授权阶段的 Future 和展示信息 |
+| `ToolApprovalService` 内部授权状态 | 保存调用上下文、当前可操作阶段的 Future 和展示信息 |
 | `FilePermissionUtil` | 解析、规范化和复核工作目录及目录授权范围 |
 | `SessionPermissions` | 保存会话工具、目录和命令授权 |
 | `ToolEventFormatterRegistry` | 生成开始、审批和结束事件的参数与结果文本 |
@@ -153,8 +153,7 @@
 | --- | --- |
 | `CommandRequest` | 保存并校验模型传入的工具参数 |
 | `ResolvedCommand` | 保存原始命令、真实工作目录、Shell 身份和有效超时 |
-| `CommandPermissionRule` | 保存命令 glob、动作和常量声明顺序 |
-| `CommandRuleMatch` | 保存命令规则来源、匹配模式和动作，不替代 `PermissionCheck` |
+| `CommandPermissionMatcher` 内部规则类型 | 保存命令 glob、动作、编译结果和匹配结果，不替代 `PermissionCheck` |
 | `PermissionRequirement` | 描述权限类型、授权范围、顺序和展示信息 |
 | `ToolPermissionChain` | 描述工具调用需要顺序满足的全部权限要求 |
 | `CommandFingerprint` | 生成和校验会话级命令指纹 |
@@ -307,7 +306,6 @@ glob 语义：
 第一版常量：
 
 ```java
-private static final CommandAction DEFAULT_ACTION = CommandAction.ASK;
 private static final List<CommandPermissionRule> COMMAND_RULES = List.of();
 ```
 
@@ -492,8 +490,8 @@ ToolPermissionEvaluator
 | `CommandToolPermissionEvaluator` | 为 `run_command` 生成 `WRITE -> COMMAND` 权限链 |
 | `ToolPermissionChain` | 保存不可变调用指纹和有序权限要求 |
 | `PermissionRequirement` | 保存权限类型、授权目录或命令指纹、标题和描述 |
-| `PendingToolAuthorization` | 保存整个工具调用的权限链进度和事件发送上下文 |
-| `PendingApproval` | 保存当前阶段的 `approvalId`、Future 和权限要求 |
+| `PendingToolInvocation` | `ToolApprovalService` 内部类型，保存整个工具调用的权限链进度和事件发送上下文 |
+| `PendingApprovalStage` | `ToolApprovalService` 内部类型，保存当前阶段的 `approvalId`、Future 和权限要求 |
 
 每个 `PermissionRequirement` 继续使用现有 `PermissionCheck` 表达评估结果，等待和复核继续使用 `ToolAuthorizationResult`。现有工具由默认评估器生成零个或一个权限要求，行为保持不变。
 
@@ -524,8 +522,8 @@ VALIDATING
 
 当前 `sessionId:toolCallId` 只能索引一个授权请求。升级后：
 
-- `PendingToolAuthorization` 仍按 `sessionId:toolCallId` 唯一索引。
-- 当前阶段的 `PendingApproval` 继续按 `approvalId` 索引。
+- `PendingToolInvocation` 按 `sessionId:toolCallId` 唯一索引，并保留到工具调用结束。
+- 当前阶段的 `PendingApprovalStage` 按 `approvalId` 建立辅助索引。
 - 同一时刻只存在一个可操作的阶段授权卡片。
 - 当前阶段完成后清理旧 `approvalId`，重新评估并创建下一阶段。
 - 会话取消或删除时完成整个权限链中的当前 Future，并阻止产生下一阶段。
@@ -1094,7 +1092,6 @@ type ToolCallView = {
 | `RunCommandTool` | `MAX_OUTPUT_LINES` | 2,000 | 模型输出行数上限 |
 | `CommandExecutor` | `MAX_CONCURRENT_COMMANDS` | 4 | 应用内并发命令数 |
 | `CommandExecutor` | `TERMINATION_GRACE_MS` | 2,000 | 正常终止后的强制终止宽限期 |
-| `CommandPermissionMatcher` | `DEFAULT_ACTION` | `ASK` | 未命中规则时的默认动作 |
 | `CommandPermissionMatcher` | `COMMAND_RULES` | `List.of()` | 有序固定命令规则，第一版为空 |
 | `ShellResolver` | `WINDOWS_SHELL_CANDIDATES` | `pwsh`、`powershell.exe` | Windows 固定发现顺序 |
 | `ShellResolver` | `WINDOWS_ARGUMENTS` | `-NoLogo -NoProfile -NonInteractive -Command` | Windows 固定参数 |
@@ -1127,12 +1124,12 @@ com.yu.mboocode.llm.tool.command
 | --- | --- |
 | `RunCommandTool` | LangChain4j 工具入口和结果映射 |
 | `CommandToolRequestValidator` | 只负责命令参数、长度和数值范围校验 |
+| `CommandResolver` | 统一解析权限评估与命令执行共用的工作目录、Shell 和有效参数 |
 | `ShellResolver` | 跨平台 Shell 选择与启动参数生成 |
 | `CommandPermissionMatcher` | 有序 glob 规则匹配 |
-| `CommandSafetyAnalyzer` | Shell 类型路由和组合语法检测 |
 | `PosixCommandAnalyzer` | 保守 POSIX 词法分析 |
 | `PowerShellCommandAnalyzer` | PowerShell AST 分析 |
-| `ReadOnlyCommandClassifier` | 命令和参数级只读判断 |
+| `ReadOnlyCommandClassifier` | Shell 类型路由、组合语法分析和命令参数级只读判断 |
 | `CommandFingerprintUtil` | 生成版本化会话命令指纹 |
 | `CommandExecutor` | 进程启动、等待、输出和结果映射 |
 | `RunningCommandRegistry` | 登记和取消运行中命令 |
@@ -1170,7 +1167,7 @@ DTO 按项目约定增加 Swagger 注解。
 - `CommandToolPermissionEvaluator`
 - `ToolPermissionChain`
 - `PermissionRequirement`
-- 多阶段 `PendingToolAuthorization`
+- `ToolApprovalService` 内部的多阶段调用授权状态
 - `SessionPermissions.allowedCommands`
 - 命令权限错误码
 
@@ -1181,7 +1178,7 @@ DTO 按项目约定增加 Swagger 注解。
 | 位置 | 调整 |
 | --- | --- |
 | `PermissionToolExecutor` | 通过 `ToolRequestValidatorRegistry` 校验参数，从等待单个授权改为执行权限链并完成最终复核 |
-| `ToolApprovalService` | 继续使用 `PermissionCheck`、`ToolAuthorizationResult` 和 `PendingApproval`，增加权限链当前阶段和下一阶段推进 |
+| `ToolApprovalService` | 继续使用 `PermissionCheck` 和 `ToolAuthorizationResult`，在内部统一维护调用上下文、当前阶段和下一阶段推进 |
 | `SessionService` | 读取、写入和匹配 `allowedCommands` |
 | `AiCodeServiceFactory` | 注册 `run_command` 和对应权限评估器 |
 | `TurnService` | 只有全部授权完成后发送一次开始事件；取消时终止运行中命令 |

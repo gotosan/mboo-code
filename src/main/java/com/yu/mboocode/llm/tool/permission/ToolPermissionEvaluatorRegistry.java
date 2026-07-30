@@ -1,17 +1,15 @@
 package com.yu.mboocode.llm.tool.permission;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 
 @Component
 public class ToolPermissionEvaluatorRegistry {
-    private final List<ToolPermissionEvaluator> evaluators;
-
-    public ToolPermissionEvaluatorRegistry(List<ToolPermissionEvaluator> evaluators) {
-        this.evaluators = List.copyOf(evaluators);
-    }
+    @Resource
+    private List<ToolPermissionEvaluator> evaluators;
 
     public ToolPermissionChain evaluate(String sessionId, ToolExecutionRequest request, ToolPermissionSpec spec) {
         return evaluators.stream()

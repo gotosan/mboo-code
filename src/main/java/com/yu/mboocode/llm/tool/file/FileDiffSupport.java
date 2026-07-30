@@ -5,6 +5,7 @@ import com.github.difflib.UnifiedDiffUtils;
 import com.github.difflib.patch.AbstractDelta;
 import com.github.difflib.patch.Patch;
 import com.yu.mboocode.llm.tool.ToolTextTruncator;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -12,13 +13,10 @@ import java.util.List;
 @Component
 public class FileDiffSupport {
     public static final int LLM_DIFF_MAX_LENGTH = 12_000;
-    private final TextFileSupport textFileSupport;
-    private final ToolTextTruncator toolTextTruncator;
-
-    public FileDiffSupport(TextFileSupport textFileSupport, ToolTextTruncator toolTextTruncator) {
-        this.textFileSupport = textFileSupport;
-        this.toolTextTruncator = toolTextTruncator;
-    }
+    @Resource
+    private TextFileSupport textFileSupport;
+    @Resource
+    private ToolTextTruncator toolTextTruncator;
 
     public DiffResult create(String path, String before, String after) {
         List<String> beforeLines = textFileSupport.lines(before);

@@ -2,6 +2,8 @@ package com.yu.mboocode.llm.tool.file;
 
 import cn.hutool.core.util.StrUtil;
 import com.yu.mboocode.config.Setting;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.FileSystems;
@@ -16,18 +18,21 @@ import java.util.Locale;
 public class IgnoredFileMatcher {
     private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
 
-    private final List<CompiledPattern> ignoredPatterns;
-    private final List<CompiledPattern> exceptionPatterns;
-    private final List<String> ignoredRgGlobs;
-    private final List<String> exceptionRgGlobs;
+    @Resource
+    private Setting setting;
+    private List<CompiledPattern> ignoredPatterns;
+    private List<CompiledPattern> exceptionPatterns;
+    private List<String> ignoredRgGlobs;
+    private List<String> exceptionRgGlobs;
 
-    public IgnoredFileMatcher(Setting setting) {
+    @PostConstruct
+    public void initialize() {
         List<String> ignored = normalizeRules(setting.getIgnoredFilePatterns());
         List<String> exceptions = normalizeRules(setting.getIgnoredFilePatternExceptions());
-        this.ignoredPatterns = compile(ignored, "ignored_file_patterns");
-        this.exceptionPatterns = compile(exceptions, "ignored_file_pattern_exceptions");
-        this.ignoredRgGlobs = ignored;
-        this.exceptionRgGlobs = exceptions;
+        ignoredPatterns = compile(ignored, "ignored_file_patterns");
+        exceptionPatterns = compile(exceptions, "ignored_file_pattern_exceptions");
+        ignoredRgGlobs = ignored;
+        exceptionRgGlobs = exceptions;
     }
 
     public boolean isIgnored(Path path) {

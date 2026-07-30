@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.alibaba.fastjson2.JSONWriter;
 import com.yu.mboocode.llm.tool.ToolTextTruncator;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
@@ -13,11 +14,8 @@ import java.util.Set;
 @Component
 public class ToolEventFormatterRegistry {
     private static final Set<String> FILE_TOOLS = Set.of("glob_files", "search_text", "read_file", "edit_file", "write_file");
-    private final ToolTextTruncator toolTextTruncator;
-
-    public ToolEventFormatterRegistry(ToolTextTruncator toolTextTruncator) {
-        this.toolTextTruncator = toolTextTruncator;
-    }
+    @Resource
+    private ToolTextTruncator toolTextTruncator;
 
     public String formatArguments(String toolName, String argumentsJson) {
         if ("run_command".equals(toolName)) {

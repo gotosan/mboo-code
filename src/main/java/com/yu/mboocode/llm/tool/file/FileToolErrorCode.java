@@ -1,6 +1,8 @@
 package com.yu.mboocode.llm.tool.file;
 
-public enum FileToolErrorCode {
+import com.yu.mboocode.llm.tool.ToolErrorCode;
+
+public enum FileToolErrorCode implements ToolErrorCode {
     PATH_NOT_REGULAR_FILE,
     PATH_IGNORED,
     GIT_INTERNAL_WRITE_DENIED,
@@ -19,5 +21,10 @@ public enum FileToolErrorCode {
     ATOMIC_REPLACE_UNSUPPORTED,
     FILE_READ_FAILED,
     FILE_WRITE_FAILED,
-    FILE_TOOL_ERROR
+    FILE_TOOL_ERROR;
+
+    @Override
+    public String getCode() {
+        return name();
+    }
 }

@@ -1,6 +1,7 @@
 package com.yu.mboocode.llm.tool.command;
 
 import com.yu.mboocode.llm.tool.command.ResolvedCommand.ShellType;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -10,20 +11,26 @@ import java.util.Set;
 
 @Component
 public class ReadOnlyCommandClassifier {
-    private static final Set<String> LS_LONG_OPTIONS = Set.of(
+    @Resource
+    private PosixCommandAnalyzer posixCommandAnalyzer;
+    @Resource
+    private PowerShellCommandAnalyzer powerShellCommandAnalyzer;
+
+    private static final class PosixOptions {
+        private static final Set<String> LS_LONG_OPTIONS = Set.of(
             "--all", "--almost-all", "--author", "--classify", "--color", "--directory", "--dereference-command-line",
             "--file-type", "--full-time", "--group-directories-first", "--help", "--hide-control-chars", "--human-readable",
             "--inode", "--literal", "--no-group", "--numeric-uid-gid", "--quote-name", "--recursive", "--reverse",
             "--size", "--time", "--version", "--width"
-    );
-    private static final Set<String> CAT_OPTIONS = Set.of(
+        );
+        private static final Set<String> CAT_OPTIONS = Set.of(
             "-A", "-b", "-e", "-E", "-n", "-s", "-t", "-T", "-u", "-v", "--show-all", "--number-nonblank",
             "--show-ends", "--number", "--squeeze-blank", "--show-tabs", "--show-nonprinting", "--help", "--version"
-    );
-    private static final Set<String> WC_OPTIONS = Set.of(
+        );
+        private static final Set<String> WC_OPTIONS = Set.of(
             "-c", "-m", "-l", "-L", "-w", "--bytes", "--chars", "--lines", "--max-line-length", "--words", "--help", "--version"
-    );
-    private static final Set<String> GREP_OPTIONS = Set.of(
+        );
+        private static final Set<String> GREP_OPTIONS = Set.of(
             "-E", "-F", "-G", "-P", "-e", "-f", "-i", "-v", "-w", "-x", "-n", "-H", "-h", "-o", "-q", "-s",
             "-r", "-R", "-l", "-L", "-c", "-m", "-A", "-B", "-C", "--extended-regexp", "--fixed-strings",
             "--basic-regexp", "--perl-regexp", "--regexp", "--file", "--ignore-case", "--invert-match", "--word-regexp",
@@ -31,12 +38,12 @@ public class ReadOnlyCommandClassifier {
             "--recursive", "--dereference-recursive", "--files-with-matches", "--files-without-match", "--count", "--max-count",
             "--after-context", "--before-context", "--context", "--include", "--exclude", "--exclude-dir", "--color", "--colour",
             "--binary-files", "--text", "--byte-offset", "--initial-tab", "--null", "--help", "--version"
-    );
-    private static final Set<String> GREP_VALUE_OPTIONS = Set.of(
+        );
+        private static final Set<String> GREP_VALUE_OPTIONS = Set.of(
             "-e", "-f", "-m", "-A", "-B", "-C", "--regexp", "--file", "--max-count", "--after-context",
             "--before-context", "--context", "--include", "--exclude", "--exclude-dir", "--color", "--colour", "--binary-files"
-    );
-    private static final Set<String> RG_OPTIONS = Set.of(
+        );
+        private static final Set<String> RG_OPTIONS = Set.of(
             "-i", "-s", "-S", "-F", "-w", "-x", "-v", "-n", "-N", "-H", "-I", "-l", "--files-with-matches",
             "--files-without-match", "-c", "--count-matches", "-o", "-q", "-u", "--hidden", "--no-ignore", "--no-ignore-vcs",
             "--no-ignore-parent", "--no-ignore-global", "--follow", "--files", "--type-list", "--stats", "--json", "--pcre2",
@@ -44,51 +51,66 @@ public class ReadOnlyCommandClassifier {
             "--sort", "--sortr", "--glob", "--iglob", "--type", "--type-not", "--max-count", "--max-depth", "--max-filesize",
             "--context", "--before-context", "--after-context", "--color", "--colors", "--encoding", "--engine", "--regexp",
             "--file", "--replace", "--threads", "--help", "--version"
-    );
-    private static final Set<String> RG_VALUE_OPTIONS = Set.of(
+        );
+        private static final Set<String> RG_VALUE_OPTIONS = Set.of(
             "--sort", "--sortr", "--glob", "--iglob", "--type", "--type-not", "--max-count", "--max-depth", "--max-filesize",
             "--context", "--before-context", "--after-context", "--color", "--colors", "--encoding", "--engine", "--regexp",
             "--file", "--replace", "--threads"
-    );
-    private static final Set<String> WHICH_OPTIONS = Set.of(
+        );
+        private static final Set<String> WHICH_OPTIONS = Set.of(
             "-a", "-s", "--all", "--skip-alias", "--skip-dot", "--skip-functions", "--skip-tilde", "--show-dot",
             "--show-tilde", "--tty-only", "--version", "--help"
-    );
-    private static final Map<String, String> POWERSHELL_ALIASES = Map.ofEntries(
+        );
+    }
+
+    private static final class PowerShellOptions {
+        private static final Map<String, String> ALIASES = Map.ofEntries(
             Map.entry("pwd", "get-location"), Map.entry("ls", "get-childitem"), Map.entry("dir", "get-childitem"),
             Map.entry("gci", "get-childitem"), Map.entry("cat", "get-content"), Map.entry("type", "get-content"),
             Map.entry("gc", "get-content"), Map.entry("gcm", "get-command"), Map.entry("echo", "write-output"),
             Map.entry("write", "write-output"), Map.entry("measure", "measure-object")
-    );
-    private static final Set<String> GIT_STATUS_OPTIONS = Set.of(
+        );
+    }
+
+    private static final class GitOptions {
+        private static final Set<String> STATUS = Set.of(
             "-s", "-b", "--short", "--branch", "--show-stash", "--porcelain", "--long", "--verbose", "-v", "-u",
             "--untracked-files", "--ignore-submodules", "--ignored", "--column", "--no-column", "--ahead-behind",
             "--no-ahead-behind", "--renames", "--no-renames", "--find-renames"
-    );
-    private static final Set<String> GIT_DIFF_OPTIONS = Set.of(
+        );
+        private static final Set<String> DIFF = Set.of(
             "--cached", "--staged", "--stat", "--numstat", "--shortstat", "--dirstat", "--summary", "--name-only",
             "--name-status", "--check", "--full-index", "--binary", "--abbrev", "-p", "-u", "-U", "--unified", "-w",
             "--ignore-all-space", "-b", "--ignore-space-change", "--ignore-space-at-eol", "--ignore-blank-lines",
             "--no-ext-diff", "--no-textconv", "--submodule", "--color", "--no-color", "--word-diff", "--word-diff-regex",
             "--color-words", "--relative", "--src-prefix", "--dst-prefix", "--line-prefix", "--no-prefix", "--inter-hunk-context"
-    );
-    private static final Set<String> GIT_LOG_OPTIONS = Set.of(
+        );
+        private static final Set<String> LOG = Set.of(
             "--oneline", "--decorate", "--no-decorate", "--stat", "--shortstat", "--name-only", "--name-status", "--graph",
             "--all", "--branches", "--tags", "--remotes", "--since", "--after", "--until", "--before", "--author",
             "--committer", "--grep", "--regexp-ignore-case", "--merges", "--no-merges", "--first-parent", "--reverse",
             "--topo-order", "--date-order", "--format", "--pretty", "--abbrev-commit", "--no-abbrev-commit", "--max-count",
             "-n", "--skip", "--no-patch", "-p", "--show-signature", "--no-ext-diff", "--no-textconv", "--color", "--no-color"
-    );
-    private static final Set<String> GIT_SHOW_OPTIONS = Set.of(
+        );
+        private static final Set<String> SHOW = Set.of(
             "--stat", "--shortstat", "--name-only", "--name-status", "--format", "--pretty", "--abbrev-commit",
             "--no-abbrev-commit", "--no-patch", "-p", "--show-signature", "--no-ext-diff", "--no-textconv",
             "--color", "--no-color", "--binary", "--full-index"
-    );
-    private static final Set<String> GIT_DISPLAY_VALUE_OPTIONS = Set.of(
+        );
+        private static final Set<String> DISPLAY_VALUES = Set.of(
             "-U", "--unified", "--abbrev", "--submodule", "--color", "--word-diff", "--word-diff-regex", "--color-words",
             "--relative", "--src-prefix", "--dst-prefix", "--line-prefix", "--inter-hunk-context", "--since", "--after",
             "--until", "--before", "--author", "--committer", "--grep", "--format", "--pretty", "--max-count", "-n", "--skip"
-    );
+        );
+    }
+
+    public CommandAnalysis analyze(ResolvedCommand command) {
+        try {
+            return command.shell().type() == ShellType.POWERSHELL ? powerShellCommandAnalyzer.analyze(command) : posixCommandAnalyzer.analyze(command.command());
+        } catch (RuntimeException e) {
+            return CommandAnalysis.unsafe();
+        }
+    }
 
     public boolean isReadOnly(ResolvedCommand command, CommandAnalysis analysis) {
         if (!analysis.parsed() || analysis.compound() || analysis.tokens().isEmpty()) return false;
@@ -102,13 +124,13 @@ public class ReadOnlyCommandClassifier {
         return switch (name) {
             case "pwd" -> allIn(arguments, Set.of("-L", "-P", "--logical", "--physical"));
             case "ls" -> validateLs(arguments);
-            case "cat" -> validateOptions(arguments, CAT_OPTIONS, Set.of());
+            case "cat" -> validateOptions(arguments, PosixOptions.CAT_OPTIONS, Set.of());
             case "head" -> validateHeadTail(arguments, false);
             case "tail" -> validateHeadTail(arguments, true);
-            case "wc" -> validateOptions(arguments, WC_OPTIONS, Set.of());
-            case "grep" -> validateOptions(arguments, GREP_OPTIONS, GREP_VALUE_OPTIONS);
+            case "wc" -> validateOptions(arguments, PosixOptions.WC_OPTIONS, Set.of());
+            case "grep" -> validateOptions(arguments, PosixOptions.GREP_OPTIONS, PosixOptions.GREP_VALUE_OPTIONS);
             case "rg" -> validateRg(arguments);
-            case "which" -> validateOptions(arguments, WHICH_OPTIONS, Set.of());
+            case "which" -> validateOptions(arguments, PosixOptions.WHICH_OPTIONS, Set.of());
             case "command" -> arguments.size() >= 2 && "-v".equals(arguments.getFirst())
                     && arguments.subList(1, arguments.size()).stream().allMatch(this::isBareCommand);
             case "git" -> validateGit(arguments);
@@ -118,7 +140,7 @@ public class ReadOnlyCommandClassifier {
 
     private boolean isPowerShellReadOnly(List<String> tokens) {
         String rawName = tokens.getFirst().toLowerCase(Locale.ROOT);
-        String name = POWERSHELL_ALIASES.getOrDefault(rawName, rawName);
+        String name = PowerShellOptions.ALIASES.getOrDefault(rawName, rawName);
         List<String> arguments = tokens.subList(1, tokens.size());
         if ("git".equals(name)) return validateGit(arguments);
         return switch (name) {
@@ -151,7 +173,7 @@ public class ReadOnlyCommandClassifier {
             if (!argument.startsWith("-") || "-".equals(argument)) continue;
             if (argument.startsWith("--")) {
                 String option = optionName(argument);
-                if (!LS_LONG_OPTIONS.contains(option)) return false;
+                if (!PosixOptions.LS_LONG_OPTIONS.contains(option)) return false;
                 if (Set.of("--color", "--hide", "--ignore", "--quoting-style", "--sort", "--time", "--time-style", "--width").contains(option)
                         && !hasInlineValue(argument) && ++i >= arguments.size()) return false;
             } else if (!argument.substring(1).chars().allMatch(value -> "1aAbBCdDfFgGhHiklLmnopqQrRsStTuUvxXZ".indexOf(value) >= 0)) {
@@ -181,7 +203,7 @@ public class ReadOnlyCommandClassifier {
             String lower = argument.toLowerCase(Locale.ROOT);
             if (lower.equals("--pre") || lower.startsWith("--pre=") || lower.equals("--pre-glob") || lower.startsWith("--pre-glob=")) return false;
         }
-        return validateOptions(arguments, RG_OPTIONS, RG_VALUE_OPTIONS);
+        return validateOptions(arguments, PosixOptions.RG_OPTIONS, PosixOptions.RG_VALUE_OPTIONS);
     }
 
     private boolean validateGit(List<String> arguments) {
@@ -191,11 +213,11 @@ public class ReadOnlyCommandClassifier {
         if (rest.stream().anyMatch(value -> value.equals("--ext-diff") || value.equals("--textconv")
                 || value.startsWith("--output") || value.equals("-o"))) return false;
         return switch (subcommand) {
-            case "status" -> validateOptions(rest, GIT_STATUS_OPTIONS,
+            case "status" -> validateOptions(rest, GitOptions.STATUS,
                     Set.of("-u", "--untracked-files", "--ignore-submodules", "--ignored", "--column", "--find-renames"));
-            case "diff" -> disablesExternalDiff(rest) && validateGitDisplay(rest, GIT_DIFF_OPTIONS);
-            case "log" -> (!requestsPatch(rest) || disablesExternalDiff(rest)) && validateGitDisplay(rest, GIT_LOG_OPTIONS);
-            case "show" -> (rest.contains("--no-patch") || disablesExternalDiff(rest)) && validateGitDisplay(rest, GIT_SHOW_OPTIONS);
+            case "diff" -> disablesExternalDiff(rest) && validateGitDisplay(rest, GitOptions.DIFF);
+            case "log" -> (!requestsPatch(rest) || disablesExternalDiff(rest)) && validateGitDisplay(rest, GitOptions.LOG);
+            case "show" -> (rest.contains("--no-patch") || disablesExternalDiff(rest)) && validateGitDisplay(rest, GitOptions.SHOW);
             case "branch" -> rest.size() == 1 && "--show-current".equals(rest.getFirst());
             default -> false;
         };
@@ -216,7 +238,7 @@ public class ReadOnlyCommandClassifier {
             if (!argument.startsWith("-") || "-".equals(argument)) continue;
             String option = optionName(argument);
             if (!options.contains(option)) return false;
-            if (GIT_DISPLAY_VALUE_OPTIONS.contains(option) && !hasInlineValue(argument) && ++i >= arguments.size()) return false;
+            if (GitOptions.DISPLAY_VALUES.contains(option) && !hasInlineValue(argument) && ++i >= arguments.size()) return false;
         }
         return true;
     }
@@ -255,5 +277,15 @@ public class ReadOnlyCommandClassifier {
 
     private boolean hasInlineValue(String argument) {
         return argument.indexOf('=') > 0;
+    }
+
+    public record CommandAnalysis(boolean parsed, boolean compound, List<String> tokens) {
+        public CommandAnalysis {
+            tokens = List.copyOf(tokens);
+        }
+
+        public static CommandAnalysis unsafe() {
+            return new CommandAnalysis(false, true, List.of());
+        }
     }
 }

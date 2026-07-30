@@ -3,6 +3,7 @@ package com.yu.mboocode.llm.tool.command;
 import com.yu.mboocode.llm.dto.CommandExecutionData;
 import com.yu.mboocode.llm.tool.BoundedTextCollector;
 import com.yu.mboocode.llm.tool.ToolTextTruncator;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStreamReader;
@@ -22,15 +23,12 @@ public class CommandExecutor {
     public static final long TERMINATION_GRACE_MS = 2_000;
     private final Semaphore concurrentCommands = new Semaphore(MAX_CONCURRENT_COMMANDS, true);
     private final Map<String, ReentrantLock> sessionLocks = new java.util.concurrent.ConcurrentHashMap<>();
-    private final ShellResolver shellResolver;
-    private final RunningCommandRegistry runningCommandRegistry;
-    private final ToolTextTruncator truncator;
-
-    public CommandExecutor(ShellResolver shellResolver, RunningCommandRegistry runningCommandRegistry, ToolTextTruncator truncator) {
-        this.shellResolver = shellResolver;
-        this.runningCommandRegistry = runningCommandRegistry;
-        this.truncator = truncator;
-    }
+    @Resource
+    private ShellResolver shellResolver;
+    @Resource
+    private RunningCommandRegistry runningCommandRegistry;
+    @Resource
+    private ToolTextTruncator truncator;
 
     public CommandExecutionData execute(String sessionId, String turnId, String toolCallId, ResolvedCommand command) {
         RunningCommand running = runningCommandRegistry.register(sessionId, turnId, toolCallId);
@@ -57,7 +55,6 @@ public class CommandExecutor {
                 builder.environment().put("GIT_CONFIG_VALUE_1", "false");
                 process = builder.start();
                 running.process(process);
-                running.startedAt(java.time.Instant.now());
                 processStartNanos = System.nanoTime();
                 process.getOutputStream().close();
             } catch (Exception e) {

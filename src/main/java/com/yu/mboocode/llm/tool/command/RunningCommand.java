@@ -1,6 +1,5 @@
 package com.yu.mboocode.llm.tool.command;
 
-import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -9,7 +8,6 @@ public class RunningCommand {
     private final String sessionId;
     private final String turnId;
     private final String toolCallId;
-    private volatile Instant startedAt;
     private final Thread executionThread;
     private final AtomicBoolean terminating = new AtomicBoolean();
     private final AtomicReference<CancelReason> cancelReason = new AtomicReference<>();
@@ -27,8 +25,6 @@ public class RunningCommand {
     public String sessionId() { return sessionId; }
     public String turnId() { return turnId; }
     public String toolCallId() { return toolCallId; }
-    public Instant startedAt() { return startedAt; }
-    public void startedAt(Instant startedAt) { this.startedAt = startedAt; }
     public Thread executionThread() { return executionThread; }
     public Process process() { return process; }
     public void process(Process process) { this.process = process; }

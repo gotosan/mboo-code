@@ -9,6 +9,7 @@ import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
@@ -18,17 +19,14 @@ import java.util.concurrent.locks.Lock;
 public class EditFileTool {
     private static final int MAX_TEXT_LENGTH = 1024 * 1024;
 
-    private final FileToolSupport fileToolSupport;
-    private final TextFileSupport textFileSupport;
-    private final FileDiffSupport fileDiffSupport;
-    private final FilePathLock filePathLock;
-
-    public EditFileTool(FileToolSupport fileToolSupport, TextFileSupport textFileSupport, FileDiffSupport fileDiffSupport, FilePathLock filePathLock) {
-        this.fileToolSupport = fileToolSupport;
-        this.textFileSupport = textFileSupport;
-        this.fileDiffSupport = fileDiffSupport;
-        this.filePathLock = filePathLock;
-    }
+    @Resource
+    private FileToolSupport fileToolSupport;
+    @Resource
+    private TextFileSupport textFileSupport;
+    @Resource
+    private FileDiffSupport fileDiffSupport;
+    @Resource
+    private FilePathLock filePathLock;
 
     @Tool("通过精确字符串替换修改已有文本文件。修改前应先读取文件；局部修改优先使用本工具。")
     @ToolPermission(value = ToolPermissionType.WRITE, pathParam = "path", pathKind = PathKind.FILE)

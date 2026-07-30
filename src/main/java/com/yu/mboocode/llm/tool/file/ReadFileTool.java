@@ -9,6 +9,7 @@ import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -20,13 +21,10 @@ public class ReadFileTool {
     private static final int MAX_CONTENT_LENGTH = 32_000;
     private static final int MAX_LINE_LENGTH = 2000;
 
-    private final FileToolSupport fileToolSupport;
-    private final TextFileSupport textFileSupport;
-
-    public ReadFileTool(FileToolSupport fileToolSupport, TextFileSupport textFileSupport) {
-        this.fileToolSupport = fileToolSupport;
-        this.textFileSupport = textFileSupport;
-    }
+    @Resource
+    private FileToolSupport fileToolSupport;
+    @Resource
+    private TextFileSupport textFileSupport;
 
     @Tool("分页读取普通文本文件并返回带行号内容。结果截断时使用 nextOffset 继续读取。")
     @ToolPermission(value = ToolPermissionType.READ, pathParam = "path", pathKind = PathKind.FILE)

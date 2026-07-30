@@ -10,6 +10,7 @@ import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
@@ -26,13 +27,10 @@ public class GlobFilesTool {
     private static final int MAX_PATTERN_LENGTH = 1024;
     private static final List<String> DEFAULT_EXCLUDES = List.of("!.git/**", "!node_modules/**", "!.gradle/**", "!build/**", "!target/**", "!dist/**");
 
-    private final FileToolSupport fileToolSupport;
-    private final RgExecutor rgExecutor;
-
-    public GlobFilesTool(FileToolSupport fileToolSupport, RgExecutor rgExecutor) {
-        this.fileToolSupport = fileToolSupport;
-        this.rgExecutor = rgExecutor;
-    }
+    @Resource
+    private FileToolSupport fileToolSupport;
+    @Resource
+    private RgExecutor rgExecutor;
 
     @Tool("按 glob 模式查找普通文件。搜索工作区根目录时 path 必须传入 .，结果截断后应缩小搜索范围。")
     @ToolPermission(value = ToolPermissionType.READ, pathParam = "path", pathKind = PathKind.DIRECTORY)

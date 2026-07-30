@@ -1,11 +1,11 @@
 package com.yu.mboocode.llm.tool.permission;
 
-import com.yu.mboocode.common.enums.CodeEnum;
+import com.yu.mboocode.llm.tool.ToolErrorCode;
 
 /**
  * 工具权限相关错误码。
  */
-public enum ToolPermissionErrorCode implements CodeEnum {
+public enum ToolPermissionErrorCode implements ToolErrorCode {
     /** 用户拒绝本次工具调用 */
     PERMISSION_DENIED,
     /** 等待用户授权超时 */

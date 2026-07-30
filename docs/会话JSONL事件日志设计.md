@@ -67,7 +67,7 @@ public enum SessionEventType {
 `ToolApprovalService` 在工具执行前读取工具权限规格和会话权限。需要用户确认时：
 
 1. 生成 `approvalId`。
-2. 按 `approvalId` 和 `sessionId:toolCallId` 注册内存态 `PendingApproval`。
+2. 按 `sessionId:toolCallId` 注册调用上下文，并按 `approvalId` 建立当前授权阶段的辅助索引。
 3. 写入并推送 `TOOL_APPROVAL_REQUIRED`。
 4. 工具执行线程最长阻塞等待 10 分钟。
 

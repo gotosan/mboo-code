@@ -1,6 +1,5 @@
 package com.yu.mboocode.llm.tool.command;
 
-import com.yu.mboocode.llm.tool.command.CommandPermissionRule.CommandAction;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -10,7 +9,6 @@ import java.util.regex.Pattern;
 
 @Component
 public class CommandPermissionMatcher {
-    private static final CommandAction DEFAULT_ACTION = CommandAction.ASK;
     private static final List<CommandPermissionRule> COMMAND_RULES = List.of();
     private final List<CompiledRule> rules;
 
@@ -25,14 +23,10 @@ public class CommandPermissionMatcher {
         for (CompiledRule rule : rules) {
             if (rule.pattern().matcher(command).matches()) {
                 String pattern = rule.rule().pattern();
-                last = new CommandRuleMatch(pattern, rule.rule().action(), pattern.indexOf('*') >= 0 || pattern.indexOf('?') >= 0);
+                last = new CommandRuleMatch(rule.rule().action(), pattern.indexOf('*') >= 0 || pattern.indexOf('?') >= 0);
             }
         }
         return Optional.ofNullable(last);
-    }
-
-    public CommandAction defaultAction() {
-        return DEFAULT_ACTION;
     }
 
     private String toRegex(String glob) {
@@ -47,5 +41,21 @@ public class CommandPermissionMatcher {
     }
 
     private record CompiledRule(CommandPermissionRule rule, Pattern pattern) {
+    }
+
+    private record CommandPermissionRule(String pattern, CommandAction action) {
+        private CommandPermissionRule {
+            if (pattern == null || pattern.isBlank()) throw new IllegalArgumentException("命令规则 pattern 不能为空");
+            if (action == null) throw new IllegalArgumentException("命令规则 action 不能为空");
+        }
+    }
+
+    public record CommandRuleMatch(CommandAction action, boolean wildcard) {
+    }
+
+    public enum CommandAction {
+        ALLOW,
+        ASK,
+        DENY
     }
 }

@@ -14,6 +14,7 @@ import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -36,15 +37,12 @@ public class SearchTextTool {
     private static final int MAX_RESULT_CHARACTERS = 40_000;
     private static final List<String> DEFAULT_EXCLUDES = List.of("!.git/**", "!node_modules/**", "!.gradle/**", "!build/**", "!target/**", "!dist/**");
 
-    private final FileToolSupport fileToolSupport;
-    private final RgExecutor rgExecutor;
-    private final TextFileSupport textFileSupport;
-
-    public SearchTextTool(FileToolSupport fileToolSupport, RgExecutor rgExecutor, TextFileSupport textFileSupport) {
-        this.fileToolSupport = fileToolSupport;
-        this.rgExecutor = rgExecutor;
-        this.textFileSupport = textFileSupport;
-    }
+    @Resource
+    private FileToolSupport fileToolSupport;
+    @Resource
+    private RgExecutor rgExecutor;
+    @Resource
+    private TextFileSupport textFileSupport;
 
     @Tool("在目录内搜索单行文本。默认按普通文本精确搜索；regex=true 时使用 ripgrep 的 Rust 正则引擎。")
     @ToolPermission(value = ToolPermissionType.READ, pathParam = "path", pathKind = PathKind.DIRECTORY)

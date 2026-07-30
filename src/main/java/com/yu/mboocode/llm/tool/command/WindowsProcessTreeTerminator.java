@@ -1,16 +1,14 @@
 package com.yu.mboocode.llm.tool.command;
 
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.TimeUnit;
 
 @Component
 public class WindowsProcessTreeTerminator implements ProcessTreeTerminator {
-    private final UnixProcessTreeTerminator javaFallback;
-
-    public WindowsProcessTreeTerminator(UnixProcessTreeTerminator javaFallback) {
-        this.javaFallback = javaFallback;
-    }
+    @Resource
+    private UnixProcessTreeTerminator javaFallback;
 
     @Override
     public boolean terminate(Process process, long graceMs) {
