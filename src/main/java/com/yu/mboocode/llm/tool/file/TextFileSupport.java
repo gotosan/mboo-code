@@ -1,5 +1,6 @@
 package com.yu.mboocode.llm.tool.file;
 
+import com.yu.mboocode.llm.tool.ToolCommonErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -77,7 +78,7 @@ public class TextFileSupport {
     public void atomicWrite(Path target, byte[] bytes, FileFingerprint expectedFingerprint, boolean replaceExisting) {
         Path parent = target.getParent();
         if (parent == null) {
-            throw new FileToolException(FileToolErrorCode.INVALID_PATH, "无法解析目标文件父目录");
+            throw new FileToolException(ToolCommonErrorCode.INVALID_PATH, "无法解析目标文件父目录");
         }
         Path temp = null;
         try {

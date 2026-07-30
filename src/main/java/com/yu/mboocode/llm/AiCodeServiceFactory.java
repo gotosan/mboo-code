@@ -6,7 +6,7 @@ import com.yu.mboocode.llm.listener.MyAiServiceCompletedListener;
 import com.yu.mboocode.llm.listener.MyChatModelListener;
 import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
 import com.yu.mboocode.llm.tool.PermissionToolExecutor;
-import com.yu.mboocode.llm.tool.file.FileToolRequestValidator;
+import com.yu.mboocode.llm.tool.ToolRequestValidatorRegistry;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionRegistry;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -41,7 +41,7 @@ public class AiCodeServiceFactory {
     @Resource
     private ToolPermissionRegistry toolPermissionRegistry;
     @Resource
-    private FileToolRequestValidator fileToolRequestValidator;
+    private ToolRequestValidatorRegistry toolRequestValidatorRegistry;
     @Resource
     private ApplicationContext applicationContext;
 
@@ -106,7 +106,7 @@ public class AiCodeServiceFactory {
         Method method = toolMethod.method();
         toolPermissionRegistry.register(method);
         ToolSpecification specification = ToolSpecifications.toolSpecificationFrom(method);
-        PermissionToolExecutor executor = new PermissionToolExecutor(toolMethod.bean(), method, toolApprovalService, fileToolRequestValidator);
+        PermissionToolExecutor executor = new PermissionToolExecutor(toolMethod.bean(), method, toolApprovalService, toolRequestValidatorRegistry);
         return AiServiceTool.builder().toolSpecification(specification).toolExecutor(executor).build();
     }
 

@@ -2,33 +2,31 @@ package com.yu.mboocode.agent.service;
 
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
 import com.yu.mboocode.agent.enums.SessionEventSource;
 import com.yu.mboocode.agent.enums.SessionEventType;
 import com.yu.mboocode.agent.enums.ToolApprovalDecision;
 import com.yu.mboocode.agent.model.PendingApproval;
+import com.yu.mboocode.agent.model.PendingToolAuthorization;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.SessionTurn;
-import com.yu.mboocode.agent.model.Sessions;
 import com.yu.mboocode.agent.model.payload.ToolApprovalRequiredPayload;
 import com.yu.mboocode.common.exception.ServiceException;
-import com.yu.mboocode.llm.tool.permission.FilePermissionUtil;
+import com.yu.mboocode.llm.tool.ToolException;
+import com.yu.mboocode.llm.tool.ToolRequestValidatorRegistry;
+import com.yu.mboocode.llm.tool.event.ToolEventFormatterRegistry;
+import com.yu.mboocode.llm.tool.command.RunningCommandRegistry;
 import com.yu.mboocode.llm.tool.permission.PermissionCheck;
-import com.yu.mboocode.llm.tool.permission.SessionPermissions;
+import com.yu.mboocode.llm.tool.permission.PermissionRequirement;
 import com.yu.mboocode.llm.tool.permission.ToolAuthorizationResult;
+import com.yu.mboocode.llm.tool.permission.ToolPermissionChain;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionErrorCode;
+import com.yu.mboocode.llm.tool.permission.ToolPermissionEvaluatorRegistry;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionRegistry;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionSpec;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
-import com.yu.mboocode.llm.tool.event.ToolEventFormatterRegistry;
-import com.yu.mboocode.llm.tool.file.FileToolException;
-import com.yu.mboocode.llm.tool.file.FileToolRequestValidator;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
-import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 
-import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,344 +35,275 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 /**
- * 工具调用授权服务：判断是否需要用户授权、等待决策、落盘会话级授权，并在取消/清理时收尾。
+ * 工具权限链服务。一次调用只暴露当前阶段，全部要求满足并复核后才允许真实工具启动。
  */
 @Service
 public class ToolApprovalService {
     private static final long APPROVAL_TIMEOUT_MINUTES = 10;
 
-    @Resource
-    private SessionEventStore sessionEventStore;
-    @Resource
-    private SessionService sessionService;
-    @Resource
-    private ToolPermissionRegistry toolPermissionRegistry;
-    @Resource
-    private FileToolRequestValidator fileToolRequestValidator;
-    @Resource
-    private ToolEventFormatterRegistry toolEventFormatterRegistry;
-
-    /** 按 approvalId 索引的待处理授权。 */
+    private final SessionEventStore sessionEventStore;
+    private final SessionService sessionService;
+    private final ToolPermissionRegistry toolPermissionRegistry;
+    private final ToolPermissionEvaluatorRegistry evaluatorRegistry;
+    private final ToolRequestValidatorRegistry validatorRegistry;
+    private final ToolEventFormatterRegistry toolEventFormatterRegistry;
+    private final RunningCommandRegistry runningCommandRegistry;
     private final Map<String, PendingApproval> pendingByApprovalId = new ConcurrentHashMap<>();
-    /** 按 sessionId:toolCallId 索引的待处理授权，用于阻塞等待与去重。 */
-    private final Map<String, PendingApproval> pendingByToolCall = new ConcurrentHashMap<>();
+    private final Map<String, PendingToolAuthorization> pendingByToolCall = new ConcurrentHashMap<>();
+    private final Map<String, String> invocationTurnIds = new ConcurrentHashMap<>();
 
-    /**
-     * 工具执行前检查权限：返回允许、等待授权或参数/路径无效三种状态。
-     */
-    public ApprovalRequestStatus requestIfNeeded(SessionTurn sessionTurn, String messageId, ToolExecutionRequest request, Consumer<SessionEvent> eventEmitter, Runnable toolStartedEmitter) {
+    public ToolApprovalService(SessionEventStore sessionEventStore, SessionService sessionService, ToolPermissionRegistry toolPermissionRegistry,
+                               ToolPermissionEvaluatorRegistry evaluatorRegistry, ToolRequestValidatorRegistry validatorRegistry,
+                               ToolEventFormatterRegistry toolEventFormatterRegistry, RunningCommandRegistry runningCommandRegistry) {
+        this.sessionEventStore = sessionEventStore;
+        this.sessionService = sessionService;
+        this.toolPermissionRegistry = toolPermissionRegistry;
+        this.evaluatorRegistry = evaluatorRegistry;
+        this.validatorRegistry = validatorRegistry;
+        this.toolEventFormatterRegistry = toolEventFormatterRegistry;
+        this.runningCommandRegistry = runningCommandRegistry;
+    }
+
+    public ApprovalRequestStatus requestIfNeeded(SessionTurn sessionTurn, String messageId, ToolExecutionRequest request,
+                                                  Consumer<SessionEvent> eventEmitter, Runnable toolStartedEmitter) {
+        String key = toolCallKey(sessionTurn.sessionId(), request.id());
+        invocationTurnIds.put(key, sessionTurn.turnId());
+        ToolPermissionChain chain;
         try {
-            fileToolRequestValidator.validate(sessionTurn.sessionId(), request);
-        } catch (FileToolException e) {
+            validatorRegistry.validate(sessionTurn.sessionId(), request);
+            chain = evaluate(sessionTurn.sessionId(), request);
+        } catch (ToolException | ServiceException e) {
             return ApprovalRequestStatus.INVALID;
         }
-        ToolPermissionSpec spec = toolPermissionRegistry.get(request.name());
-        PermissionCheck check = evaluate(sessionTurn.sessionId(), request, spec);
-        if (check.status() == PermissionCheck.CheckStatus.ALLOWED) {
-            return ApprovalRequestStatus.ALLOWED;
-        }
-        if (check.status() == PermissionCheck.CheckStatus.ERROR) {
-            return ApprovalRequestStatus.INVALID;
-        }
+        if (chain.hasError()) return ApprovalRequestStatus.INVALID;
+        if (!chain.needsApproval()) return ApprovalRequestStatus.ALLOWED;
 
-        String approvalId = IdUtil.getSnowflakeNextIdStr();
-        PendingApproval pending = new PendingApproval(
-                approvalId,
-                sessionTurn.sessionId(),
-                sessionTurn.turnId(),
-                request.name(),
-                spec.permissionType(),
-                check.grantPath(),
-                new CompletableFuture<>(),
-                toolStartedEmitter
-        );
-        String toolCallKey = toolCallKey(sessionTurn.sessionId(), request.id());
-        PendingApproval existing = pendingByToolCall.putIfAbsent(toolCallKey, pending);
-        if (existing != null) {
-            return ApprovalRequestStatus.WAITING;
-        }
-        pendingByApprovalId.put(approvalId, pending);
-
-        SessionEvent event = sessionEventStore.appendSession(
-                sessionTurn.transcriptUri(),
-                sessionTurn.sessionId(),
-                sessionTurn.turnId(),
-                SessionEventType.TOOL_APPROVAL_REQUIRED,
-                SessionEventSource.SYSTEM,
-                ToolApprovalRequiredPayload.builder()
-                        .messageId(messageId)
-                        .approvalId(approvalId)
-                        .toolCallId(request.id())
-                        .toolName(request.name())
-                        .arguments(toolEventFormatterRegistry.formatArguments(request.name(), request.arguments()))
-                        .title(buildTitle(spec, check.grantPath()))
-                        .description(buildDescription(spec, check.grantPath()))
-                        .permissionType(spec.permissionType())
-                        .grantPath(check.grantPath())
-                        .build()
-        );
-        eventEmitter.accept(event);
+        PendingToolAuthorization authorization = new PendingToolAuthorization(sessionTurn.sessionId(), sessionTurn.turnId(), sessionTurn.transcriptUri(), messageId, request, chain, eventEmitter, toolStartedEmitter);
+        PendingToolAuthorization existing = pendingByToolCall.putIfAbsent(key, authorization);
+        if (existing != null) return ApprovalRequestStatus.WAITING;
+        int firstIndex = firstApprovalIndex(chain, 0);
+        createApproval(authorization, firstIndex);
         return ApprovalRequestStatus.WAITING;
     }
 
-    /**
-     * 阻塞等待用户对该工具调用的授权结果；会话已授权则立即放行。
-     * 超时、拒绝、中断等分别返回不同错误码，并在 finally 中清理待处理记录。
-     */
     public ToolAuthorizationResult awaitAuthorization(String sessionId, ToolExecutionRequest request) {
-        ToolPermissionSpec spec = toolPermissionRegistry.get(request.name());
-        PermissionCheck check = evaluate(sessionId, request, spec);
-        if (check.status() == PermissionCheck.CheckStatus.ALLOWED) {
-            return ToolAuthorizationResult.allow(ToolApprovalDecision.ALLOW_SESSION, spec.permissionType(), check.grantPath());
-        }
-        if (check.status() == PermissionCheck.CheckStatus.ERROR) {
-            return ToolAuthorizationResult.error(check.errorCode(), check.message(), spec.permissionType(), check.grantPath());
-        }
+        String key = toolCallKey(sessionId, request.id());
+        PendingToolAuthorization authorization = pendingByToolCall.get(key);
+        if (authorization == null) return evaluateImmediate(sessionId, request);
 
-        String toolCallKey = toolCallKey(sessionId, request.id());
-        PendingApproval pending = pendingByToolCall.get(toolCallKey);
-        if (pending == null) {
-            return ToolAuthorizationResult.denied(spec.permissionType(), check.grantPath());
-        }
-
+        PermissionRequirement lastRequirement = null;
         try {
-            ToolApprovalDecision decision = pending.future().get(APPROVAL_TIMEOUT_MINUTES, TimeUnit.MINUTES);
-            if (decision == ToolApprovalDecision.DENY) {
-                return ToolAuthorizationResult.denied(pending.permissionType(), pending.grantPath());
+            for (int index = 0; index < authorization.chain().requirements().size(); index++) {
+                PermissionRequirement requirement = authorization.chain().requirements().get(index);
+                lastRequirement = requirement;
+                if (requirement.check().status() == PermissionCheck.CheckStatus.ALLOWED) continue;
+                if (requirement.check().status() == PermissionCheck.CheckStatus.ERROR) return error(requirement);
+
+                PendingApproval pending = authorization.currentApproval();
+                if (pending == null || pending.requirementIndex() != index) pending = createApproval(authorization, index);
+                ToolApprovalDecision decision = pending.future().get(APPROVAL_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+                cleanupApproval(pending);
+                if (decision == ToolApprovalDecision.DENY || authorization.cancelled()) {
+                    return ToolAuthorizationResult.denied(requirement.permissionType(), requirement.grantPath());
+                }
+                authorization.grantedRequirements().add(requirement);
+                int nextIndex = firstApprovalIndex(authorization.chain(), index + 1);
+                if (nextIndex >= 0) createApproval(authorization, nextIndex);
             }
 
-            // 同意
-            pending.toolStartedEmitter().run();
-            return ToolAuthorizationResult.allow(decision, pending.permissionType(), pending.grantPath());
+            ToolAuthorizationResult verified = verifyFinalPlan(sessionId, request, authorization);
+            if (!verified.allowed()) return verified;
+            authorization.toolStartedEmitter().run();
+            return ToolAuthorizationResult.allow(ToolApprovalDecision.ALLOW_ONCE,
+                    lastRequirement == null ? ToolPermissionType.NONE : lastRequirement.permissionType(),
+                    lastRequirement == null ? null : lastRequirement.grantPath());
         } catch (TimeoutException e) {
-            return ToolAuthorizationResult.timeout(pending.permissionType(), pending.grantPath());
+            PendingApproval pending = authorization.currentApproval();
+            return ToolAuthorizationResult.timeout(pending == null ? null : pending.permissionType(), pending == null ? null : pending.grantPath());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_INTERRUPTED, "工具授权等待被中断", pending.permissionType(), pending.grantPath());
+            PendingApproval pending = authorization.currentApproval();
+            return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_INTERRUPTED, "工具授权等待被中断",
+                    pending == null ? null : pending.permissionType(), pending == null ? null : pending.grantPath());
         } catch (Exception e) {
-            return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_ERROR, "工具授权处理失败", pending.permissionType(), pending.grantPath());
+            PendingApproval pending = authorization.currentApproval();
+            return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_ERROR, "工具授权处理失败",
+                    pending == null ? null : pending.permissionType(), pending == null ? null : pending.grantPath());
         } finally {
-            pendingByApprovalId.remove(pending.approvalId(), pending);
-            pendingByToolCall.remove(toolCallKey, pending);
+            PendingApproval pending = authorization.currentApproval();
+            if (pending != null) cleanupApproval(pending);
+            pendingByToolCall.remove(key, authorization);
         }
     }
 
-    /**
-     * 正式执行工具前再次校验路径与授权状态，降低“检查后参数被替换”的风险。
-     * ALLOW_ONCE 不依赖持久化授权，只校验本次授权目录与当前参数解析结果一致。
-     */
-    public ToolAuthorizationResult verifyBeforeExecute(String sessionId, ToolExecutionRequest request, ToolAuthorizationResult prior) {
-        if (prior == null || !prior.allowed()) {
-            return prior == null ? ToolAuthorizationResult.denied(null, null) : prior;
-        }
-
-        ToolPermissionSpec spec = toolPermissionRegistry.get(request.name());
-        if (spec.permissionType() == ToolPermissionType.NONE || spec.permissionType() == ToolPermissionType.TOOL) {
-            return prior;
-        }
-
-        PermissionCheck check = evaluate(sessionId, request, spec);
-        if (check.status() == PermissionCheck.CheckStatus.ERROR) {
-            return ToolAuthorizationResult.error(check.errorCode(), check.message(), spec.permissionType(), check.grantPath());
-        }
-
-        if (prior.decision() == ToolApprovalDecision.ALLOW_ONCE) {
-            if (StrUtil.isBlank(prior.grantPath()) || !StrUtil.equals(prior.grantPath(), check.grantPath())) {
-                return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_PATH_CHANGED, "授权路径与当前工具参数不一致", spec.permissionType(), check.grantPath());
-            }
-            return prior;
-        }
-
-        if (check.status() == PermissionCheck.CheckStatus.ALLOWED) {
-            return prior;
-        }
-        return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_REVOKED, "会话权限已不满足当前路径", spec.permissionType(), check.grantPath());
-    }
-
-    /**
-     * 处理用户对指定授权卡片的决策；ALLOW_SESSION 时先落盘会话权限，再完成等待中的 Future。
-     */
     public void resolve(String sessionId, String approvalId, ToolApprovalDecision decision) {
         PendingApproval pending = pendingByApprovalId.get(approvalId);
-        if (pending == null || !pending.sessionId().equals(sessionId)) {
-            throw new ServiceException("工具授权请求不存在或已失效");
-        }
-        if (decision == ToolApprovalDecision.ALLOW_SESSION) {
-            persistSessionGrant(sessionId, pending);
-        }
-        if (!pending.future().complete(decision)) {
-            throw new ServiceException("工具授权请求已处理");
-        }
+        if (pending == null || !pending.sessionId().equals(sessionId)) throw new ServiceException("工具授权请求不存在或已失效");
+        if (decision == ToolApprovalDecision.ALLOW_SESSION) persistSessionGrant(sessionId, pending);
+        if (!pending.future().complete(decision)) throw new ServiceException("工具授权请求已处理");
     }
 
-    /**
-     * 取消指定 turn 下仍在等待的授权请求，统一按拒绝完成，避免阻塞线程悬挂。
-     */
     public void cancelTurn(String sessionId, String turnId) {
-        pendingByApprovalId.values().stream()
-                .filter(pending -> pending.sessionId().equals(sessionId) && pending.turnId().equals(turnId))
-                .forEach(pending -> pending.future().complete(ToolApprovalDecision.DENY));
+        runningCommandRegistry.cancelTurn(sessionId, turnId);
+        pendingByToolCall.values().stream()
+                .filter(item -> item.sessionId().equals(sessionId) && item.turnId().equals(turnId))
+                .forEach(item -> {
+                    item.cancel();
+                    PendingApproval pending = item.currentApproval();
+                    if (pending != null) pending.future().complete(ToolApprovalDecision.DENY);
+                });
     }
 
-    /**
-     * 清理会话维度的待授权请求（如删除会话时），统一按拒绝完成。
-     */
     public void clearSession(String sessionId) {
-        pendingByApprovalId.values().stream()
-                .filter(pending -> pending.sessionId().equals(sessionId))
-                .forEach(pending -> pending.future().complete(ToolApprovalDecision.DENY));
+        runningCommandRegistry.clearSession(sessionId);
+        pendingByToolCall.values().stream()
+                .filter(item -> item.sessionId().equals(sessionId))
+                .forEach(item -> {
+                    item.cancel();
+                    PendingApproval pending = item.currentApproval();
+                    if (pending != null) pending.future().complete(ToolApprovalDecision.DENY);
+                });
     }
 
-    /**
-     * 将会话级授权写入会话权限配置（工具名 / 读路径 / 写路径）。
-     */
-    private void persistSessionGrant(String sessionId, PendingApproval pending) {
-        ToolPermissionType type = pending.permissionType();
-        if (type == ToolPermissionType.TOOL) {
-            sessionService.grantToolPermission(sessionId, pending.toolName());
-            return;
-        }
-        if (type == ToolPermissionType.READ) {
-            sessionService.grantReadPath(sessionId, pending.grantPath());
-            return;
-        }
-        if (type == ToolPermissionType.WRITE) {
-            sessionService.grantWritePath(sessionId, pending.grantPath());
-        }
+    public String turnId(String sessionId, String toolCallId) {
+        return invocationTurnIds.get(toolCallKey(sessionId, toolCallId));
     }
 
-    /**
-     * 根据工具权限规格与当前会话授权，评估本次调用是否放行、需弹窗或评估失败。
-     */
-    private PermissionCheck evaluate(String sessionId, ToolExecutionRequest request, ToolPermissionSpec spec) {
-        ToolPermissionType type = spec.permissionType();
-        if (type == ToolPermissionType.NONE) {
-            return PermissionCheck.allowed();
-        }
-
-        Sessions session = sessionService.getSession(sessionId);
-        SessionPermissions permissions = sessionService.getSessionPermissions(session);
-
-        if (type == ToolPermissionType.TOOL) {
-            if (permissions.getAllowedTools() != null && permissions.getAllowedTools().contains(request.name())) {
-                return PermissionCheck.allowed();
-            }
-            return PermissionCheck.needAsk();
-        }
-
-        if (type == ToolPermissionType.READ || type == ToolPermissionType.WRITE) {
-            // 工具调用的参数路径
-            String rawPath;
-            try {
-                rawPath = extractPathArgument(request.arguments(), spec.pathParam());
-            } catch (ServiceException e) {
-                return PermissionCheck.error(ToolPermissionErrorCode.PERMISSION_INVALID_PATH, e.getMessage());
-            }
-
-            // 实际需要授权的路径
-            Path grantDir;
-            try {
-                grantDir = FilePermissionUtil.resolveGrantDirectory(session.getWorkspacePath(), rawPath, spec.pathKind());
-            } catch (ServiceException e) {
-                return PermissionCheck.error(ToolPermissionErrorCode.PERMISSION_INVALID_PATH, e.getMessage());
-            }
-
-            String grantPath = FilePermissionUtil.toStoredPath(grantDir);
-            if (isPathAuthorized(type, grantDir, session.getWorkspacePath(), permissions)) {
-                return PermissionCheck.allowed(grantPath);
-            }
-            return PermissionCheck.needAsk(grantPath);
-        }
-
-        return PermissionCheck.error(ToolPermissionErrorCode.PERMISSION_UNKNOWN_TYPE, "未知的工具权限类型");
+    public void completeInvocation(String sessionId, String toolCallId) {
+        invocationTurnIds.remove(toolCallKey(sessionId, toolCallId));
     }
 
-    /**
-     * 判断授权目录是否已被工作区或会话路径授权覆盖。
-     * WRITE 授权可覆盖同目录 READ；WRITE 即使在工作区内也必须有明确写授权。
-     */
-    private boolean isPathAuthorized(ToolPermissionType type, Path grantDir, String workspacePath, SessionPermissions permissions) {
-        if (type == ToolPermissionType.READ) {
-            if (StrUtil.isNotBlank(workspacePath) && FilePermissionUtil.isUnder(grantDir, Path.of(workspacePath))) {
-                return true;
-            }
-            return FilePermissionUtil.isCoveredByAny(grantDir, permissions.getReadPaths())
-                    || FilePermissionUtil.isCoveredByAny(grantDir, permissions.getReadWritePaths());
-        }
-        if (type == ToolPermissionType.WRITE) {
-            return FilePermissionUtil.isCoveredByAny(grantDir, permissions.getReadWritePaths());
-        }
-        return false;
-    }
-
-    /**
-     * 从工具参数 JSON 中解析路径字段，缺参或非法 JSON 时抛出业务异常。
-     */
-    private String extractPathArgument(String argumentsJson, String pathParam) {
-        if (StrUtil.isBlank(pathParam)) {
-            throw new ServiceException("路径参数未配置");
-        }
-        if (StrUtil.isBlank(argumentsJson)) {
-            throw new ServiceException("缺少路径参数: " + pathParam);
-        }
+    private ToolAuthorizationResult evaluateImmediate(String sessionId, ToolExecutionRequest request) {
         try {
-            JSONObject json = JSON.parseObject(argumentsJson);
-            if (json == null || !json.containsKey(pathParam)) {
-                throw new ServiceException("缺少路径参数: " + pathParam);
+            ToolPermissionChain chain = evaluate(sessionId, request);
+            for (PermissionRequirement requirement : chain.requirements()) {
+                if (requirement.check().status() == PermissionCheck.CheckStatus.ERROR) return error(requirement);
+                if (requirement.check().status() == PermissionCheck.CheckStatus.NEED_ASK) return ToolAuthorizationResult.denied(requirement.permissionType(), requirement.grantPath());
             }
-            Object value = json.get(pathParam);
-            if (value == null || StrUtil.isBlank(String.valueOf(value))) {
-                throw new ServiceException("路径参数不能为空: " + pathParam);
-            }
-            return String.valueOf(value).trim();
-        } catch (ServiceException e) {
+            PermissionRequirement last = chain.requirements().isEmpty() ? null : chain.requirements().getLast();
+            return ToolAuthorizationResult.allow(ToolApprovalDecision.ALLOW_SESSION, last == null ? ToolPermissionType.NONE : last.permissionType(), last == null ? null : last.grantPath());
+        } catch (ToolException e) {
             throw e;
-        } catch (Exception e) {
-            throw new ServiceException("无法解析路径参数: " + pathParam);
+        } catch (RuntimeException e) {
+            return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_ERROR, "工具权限评估失败", null, null);
         }
     }
 
-    /**
-     * 生成授权卡片标题；规格未配置时按权限类型给出默认文案。
-     */
-    private String buildTitle(ToolPermissionSpec spec, String grantPath) {
-        if (StrUtil.isNotBlank(spec.title())) {
-            return spec.title();
+    private ToolAuthorizationResult verifyFinalPlan(String sessionId, ToolExecutionRequest request, PendingToolAuthorization authorization) {
+        ToolPermissionChain current;
+        try {
+            current = evaluate(sessionId, request);
+        } catch (RuntimeException e) {
+            return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_REVOKED, "执行前权限复核失败", null, null);
         }
-        return switch (spec.permissionType()) {
-            case TOOL -> "允许调用工具 " + spec.toolName() + "？";
+        for (PermissionRequirement requirement : current.requirements()) {
+            if (requirement.check().status() == PermissionCheck.CheckStatus.ERROR) return error(requirement);
+            if (requirement.check().status() == PermissionCheck.CheckStatus.ALLOWED) continue;
+            boolean onceGranted = authorization.grantedRequirements().stream().anyMatch(granted -> granted.sameScope(requirement));
+            if (!onceGranted) {
+                ToolPermissionErrorCode code = requirement.permissionType() == ToolPermissionType.COMMAND
+                        ? ToolPermissionErrorCode.COMMAND_PERMISSION_CHANGED : ToolPermissionErrorCode.PERMISSION_PATH_CHANGED;
+                return ToolAuthorizationResult.error(code, "执行前权限范围与授权时不一致", requirement.permissionType(), requirement.grantPath());
+            }
+        }
+        return ToolAuthorizationResult.allow(ToolApprovalDecision.ALLOW_ONCE, null, null);
+    }
+
+    private PendingApproval createApproval(PendingToolAuthorization authorization, int index) {
+        PermissionRequirement requirement = authorization.chain().requirements().get(index);
+        String approvalId = IdUtil.getSnowflakeNextIdStr();
+        int approvalIndex = approvalStageIndex(authorization.chain(), index);
+        int approvalCount = approvalStageCount(authorization.chain());
+        PendingApproval pending = new PendingApproval(approvalId, authorization.sessionId(), authorization.turnId(), authorization.request().name(),
+                requirement.permissionType(), requirement.grantPath(), requirement.grantValue(), approvalIndex, approvalCount, index, new CompletableFuture<>());
+        authorization.currentApproval(pending);
+        pendingByApprovalId.put(approvalId, pending);
+        SessionEvent event = sessionEventStore.appendSession(authorization.transcriptUri(),
+                authorization.sessionId(), authorization.turnId(), SessionEventType.TOOL_APPROVAL_REQUIRED, SessionEventSource.SYSTEM,
+                ToolApprovalRequiredPayload.builder()
+                        .messageId(authorization.messageId())
+                        .approvalId(approvalId)
+                        .toolCallId(authorization.request().id())
+                        .toolName(authorization.request().name())
+                        .arguments(toolEventFormatterRegistry.formatArguments(authorization.request().name(), authorization.request().arguments()))
+                        .title(buildTitle(requirement, authorization.request().name()))
+                        .description(buildDescription(requirement, authorization.request().name()))
+                        .permissionType(requirement.permissionType())
+                        .grantPath(requirement.grantPath())
+                        .approvalIndex(approvalIndex)
+                        .approvalCount(approvalCount)
+                        .build());
+        authorization.eventEmitter().accept(event);
+        return pending;
+    }
+
+    private void cleanupApproval(PendingApproval pending) {
+        pendingByApprovalId.remove(pending.approvalId(), pending);
+    }
+
+    private int firstApprovalIndex(ToolPermissionChain chain, int start) {
+        for (int index = start; index < chain.requirements().size(); index++) {
+            if (chain.requirements().get(index).check().status() == PermissionCheck.CheckStatus.NEED_ASK) return index;
+        }
+        return -1;
+    }
+
+    private int approvalStageIndex(ToolPermissionChain chain, int requirementIndex) {
+        int approvalIndex = 0;
+        for (int index = 0; index <= requirementIndex; index++) {
+            if (chain.requirements().get(index).check().status() == PermissionCheck.CheckStatus.NEED_ASK) approvalIndex++;
+        }
+        return approvalIndex;
+    }
+
+    private int approvalStageCount(ToolPermissionChain chain) {
+        return (int) chain.requirements().stream()
+                .filter(item -> item.check().status() == PermissionCheck.CheckStatus.NEED_ASK)
+                .count();
+    }
+
+    private ToolPermissionChain evaluate(String sessionId, ToolExecutionRequest request) {
+        ToolPermissionSpec spec = toolPermissionRegistry.get(request.name());
+        return evaluatorRegistry.evaluate(sessionId, request, spec);
+    }
+
+    private void persistSessionGrant(String sessionId, PendingApproval pending) {
+        switch (pending.permissionType()) {
+            case TOOL -> sessionService.grantToolPermission(sessionId, pending.toolName());
+            case READ -> sessionService.grantReadPath(sessionId, pending.grantPath());
+            case WRITE -> sessionService.grantWritePath(sessionId, pending.grantPath());
+            case COMMAND -> sessionService.grantCommandPermission(sessionId, pending.grantValue());
+            case NONE -> {
+            }
+        }
+    }
+
+    private ToolAuthorizationResult error(PermissionRequirement requirement) {
+        return ToolAuthorizationResult.error(requirement.check().errorCode(), requirement.check().message(), requirement.permissionType(), requirement.grantPath());
+    }
+
+    private String buildTitle(PermissionRequirement requirement, String toolName) {
+        if (StrUtil.isNotBlank(requirement.title())) return requirement.title();
+        return switch (requirement.permissionType()) {
+            case TOOL -> "允许调用工具 " + toolName + "？";
             case READ -> "允许读取目录？";
             case WRITE -> "允许写入目录？";
+            case COMMAND -> "允许执行命令？";
             case NONE -> "需要授权";
         };
     }
 
-    /**
-     * 生成授权卡片描述；路径类权限会附带待授权目录说明。
-     */
-    private String buildDescription(ToolPermissionSpec spec, String grantPath) {
-        if (StrUtil.isNotBlank(spec.description()) && spec.permissionType() == ToolPermissionType.TOOL) {
-            return spec.description();
-        }
-        if (spec.permissionType() == ToolPermissionType.READ) {
-            return "将授权读取目录：" + grantPath + "（包含其子目录）";
-        }
-        if (spec.permissionType() == ToolPermissionType.WRITE) {
-            return "将授权读写目录：" + grantPath + "（包含其子目录）";
-        }
-        if (StrUtil.isNotBlank(spec.description())) {
-            return spec.description();
-        }
-        return "工具 " + spec.toolName() + " 需要授权后才能继续。";
+    private String buildDescription(PermissionRequirement requirement, String toolName) {
+        if (StrUtil.isNotBlank(requirement.description())) return requirement.description();
+        return switch (requirement.permissionType()) {
+            case READ -> "将授权读取目录：" + requirement.grantPath() + "（包含其子目录）";
+            case WRITE -> "将授权读写目录：" + requirement.grantPath() + "（包含其子目录）";
+            default -> "工具 " + toolName + " 需要授权后才能继续。";
+        };
     }
 
-    /**
-     * 组装 sessionId + toolCallId 的待授权索引键。
-     */
     private String toolCallKey(String sessionId, String toolCallId) {
-        if (StrUtil.isBlank(toolCallId)) {
-            throw new ServiceException("工具调用 ID 不能为空");
-        }
+        if (StrUtil.isBlank(toolCallId)) throw new ServiceException("工具调用 ID 不能为空");
         return sessionId + ":" + toolCallId;
     }
 
@@ -384,4 +313,3 @@ public class ToolApprovalService {
         INVALID
     }
 }
-

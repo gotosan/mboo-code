@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.yu.mboocode.agent.model.Sessions;
 import com.yu.mboocode.agent.service.SessionService;
 import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.llm.tool.ToolCommonErrorCode;
 import com.yu.mboocode.llm.tool.permission.FilePermissionUtil;
 import org.springframework.stereotype.Component;
 
@@ -35,16 +36,16 @@ public class FileToolSupport {
         } catch (FileToolException e) {
             throw e;
         } catch (ServiceException e) {
-            throw new FileToolException(FileToolErrorCode.INVALID_PATH, e.getMessage());
+            throw new FileToolException(ToolCommonErrorCode.INVALID_PATH, e.getMessage());
         }
     }
 
     public void validatePathArgument(String path) {
         if (StrUtil.isBlank(path)) {
-            throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "path 不能为空");
+            throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "path 不能为空");
         }
         if (path.length() > FilePermissionUtil.MAX_PATH_LENGTH) {
-            throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "path 长度不能超过 " + FilePermissionUtil.MAX_PATH_LENGTH + " 个字符");
+            throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "path 长度不能超过 " + FilePermissionUtil.MAX_PATH_LENGTH + " 个字符");
         }
     }
 
@@ -70,16 +71,16 @@ public class FileToolSupport {
 
     public void requireDirectory(Path path) {
         if (Files.notExists(path)) {
-            throw new FileToolException(FileToolErrorCode.PATH_NOT_FOUND, "目标路径不存在");
+            throw new FileToolException(ToolCommonErrorCode.PATH_NOT_FOUND, "目标路径不存在");
         }
         if (!Files.isDirectory(path)) {
-            throw new FileToolException(FileToolErrorCode.PATH_NOT_DIRECTORY, "目标路径不是目录");
+            throw new FileToolException(ToolCommonErrorCode.PATH_NOT_DIRECTORY, "目标路径不是目录");
         }
     }
 
     public void requireRegularFile(Path path) {
         if (Files.notExists(path)) {
-            throw new FileToolException(FileToolErrorCode.PATH_NOT_FOUND, "目标文件不存在");
+            throw new FileToolException(ToolCommonErrorCode.PATH_NOT_FOUND, "目标文件不存在");
         }
         if (!Files.isRegularFile(path)) {
             throw new FileToolException(FileToolErrorCode.PATH_NOT_REGULAR_FILE, "目标路径不是普通文件");

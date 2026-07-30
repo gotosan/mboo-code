@@ -1,10 +1,6 @@
 package com.yu.mboocode.llm.tool.file;
 
 public enum FileToolErrorCode {
-    INVALID_ARGUMENT,
-    INVALID_PATH,
-    PATH_NOT_FOUND,
-    PATH_NOT_DIRECTORY,
     PATH_NOT_REGULAR_FILE,
     PATH_IGNORED,
     GIT_INTERNAL_WRITE_DENIED,

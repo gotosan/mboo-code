@@ -1,7 +1,8 @@
 package com.yu.mboocode.llm.tool.file;
 
 import com.yu.mboocode.llm.dto.FileChangeData;
-import com.yu.mboocode.llm.dto.FileToolResult;
+import com.yu.mboocode.llm.dto.ToolResult;
+import com.yu.mboocode.llm.tool.ToolCommonErrorCode;
 import com.yu.mboocode.llm.tool.permission.PathKind;
 import com.yu.mboocode.llm.tool.permission.ToolPermission;
 import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
@@ -31,7 +32,7 @@ public class EditFileTool {
 
     @Tool("通过精确字符串替换修改已有文本文件。修改前应先读取文件；局部修改优先使用本工具。")
     @ToolPermission(value = ToolPermissionType.WRITE, pathParam = "path", pathKind = PathKind.FILE)
-    public FileToolResult<FileChangeData> edit_file(
+    public ToolResult<FileChangeData> edit_file(
             @P(name = "path", value = "已存在的目标文件路径") String path,
             @P(name = "oldText", value = "必须与当前文件内容精确匹配的文本") String oldText,
             @P(name = "newText", value = "替换后的文本，可以为空") String newText,
@@ -54,14 +55,14 @@ public class EditFileTool {
             int replacements = Boolean.TRUE.equals(replaceAll) ? occurrences : 1;
             if (nextContent.equals(document.content())) {
                 FileChangeData data = new FileChangeData("NO_CHANGES", paths.target().toString(), paths.workspaceRelativePath(), 0, 0, document.byteLength(), document.byteLength(), replacements, "", false);
-                return FileToolResult.noChanges(data);
+                return ToolResult.noChanges(data);
             }
 
             byte[] nextBytes = textFileSupport.encode(nextContent, document.charset(), document.bom(), document.newline());
             FileDiffSupport.DiffResult diff = fileDiffSupport.create(diffPath(paths), document.content(), nextContent);
             textFileSupport.atomicWrite(paths.target(), nextBytes, document.fingerprint(), true);
             FileChangeData data = new FileChangeData("EDIT", paths.target().toString(), paths.workspaceRelativePath(), diff.addedLines(), diff.deletedLines(), document.byteLength(), nextBytes.length, replacements, diff.diff(), diff.truncated());
-            return FileToolResult.completed(data);
+            return ToolResult.completed(data);
         } finally {
             lock.unlock();
         }
@@ -69,10 +70,10 @@ public class EditFileTool {
 
     private void validate(String path, String oldText, String newText) {
         fileToolSupport.validatePathArgument(path);
-        if (oldText == null || oldText.isEmpty()) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "oldText 不能为空");
-        if (newText == null) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "newText 不能为空，可以传空字符串");
-        if (oldText.length() > MAX_TEXT_LENGTH) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "oldText 不能超过 1 MiB 字符数据");
-        if (newText.length() > MAX_TEXT_LENGTH) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "newText 不能超过 1 MiB 字符数据");
+        if (oldText == null || oldText.isEmpty()) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "oldText 不能为空");
+        if (newText == null) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "newText 不能为空，可以传空字符串");
+        if (oldText.length() > MAX_TEXT_LENGTH) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "oldText 不能超过 1 MiB 字符数据");
+        if (newText.length() > MAX_TEXT_LENGTH) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "newText 不能超过 1 MiB 字符数据");
     }
 
     private int countOccurrences(String content, String target) {

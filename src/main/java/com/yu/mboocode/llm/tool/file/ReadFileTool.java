@@ -1,6 +1,7 @@
 package com.yu.mboocode.llm.tool.file;
 
-import com.yu.mboocode.llm.dto.FileToolResult;
+import com.yu.mboocode.llm.dto.ToolResult;
+import com.yu.mboocode.llm.tool.ToolCommonErrorCode;
 import com.yu.mboocode.llm.dto.ReadFileData;
 import com.yu.mboocode.llm.tool.permission.PathKind;
 import com.yu.mboocode.llm.tool.permission.ToolPermission;
@@ -29,7 +30,7 @@ public class ReadFileTool {
 
     @Tool("分页读取普通文本文件并返回带行号内容。结果截断时使用 nextOffset 继续读取。")
     @ToolPermission(value = ToolPermissionType.READ, pathParam = "path", pathKind = PathKind.FILE)
-    public FileToolResult<ReadFileData> read_file(
+    public ToolResult<ReadFileData> read_file(
             @P(name = "path", value = "目标文件路径，支持工作区相对路径或绝对路径") String path,
             @P(name = "offset", value = "起始行，从 1 开始", defaultValue = "1") Integer offset,
             @P(name = "limit", value = "最大读取行数，默认 300，最大 1000", defaultValue = "300") Integer limit,
@@ -37,8 +38,8 @@ public class ReadFileTool {
         fileToolSupport.validatePathArgument(path);
         int start = offset == null ? 1 : offset;
         int maxLines = limit == null ? DEFAULT_LIMIT : limit;
-        if (start < 1) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "offset 必须大于等于 1");
-        if (maxLines < 1 || maxLines > MAX_LIMIT) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "limit 必须在 1 到 1000 之间");
+        if (start < 1) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "offset 必须大于等于 1");
+        if (maxLines < 1 || maxLines > MAX_LIMIT) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "limit 必须在 1 到 1000 之间");
 
         FileToolSupport.WorkspacePaths paths = fileToolSupport.resolve(sessionId, path);
         fileToolSupport.requireNotIgnored(paths.target());
@@ -63,7 +64,7 @@ public class ReadFileTool {
         int startLine = index < lines.size() ? index + 1 : start;
         int endLine = endIndex > index ? endIndex : 0;
         ReadFileData data = new ReadFileData(paths.target().toString(), paths.workspaceRelativePath(), startLine, endLine, lines.size(), content.toString(), truncated, nextOffset);
-        return FileToolResult.completed(data);
+        return ToolResult.completed(data);
     }
 
     private String truncateLine(String line) {

@@ -3,7 +3,8 @@ package com.yu.mboocode.llm.tool.file;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
-import com.yu.mboocode.llm.dto.FileToolResult;
+import com.yu.mboocode.llm.dto.ToolResult;
+import com.yu.mboocode.llm.tool.ToolCommonErrorCode;
 import com.yu.mboocode.llm.dto.SearchTextData;
 import com.yu.mboocode.llm.dto.SearchTextMatch;
 import com.yu.mboocode.llm.tool.permission.FilePermissionUtil;
@@ -47,7 +48,7 @@ public class SearchTextTool {
 
     @Tool("在目录内搜索单行文本。默认按普通文本精确搜索；regex=true 时使用 ripgrep 的 Rust 正则引擎。")
     @ToolPermission(value = ToolPermissionType.READ, pathParam = "path", pathKind = PathKind.DIRECTORY)
-    public FileToolResult<SearchTextData> search_text(
+    public ToolResult<SearchTextData> search_text(
             @P(name = "query", value = "普通文本或正则表达式") String query,
             @P(name = "path", value = "搜索起点目录，支持工作区相对路径或绝对路径") String path,
             @P(name = "glob", value = "可选文件过滤 glob", defaultValue = "") String glob,
@@ -135,16 +136,16 @@ public class SearchTextTool {
         matches.sort(Comparator.comparing(SearchTextMatch::path).thenComparingInt(SearchTextMatch::lineNumber));
         int skippedIgnored = Math.max(classification.skippedIgnoredFiles(), ignoredFiles.size());
         SearchTextData data = new SearchTextData(matches, matches.size(), files.size(), classification.skippedBinaryFiles(), classification.skippedEncodingFiles(), classification.skippedLargeFiles(), skippedIgnored, truncated);
-        return FileToolResult.completed(data);
+        return ToolResult.completed(data);
     }
 
     private void validate(String query, String path, String glob, Integer maxResults) {
         fileToolSupport.validatePathArgument(path);
-        if (query == null || query.isEmpty()) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "query 不能为空");
-        if (query.length() > MAX_QUERY_LENGTH) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "query 长度不能超过 4096 个字符");
-        if (glob != null && glob.length() > MAX_GLOB_LENGTH) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "glob 长度不能超过 1024 个字符");
+        if (query == null || query.isEmpty()) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "query 不能为空");
+        if (query.length() > MAX_QUERY_LENGTH) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "query 长度不能超过 4096 个字符");
+        if (glob != null && glob.length() > MAX_GLOB_LENGTH) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "glob 长度不能超过 1024 个字符");
         int limit = maxResults == null ? DEFAULT_MAX_RESULTS : maxResults;
-        if (limit < 1 || limit > MAX_RESULTS) throw new FileToolException(FileToolErrorCode.INVALID_ARGUMENT, "maxResults 必须在 1 到 200 之间");
+        if (limit < 1 || limit > MAX_RESULTS) throw new FileToolException(ToolCommonErrorCode.INVALID_ARGUMENT, "maxResults 必须在 1 到 200 之间");
     }
 
     private void addIgnoreGlobs(List<String> arguments) {

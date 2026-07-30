@@ -13,7 +13,9 @@ public enum ToolPermissionType implements CodeEnum {
     /** 读取指定目录及其子目录 */
     READ,
     /** 读写指定目录及其子目录，包含 READ */
-    WRITE;
+    WRITE,
+    /** 执行符合规则或会话精确授权的 Shell 命令 */
+    COMMAND;
 
     @Override
     public String getCode() {

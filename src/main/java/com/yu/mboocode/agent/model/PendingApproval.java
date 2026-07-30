@@ -29,10 +29,19 @@ public record PendingApproval(
         @Schema(description = "申请授权的规范化目录，仅 READ/WRITE 使用")
         String grantPath,
 
-        @Schema(hidden = true)
-        CompletableFuture<ToolApprovalDecision> future,
+        @Schema(description = "内部授权范围值，例如命令指纹")
+        String grantValue,
+
+        @Schema(description = "当前授权阶段，从 1 开始")
+        int approvalIndex,
+
+        @Schema(description = "授权阶段总数")
+        int approvalCount,
 
         @Schema(hidden = true)
-        Runnable toolStartedEmitter
+        int requirementIndex,
+
+        @Schema(hidden = true)
+        CompletableFuture<ToolApprovalDecision> future
 ) {
 }

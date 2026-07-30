@@ -3,8 +3,6 @@ package com.yu.mboocode.llm.tool;
 import com.alibaba.fastjson2.JSON;
 import com.yu.mboocode.agent.service.ToolApprovalService;
 import com.yu.mboocode.llm.tool.permission.ToolAuthorizationResult;
-import com.yu.mboocode.llm.tool.file.FileToolException;
-import com.yu.mboocode.llm.tool.file.FileToolRequestValidator;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.invocation.InvocationContext;
 import dev.langchain4j.service.tool.DefaultToolExecutor;
@@ -21,12 +19,12 @@ import java.util.Map;
 public class PermissionToolExecutor implements ToolExecutor {
     private final ToolExecutor delegate;
     private final ToolApprovalService toolApprovalService;
-    private final FileToolRequestValidator fileToolRequestValidator;
+    private final ToolRequestValidatorRegistry validatorRegistry;
 
-    public PermissionToolExecutor(Object object, Method method, ToolApprovalService toolApprovalService, FileToolRequestValidator fileToolRequestValidator) {
+    public PermissionToolExecutor(Object object, Method method, ToolApprovalService toolApprovalService, ToolRequestValidatorRegistry validatorRegistry) {
         this.delegate = new DefaultToolExecutor(object, method);
         this.toolApprovalService = toolApprovalService;
-        this.fileToolRequestValidator = fileToolRequestValidator;
+        this.validatorRegistry = validatorRegistry;
     }
 
     @Override
@@ -38,22 +36,26 @@ public class PermissionToolExecutor implements ToolExecutor {
     @Override
     public ToolExecutionResult executeWithContext(ToolExecutionRequest request, InvocationContext context) {
         String sessionId = String.valueOf(context.chatMemoryId());
+        ToolAuthorizationResult authorization;
         try {
-            fileToolRequestValidator.validate(sessionId, request);
-        } catch (FileToolException e) {
+            validatorRegistry.validate(sessionId, request);
+            authorization = toolApprovalService.awaitAuthorization(sessionId, request);
+        } catch (ToolException e) {
+            toolApprovalService.completeInvocation(sessionId, request.id());
             return ToolExecutionResult.builder().isError(true).resultText(e.toResultJson()).build();
         }
-        ToolAuthorizationResult authorization = toolApprovalService.awaitAuthorization(sessionId, request);
         if (!authorization.allowed()) {
+            toolApprovalService.completeInvocation(sessionId, request.id());
             return toErrorResult(authorization);
         }
 
-        ToolAuthorizationResult verified = toolApprovalService.verifyBeforeExecute(sessionId, request, authorization);
-        if (!verified.allowed()) {
-            return toErrorResult(verified);
+        ToolInvocationContext.set(sessionId, toolApprovalService.turnId(sessionId, request.id()), request.id());
+        try {
+            return delegate.executeWithContext(request, context);
+        } finally {
+            ToolInvocationContext.clear();
+            toolApprovalService.completeInvocation(sessionId, request.id());
         }
-
-        return delegate.executeWithContext(request, context);
     }
 
     private ToolExecutionResult toErrorResult(ToolAuthorizationResult authorization) {

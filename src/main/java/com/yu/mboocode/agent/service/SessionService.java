@@ -261,6 +261,16 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         });
     }
 
+    @Transactional
+    public void grantCommandPermission(String sessionId, String fingerprint) {
+        if (StrUtil.isBlank(fingerprint)) return;
+        updatePermissions(sessionId, permissions -> {
+            LinkedHashSet<String> commands = new LinkedHashSet<>(CollUtil.emptyIfNull(permissions.getAllowedCommands()));
+            commands.add(fingerprint);
+            permissions.setAllowedCommands(new ArrayList<>(commands));
+        });
+    }
+
     private static final String PERMISSIONS_KEY = "permissions"; // metadataJson 中权限字段名
     /**
      * 修改会话 permissions 节点；底层走统一的 metadataJson 更新（分段锁 + CAS 重试）。
@@ -333,6 +343,9 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         }
         if (permissions.getReadWritePaths() == null) {
             permissions.setReadWritePaths(new ArrayList<>());
+        }
+        if (permissions.getAllowedCommands() == null) {
+            permissions.setAllowedCommands(new ArrayList<>());
         }
         return permissions;
     }

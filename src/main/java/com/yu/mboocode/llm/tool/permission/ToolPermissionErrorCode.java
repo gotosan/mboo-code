@@ -21,7 +21,11 @@ public enum ToolPermissionErrorCode implements CodeEnum {
     /** 执行前复核发现路径与授权时不一致 */
     PERMISSION_PATH_CHANGED,
     /** 会话级授权已不满足当前路径 */
-    PERMISSION_REVOKED;
+    PERMISSION_REVOKED,
+    /** 内置命令规则明确禁止命令 */
+    COMMAND_PERMISSION_DENIED,
+    /** 执行前命令身份与授权时不一致 */
+    COMMAND_PERMISSION_CHANGED;
 
     @Override
     public String getCode() {

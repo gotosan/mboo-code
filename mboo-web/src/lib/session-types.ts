@@ -16,7 +16,7 @@ export type ToolCallStatus = "waiting_approval" | "submitting" | "started" | "co
 
 export type ToolApprovalDecision = "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY";
 
-export type ToolPermissionType = "NONE" | "TOOL" | "READ" | "WRITE";
+export type ToolPermissionType = "NONE" | "TOOL" | "READ" | "WRITE" | "COMMAND";
 
 export type ChatReq = {
   modelName: string;
@@ -81,6 +81,8 @@ export type ToolApprovalRequiredPayload = {
   description: string;
   permissionType?: ToolPermissionType | null;
   grantPath?: string | null;
+  approvalIndex?: number;
+  approvalCount?: number;
 };
 
 export type ToolCallEndedPayload = {

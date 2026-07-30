@@ -2,8 +2,8 @@
 
 ## 1. 文档状态
 
-- 状态：待实施。
-- 更新时间：2026-07-28。
+- 状态：已实施。
+- 更新时间：2026-07-30。
 - 适用范围：当前 `mboo-code` 本地 Code Agent 后端与 `mboo-web` 前端。
 - 工具名称：`run_command`。
 - 设计参考：OpenCode `bash` 工具与权限规则、Claude Code Bash/PowerShell 工具与权限规则。

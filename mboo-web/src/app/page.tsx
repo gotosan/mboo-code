@@ -49,6 +49,7 @@ const TOOL_LABELS: Record<string, string> = {
   read_file: "读取文件",
   edit_file: "编辑文件",
   write_file: "写入文件",
+  run_command: "执行命令",
   getWeather: "查询天气",
 };
 
@@ -88,6 +89,8 @@ type ToolCallView = {
   approvalDescription?: string;
   permissionType?: ToolPermissionType;
   grantPath?: string;
+  approvalIndex?: number;
+  approvalCount?: number;
 };
 
 // 助手消息按事件序交错：text / tool，避免工具永远沉底
@@ -2894,7 +2897,22 @@ const ToolApprovalCard = memo(function ToolApprovalCard({
         </span>
       </div>
       {toolCall.approvalDescription ? (
-        <p className="mt-1.5 text-xs leading-5 text-text-2">{toolCall.approvalDescription}</p>
+        <p className="mt-1.5 whitespace-pre-wrap text-xs leading-5 text-text-2">{toolCall.approvalDescription}</p>
+      ) : null}
+      {typeof toolCall.approvalIndex === "number" && typeof toolCall.approvalCount === "number" ? (
+        <p className="mt-1 text-[11px] text-text-3">
+          授权阶段 {toolCall.approvalIndex}/{toolCall.approvalCount}
+        </p>
+      ) : null}
+      {toolCall.permissionType === "COMMAND" && typeof toolCall.parsedArguments?.command === "string" ? (
+        <div className="mt-2 rounded-[3px] border border-running/20 bg-panel-elevated px-2.5 py-2">
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-text-1">
+            {toolCall.parsedArguments.command}
+          </pre>
+          <p className="mt-1 text-[11px] text-danger">
+            命令可访问工作目录之外的文件和网络
+          </p>
+        </div>
       ) : null}
       {toolCall.grantPath &&
       (toolCall.permissionType === "READ" || toolCall.permissionType === "WRITE") ? (
@@ -2932,6 +2950,11 @@ const ToolApprovalCard = memo(function ToolApprovalCard({
           拒绝
         </button>
       </div>
+      {toolCall.permissionType === "COMMAND" ? (
+        <p className="mt-1.5 text-[11px] text-text-3">
+          本会话授权只匹配完全相同的命令、工作目录和 Shell 身份
+        </p>
+      ) : null}
     </div>
   );
 });
@@ -3232,7 +3255,11 @@ function parseToolArguments(toolName: string, value: unknown) {
     pathText:
       FILE_TOOL_NAMES.has(toolName) && typeof parsedArguments.path === "string"
         ? parsedArguments.path
-        : undefined,
+        : toolName === "run_command" && typeof parsedArguments.workdir === "string"
+          ? parsedArguments.workdir
+          : toolName === "run_command"
+            ? "."
+            : undefined,
   };
 }
 
@@ -3402,6 +3429,8 @@ function upsertAssistantToolPart(
         toolCall.approvalDescription ?? existing.toolCall.approvalDescription,
       permissionType: toolCall.permissionType ?? existing.toolCall.permissionType,
       grantPath: toolCall.grantPath ?? existing.toolCall.grantPath,
+      approvalIndex: toolCall.approvalIndex ?? existing.toolCall.approvalIndex,
+      approvalCount: toolCall.approvalCount ?? existing.toolCall.approvalCount,
     },
   };
   return next;
@@ -3493,6 +3522,8 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
       approvalDescription: event.payload.description,
       permissionType: event.payload.permissionType || "TOOL",
       grantPath: event.payload.grantPath || undefined,
+      approvalIndex: event.payload.approvalIndex,
+      approvalCount: event.payload.approvalCount,
     };
   }
 
@@ -3523,6 +3554,9 @@ function sessionAllowLabel(permissionType?: ToolPermissionType) {
   }
   if (permissionType === "WRITE") {
     return "本会话允许读写此目录";
+  }
+  if (permissionType === "COMMAND") {
+    return "本会话允许此命令";
   }
   return "本会话始终允许此工具";
 }
