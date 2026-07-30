@@ -2,8 +2,9 @@ package com.yu.mboocode.agent.service;
 
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.extra.spring.SpringUtil;
 import com.alibaba.fastjson2.JSON;
+import com.yu.mboocode.agent.dto.ActiveTurnRuntime;
+import com.yu.mboocode.agent.dto.ActiveTurnRuntime.TurnTerminalState;
 import com.yu.mboocode.agent.model.payload.*;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.AiCodeService;
@@ -27,14 +28,13 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 @Service
@@ -53,13 +53,22 @@ public class TurnService {
     @Resource
     private ToolEventFormatterRegistry toolEventFormatterRegistry;
 
-    //todo 取消竞态处理 cas
+    private final Map<String, ActiveTurnRuntime> activeTurnRuntime = new ConcurrentHashMap<>();
 
     public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, TurnProcess turnProcess) {
-        SessionTurn sessionTurn = SpringUtil.getBean(getClass()).startTurn(sessionId, workspacePath);
-        return Flux.defer(() -> Flux.defer(() -> turnProcess.process(sessionTurn))
-                .onErrorResume(error ->
-                        Flux.just(sessionEventStore.appendSession(
+        ActiveTurnRuntime runtime = startTurn(sessionId, workspacePath);
+        SessionTurn sessionTurn = runtime.getSessionTurn();
+        return Flux.defer(() -> {
+            if (!runtime.markRunning()) {
+                log.warn("忽略已失效 turn 的订阅 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId());
+                return Flux.empty();
+            }
+            return Flux.defer(() -> turnProcess.process(sessionTurn))
+                    .onErrorResume(error -> {
+                        if (!runtime.claimSystemTerminal(TurnTerminalState.ERROR)) {
+                            return Flux.empty();
+                        }
+                        return Flux.just(sessionEventStore.appendSession(
                                 sessionTurn.transcriptUri(),
                                 sessionTurn.sessionId(),
                                 sessionTurn.turnId(),
@@ -69,43 +78,64 @@ public class TurnService {
                                         .errorMessage(StrUtil.blankToDefault(error.getMessage(), "未知错误"))
                                         .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
                                         .build()
-                        )))
-                .doOnCancel(() -> {
-                    // 只是持久化取消事件，不是很重要，暂时不用 CAS 跟 doOnComplete 竞争终态
-                    sessionEventStore.appendSession(
-                            sessionTurn.transcriptUri(),
-                            sessionTurn.sessionId(),
-                            sessionTurn.turnId(),
-                            SessionEventType.CANCELLED,
-                            SessionEventSource.SYSTEM,
-                            CancelledPayload.builder()
-                                    .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
-                                    .build()
-                    );
-                })
-                .doFinally(_ -> {
-                    try {
-                        sessionService.clearActiveTurn(sessionTurn.sessionId(), sessionTurn.turnId());
-                    } catch (Exception e) {
-                        log.error("clearActiveTurn 失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
-                    }
-                }));
+                        ));
+                    })
+                    .doOnComplete(() -> runtime.acceptTerminal(TurnTerminalState.COMPLETE))
+                    .doOnCancel(() -> {
+                        if (!runtime.claimSystemTerminal(TurnTerminalState.CANCEL)) {
+                            return;
+                        }
+                        sessionEventStore.appendSession(
+                                sessionTurn.transcriptUri(),
+                                sessionTurn.sessionId(),
+                                sessionTurn.turnId(),
+                                SessionEventType.CANCELLED,
+                                SessionEventSource.SYSTEM,
+                                CancelledPayload.builder()
+                                        .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
+                                        .build()
+                        );
+                    })
+                    .doFinally(_ -> finishTurn(runtime));
+        });
     }
 
-    @Transactional
-    public SessionTurn startTurn(String sessionId, String workspacePath) {
+    private ActiveTurnRuntime startTurn(String sessionId, String workspacePath) {
         Sessions session = sessionService.getActiveOrCreateSession(sessionId, workspacePath);
         String turnId = IdUtil.getSnowflakeNextIdStr();
-        if (!sessionService.updateActiveTurn(session.getId(), turnId)) {
-            throw new ServiceException("当前会话已有运行中的 turn");
+        ActiveTurnRuntime runtime = new ActiveTurnRuntime(new SessionTurn(session.getId(), session.getTranscriptUri(), turnId, System.nanoTime()));
+
+        while (true) {
+            ActiveTurnRuntime existing = activeTurnRuntime.putIfAbsent(session.getId(), runtime);
+            if (existing == null) {
+                break;
+            }
+            if (!existing.tryReclaimStarting()) {
+                throw new ServiceException("当前会话已有运行中的 turn");
+            }
+            if (activeTurnRuntime.remove(session.getId(), existing)) {
+                log.warn("清理未订阅的 turn sessionId:{} turnId:{}", session.getId(), existing.getSessionTurn().turnId());
+            }
         }
 
-        //todo 此处应该有识别僵尸 turn 并清理逻辑
-
-        return new SessionTurn(session.getId(), session.getTranscriptUri(), turnId, System.nanoTime());
+        try {
+            Sessions latestSession = sessionService.getActiveSession(session.getId());
+            String previousTurnId = latestSession.getActiveTurnId();
+            if (!sessionService.claimActiveTurn(session.getId(), previousTurnId, turnId)) {
+                throw new ServiceException("当前会话运行状态已发生变化，请重试");
+            }
+            if (StrUtil.isNotBlank(previousTurnId)) {
+                log.warn("识别并接管僵尸 turn sessionId:{} previousTurnId:{} newTurnId:{}", session.getId(), previousTurnId, turnId);
+            }
+            return runtime;
+        } catch (RuntimeException e) {
+            activeTurnRuntime.remove(session.getId(), runtime);
+            throw e;
+        }
     }
 
     public Flux<@NonNull SessionEvent> chatStream(SessionTurn sessionTurn, String userMessage, ChatRequestParameters params) {
+        ActiveTurnRuntime runtime = getActiveRuntime(sessionTurn);
         String userMessageId = IdUtil.getSnowflakeNextIdStr();
         Flux<@NonNull SessionEvent> userMessageFlux = Flux.just(sessionEventStore.appendSession(
                 sessionTurn.transcriptUri(),
@@ -122,12 +152,13 @@ public class TurnService {
         String assistantMessageId = IdUtil.getSnowflakeNextIdStr();
         StringBuffer finalText = new StringBuffer();
         Flux<@NonNull SessionEvent> assistantMessageFlux = Flux.create(sink -> {
-            AtomicReference<StreamingHandle> streamingHandleRef = new AtomicReference<>();
-
             // 注册流取消处理器
             sink.onCancel(() -> {
-                Optional.ofNullable(streamingHandleRef.get()).ifPresent(StreamingHandle::cancel);
+                runtime.cancelStreaming();
                 toolApprovalService.cancelTurn(sessionTurn.sessionId(), sessionTurn.turnId());
+                if (!runtime.claimAssistantTerminal(TurnTerminalState.CANCEL)) {
+                    return;
+                }
 
                 String text = finalText.toString();
                 if (StrUtil.isNotBlank(text)) {
@@ -148,11 +179,11 @@ public class TurnService {
                             .build());
                     appendInterruptedMemory(sessionTurn.sessionId(), text);
                 }
-            }); // 方法内有做处理，暂时不用 CAS 跟 onCompleteResponse 竞争终态
+            });
 
             aiCodeService.chatStream(sessionTurn.sessionId(), userMessage, params)
                     .onPartialResponseWithContext((response, context) -> { // 助手回复
-                        if (cancelHandle(sink, context.streamingHandle(), streamingHandleRef)) {
+                        if (cancelHandle(sink, context.streamingHandle(), runtime)) {
                             return;
                         }
 
@@ -170,28 +201,28 @@ public class TurnService {
                         finalText.append(text);
                     })
                     .onPartialThinkingWithContext((thinking, context) -> { // 思考
-                        if (cancelHandle(sink, context.streamingHandle(), streamingHandleRef)) {
+                        if (cancelHandle(sink, context.streamingHandle(), runtime)) {
                             return;
                         }
 
                         // todo 记录思考
                     })
-                    .onPartialToolCallWithContext((toolCall, context) -> cancelHandle(sink, context.streamingHandle(), streamingHandleRef)) // tool call
+                    .onPartialToolCallWithContext((toolCall, context) -> cancelHandle(sink, context.streamingHandle(), runtime)) // tool call
                     .beforeToolExecution(beforeToolExecution -> { // 工具调用前
                         ToolExecutionRequest request = beforeToolExecution.request();
                         Runnable toolStartedEmitter = () -> emitEvent(sink, () -> sessionEventStore.appendSession(
-                                        sessionTurn.transcriptUri(),
-                                        sessionTurn.sessionId(),
-                                        sessionTurn.turnId(),
-                                        SessionEventType.TOOL_CALL_STARTED,
-                                        SessionEventSource.ASSISTANT,
-                                        ToolCallStartedPayload.builder()
-                                                .messageId(assistantMessageId)
-                                                .toolCallId(request.id())
-                                                .toolName(request.name())
-                                                .arguments(toolEventFormatterRegistry.formatArguments(request.name(), request.arguments()))
-                                                .build()
-                                ));
+                                sessionTurn.transcriptUri(),
+                                sessionTurn.sessionId(),
+                                sessionTurn.turnId(),
+                                SessionEventType.TOOL_CALL_STARTED,
+                                SessionEventSource.ASSISTANT,
+                                ToolCallStartedPayload.builder()
+                                        .messageId(assistantMessageId)
+                                        .toolCallId(request.id())
+                                        .toolName(request.name())
+                                        .arguments(toolEventFormatterRegistry.formatArguments(request.name(), request.arguments()))
+                                        .build()
+                        ));
                         ToolApprovalService.ApprovalRequestStatus approvalStatus = toolApprovalService.requestIfNeeded(sessionTurn, assistantMessageId, request, sink::next, toolStartedEmitter);
                         if (approvalStatus == ToolApprovalService.ApprovalRequestStatus.ALLOWED) {
                             toolStartedEmitter.run();
@@ -225,6 +256,9 @@ public class TurnService {
                         ));
                     })
                     .onCompleteResponse(chatResponse -> {
+                        if (!runtime.claimAssistantTerminal(TurnTerminalState.COMPLETE)) {
+                            return;
+                        }
                         //todo chatResponse.aiMessage() 其他内容处理 机制确认
                         emitEvent(sink, () -> sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
                                 .eventId(IdUtil.getSnowflakeNextIdStr())
@@ -244,23 +278,27 @@ public class TurnService {
                         sink.complete();
                     })
                     .onError(error -> {
+                        if (!runtime.claimAssistantTerminal(TurnTerminalState.ERROR)) {
+                            return;
+                        }
                         String text = finalText.toString();
-                        if (StrUtil.isNotBlank(text)) {emitEvent(sink, () -> sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
-                                .eventId(IdUtil.getSnowflakeNextIdStr())
-                                .sessionId(sessionTurn.sessionId())
-                                .turnId(sessionTurn.turnId())
-                                .type(SessionEventType.ASSISTANT_MESSAGE)
-                                .source(SessionEventSource.ASSISTANT)
-                                .createdAt(DateTimeUtil.now())
-                                .payload(AssistantMessagePayload.builder()
-                                        .messageId(assistantMessageId)
-                                        .state(AssistantMessagePayload.AssistantMessageState.ERROR)
-                                        .text(text)
-                                        .errorMessage(error.getMessage())
-                                        .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
-                                        .build())
-                                .meta(Collections.emptyMap())
-                                .build()));
+                        if (StrUtil.isNotBlank(text)) {
+                            emitEvent(sink, () -> sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
+                                    .eventId(IdUtil.getSnowflakeNextIdStr())
+                                    .sessionId(sessionTurn.sessionId())
+                                    .turnId(sessionTurn.turnId())
+                                    .type(SessionEventType.ASSISTANT_MESSAGE)
+                                    .source(SessionEventSource.ASSISTANT)
+                                    .createdAt(DateTimeUtil.now())
+                                    .payload(AssistantMessagePayload.builder()
+                                            .messageId(assistantMessageId)
+                                            .state(AssistantMessagePayload.AssistantMessageState.ERROR)
+                                            .text(text)
+                                            .errorMessage(error.getMessage())
+                                            .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
+                                            .build())
+                                    .meta(Collections.emptyMap())
+                                    .build()));
                             appendInterruptedMemory(sessionTurn.sessionId(), text);
                         }
                         sink.error(error);
@@ -270,13 +308,39 @@ public class TurnService {
         return userMessageFlux.concatWith(assistantMessageFlux);
     }
 
-    private boolean cancelHandle(FluxSink<@NonNull SessionEvent> sink, StreamingHandle streamingHandle, AtomicReference<StreamingHandle> streamingHandleRef) {
-        streamingHandleRef.set(streamingHandle);
+    private boolean cancelHandle(FluxSink<@NonNull SessionEvent> sink, StreamingHandle streamingHandle, ActiveTurnRuntime runtime) {
+        runtime.setStreamingHandle(streamingHandle);
         if (sink.isCancelled()) {
+            runtime.acceptTerminal(TurnTerminalState.CANCEL);
             streamingHandle.cancel();
             return true;
         }
         return false;
+    }
+
+    private ActiveTurnRuntime getActiveRuntime(SessionTurn sessionTurn) {
+        ActiveTurnRuntime runtime = activeTurnRuntime.get(sessionTurn.sessionId());
+        if (runtime == null || !runtime.getSessionTurn().turnId().equals(sessionTurn.turnId())) {
+            throw new ServiceException("当前 turn 运行状态已失效");
+        }
+        return runtime;
+    }
+
+    private void finishTurn(ActiveTurnRuntime runtime) {
+        SessionTurn sessionTurn = runtime.getSessionTurn();
+        try {
+            toolApprovalService.cancelTurn(sessionTurn.sessionId(), sessionTurn.turnId());
+        } catch (Exception e) {
+            log.error("清理 turn 授权请求失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
+        }
+        try {
+            sessionService.clearActiveTurn(sessionTurn.sessionId(), sessionTurn.turnId());
+        } catch (Exception e) {
+            log.error("清理数据库活跃 turn 失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
+        } finally {
+            runtime.finish();
+            activeTurnRuntime.remove(sessionTurn.sessionId(), runtime);
+        }
     }
 
     private void appendInterruptedMemory(String sessionId, String text) {
@@ -323,4 +387,5 @@ public class TurnService {
             return "";
         }
     }
+
 }

@@ -8,7 +8,7 @@
 
 ## 核心约束
 
-- 一个 session 同一时间只允许一个活跃 turn，数据库字段 `active_turn_id` 用于并发占用校验。
+- 一个 session 同一时间只允许一个活跃 turn；进程内 `ActiveTurnRuntime` 用于判断真实存活状态，数据库字段 `active_turn_id` 用于持久化占用和 CAS 校验。
 - `turnId` 只负责关联同一轮中的事件，不使用独立的 turn 开始、完成或失败事件。
 - JSONL 每行都是完整 `SessionEvent`，已写入事件不修改。
 - 事件类型与 Payload Java 类型由 `SessionEventType` 一一绑定，追加和读取时都会校验类型匹配。
@@ -56,7 +56,7 @@ public enum SessionEventType {
 7. 用户允许后写入并推送 `TOOL_CALL_STARTED`；用户拒绝、等待超时或校验失败时，不产生该开始事件。
 8. 工具执行或权限执行器返回失败结果后，写入并推送 `TOOL_CALL_ENDED`。
 9. 模型正常结束时写入并推送 `ASSISTANT_MESSAGE(state=complete)`。
-10. SSE 完成，并在 `doFinally` 中按 `sessionId + turnId` 清理当前 `active_turn_id`。
+10. SSE 完成，并在 `doFinally` 中按 `sessionId + turnId` 清理当前 `active_turn_id` 和进程内 runtime。
 
 所有助手 delta、工具事件、工具授权事件和最终助手消息共用同一个 `messageId`。前端收到最终 `ASSISTANT_MESSAGE` 后，使用其中的完整 `text` 覆盖本地累计文本，同时保留已经合并的工具调用信息。
 
@@ -105,7 +105,7 @@ Content-Type: application/json
 
 如果错误前没有非空助手文本，则不会生成 `ASSISTANT_MESSAGE(state=error)`，只有 `ERROR`。该情况既可能发生在助手流建立之前，也可能发生在助手流已经建立但尚未输出文本时。
 
-`startTurn()` 在返回 Flux 前同步执行。会话不存在、会话不可继续使用或已有运行中 turn 等错误，由全局异常处理器返回统一 `R` JSON，不会包装成 SSE 事件。
+`startTurn()` 在返回 Flux 前同步执行。会话不存在、会话不可继续使用或已有运行中 turn 等错误，由全局异常处理器返回统一 `R` JSON，不会包装成 SSE 事件。数据库存在 `active_turn_id`、但本进程不存在对应 runtime 时，将其视为上一进程遗留的僵尸 turn，并通过预期旧值 CAS 直接接管。该判断基于当前单进程部署约束。
 
 ## 取消处理
 
@@ -121,7 +121,7 @@ Content-Type: application/json
 
 `ASSISTANT_MESSAGE(state=cancel)` 只有在累计文本非空时才会写入。外层和助手流分别处理取消，前端回放不应依赖它与 `CANCELLED` 的文件先后顺序。
 
-当前实现尚未使用 CAS 统一竞争完成、错误和取消终态；极端并发时的终态竞争仍属于后续完善项。
+当前 turn runtime 使用原子终态状态统一竞争完成、错误和取消。相同终态的内外层回调可以分别补齐助手消息和系统事件，不同终态中只有首先写入 runtime 的状态继续执行。
 
 ## 历史恢复
 

@@ -182,11 +182,20 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         removeById(sessionId);
     }
 
-    public boolean updateActiveTurn(String sessionId, String turnId) {
-        return lambdaUpdate()
+    /**
+     * 按预期旧值占用活跃 turn；旧值非空时用于原子接管上一进程遗留的僵尸 turn。
+     */
+    public boolean claimActiveTurn(String sessionId, String expectedTurnId, String newTurnId) {
+        var update = lambdaUpdate()
                 .eq(Sessions::getId, sessionId)
-                .isNull(Sessions::getActiveTurnId)
-                .set(Sessions::getActiveTurnId, turnId)
+                .eq(Sessions::getStatus, Sessions.StatusEnum.ACTIVE.getCode());
+        if (expectedTurnId == null) {
+            update.isNull(Sessions::getActiveTurnId);
+        } else {
+            update.eq(Sessions::getActiveTurnId, expectedTurnId);
+        }
+        return update
+                .set(Sessions::getActiveTurnId, newTurnId)
                 .set(Sessions::getUpdatedAt, DateTimeUtil.now())
                 .update();
     }
