@@ -1,13 +1,13 @@
 package com.yu.mboocode.llm;
 
-import com.yu.mboocode.agent.service.ToolApprovalService;
+import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.config.Setting;
 import com.yu.mboocode.llm.listener.MyAiServiceCompletedListener;
 import com.yu.mboocode.llm.listener.MyChatModelListener;
 import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
-import com.yu.mboocode.llm.tool.PermissionToolExecutor;
-import com.yu.mboocode.llm.tool.ToolRequestValidatorRegistry;
-import com.yu.mboocode.llm.tool.permission.ToolPermissionRegistry;
+import com.yu.mboocode.agent.tool.ToolRequestValidatorRegistry;
+import com.yu.mboocode.agent.tool.permission.ToolPermissionRegistry;
+import com.yu.mboocode.llm.integration.PermissionToolExecutor;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.agent.tool.ToolSpecifications;

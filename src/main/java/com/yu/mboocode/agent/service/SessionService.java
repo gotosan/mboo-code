@@ -14,7 +14,7 @@ import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.common.util.CommonUtil;
 import com.yu.mboocode.common.util.DateTimeUtil;
 import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
-import com.yu.mboocode.llm.tool.permission.SessionPermissions;
+import com.yu.mboocode.agent.tool.permission.SessionPermissions;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

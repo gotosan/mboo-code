@@ -1,6 +1,6 @@
 package com.yu.mboocode.agent.model.payload;
 
-import com.yu.mboocode.llm.tool.permission.ToolPermissionType;
+import com.yu.mboocode.agent.tool.permission.ToolPermissionType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Builder;

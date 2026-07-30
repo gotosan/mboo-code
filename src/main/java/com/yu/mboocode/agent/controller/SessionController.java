@@ -9,7 +9,7 @@ import com.yu.mboocode.agent.dto.SessionUpdateReq;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.Sessions;
 import com.yu.mboocode.agent.service.SessionService;
-import com.yu.mboocode.agent.service.ToolApprovalService;
+import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.service.TurnService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;

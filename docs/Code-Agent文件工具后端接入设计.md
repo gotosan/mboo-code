@@ -654,7 +654,7 @@ Windows UNC 网络共享路径可以使用，但必须按工作区外真实目�
 
 ### 16.1 工具类
 
-在 `com.yu.mboocode.llm.tool.file` 下每个工具一个类：
+在 `com.yu.mboocode.agent.tool.file` 下每个工具一个类：
 
 | 类 | 工具方法 |
 | --- | --- |
@@ -668,7 +668,7 @@ Windows UNC 网络共享路径可以使用，但必须按工作区外真实目�
 
 ### 16.2 共用组件
 
-可在 `com.yu.mboocode.llm.tool.file` 下按职责提供：
+可在 `com.yu.mboocode.agent.tool.file` 下按职责提供：
 
 - `RgExecutor`：系统 `rg` 发现、版本检查、参数执行、超时和退出码处理。
 - `IgnoredFileMatcher`：编译和匹配全局忽略及例外规则。
@@ -683,7 +683,7 @@ Windows UNC 网络共享路径可以使用，但必须按工作区外真实目�
 工具参数、结果和共用结构放在：
 
 ```text
-com.yu.mboocode.llm.dto
+com.yu.mboocode.agent.tool.dto
 ```
 
 DTO、record 和枚举按项目要求添加 Swagger `@Schema` 注解。函数名、变量名和字段名使用英文，注释和面向用户的错误信息使用中文。

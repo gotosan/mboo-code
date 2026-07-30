@@ -1115,7 +1115,7 @@ type ToolCallView = {
 建议命令工具放在：
 
 ```text
-com.yu.mboocode.llm.tool.command
+com.yu.mboocode.agent.tool.command
 ```
 
 建议类：
@@ -1139,7 +1139,7 @@ com.yu.mboocode.llm.tool.command
 
 工作目录解析不新增 `CommandWorkdirResolver`，直接扩展并复用 `FilePermissionUtil` 的目录解析、真实路径和授权覆盖能力。
 
-以下组件属于文件工具与命令工具共用能力，放在 `com.yu.mboocode.llm.tool` 的共用支持位置，不放进 `command` 包：
+以下组件属于文件工具与命令工具共用能力，放在 `com.yu.mboocode.agent.tool` 的共用支持位置，不放进 `command` 包：
 
 | 类 | 职责 |
 | --- | --- |
@@ -1150,7 +1150,7 @@ com.yu.mboocode.llm.tool.command
 
 现有 `FileToolRequestValidator` 接入 `ToolRequestValidatorRegistry`，`PermissionToolExecutor` 和 `ToolApprovalService` 只依赖注册表，不分别硬编码文件与命令校验器。
 
-DTO 继续放在现有 `com.yu.mboocode.llm.dto`：
+工具 DTO 统一放在 `com.yu.mboocode.agent.tool.dto`：
 
 - `CommandExecutionData`
 - 通用 `ToolResult<T>`，由现有 `FileToolResult<T>` 原契约抽取
@@ -1159,7 +1159,7 @@ DTO 按项目约定增加 Swagger 注解。
 
 ### 24.2 权限包调整
 
-`com.yu.mboocode.llm.tool.permission` 增加或调整：
+`com.yu.mboocode.agent.tool.permission` 增加或调整：
 
 - `ToolPermissionType.COMMAND`
 - `ToolPermissionEvaluator`
@@ -1174,6 +1174,8 @@ DTO 按项目约定增加 Swagger 注解。
 `ToolPermissionRegistry` 继续要求每个工具显式配置权限。`run_command` 注册为 `COMMAND`，注册表为其关联 `CommandToolPermissionEvaluator`。
 
 ### 24.3 现有服务调整
+
+工具实现、权限、命令、文件和事件能力归属 `com.yu.mboocode.agent.tool`。`PermissionToolExecutor` 是 LangChain4j 执行适配器，单独放在 `com.yu.mboocode.llm.integration`，不与 Agent 工具实现混放。
 
 | 位置 | 调整 |
 | --- | --- |
