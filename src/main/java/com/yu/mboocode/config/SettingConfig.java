@@ -59,7 +59,6 @@ public class SettingConfig {
         List<String> ignoredPatterns = setting.getIgnoredFilePatterns() == null ? Setting.defaultIgnoredFilePatterns() : setting.getIgnoredFilePatterns();
         List<String> ignoredExceptions = setting.getIgnoredFilePatternExceptions() == null ? Setting.defaultIgnoredFilePatternExceptions() : setting.getIgnoredFilePatternExceptions();
         return Setting.builder()
-                .provider(setting.getProvider() == null ? defaults.getProvider() : setting.getProvider())
                 .apiKey(setting.getApiKey() == null ? defaults.getApiKey() : setting.getApiKey())
                 .baseUrl(setting.getBaseUrl() == null ? defaults.getBaseUrl() : setting.getBaseUrl())
                 .ignoredFilePatterns(ignoredPatterns)

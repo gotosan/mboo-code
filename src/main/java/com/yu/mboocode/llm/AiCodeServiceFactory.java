@@ -15,7 +15,7 @@ import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
-import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiResponsesChatModel;
 import dev.langchain4j.model.openai.OpenAiResponsesStreamingChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.tool.AiServiceTool;
@@ -57,7 +57,7 @@ public class AiCodeServiceFactory {
 
     @Bean
     public AiCodeService getAiCodeService(ChatMemoryProvider chatMemoryProvider) {
-        ChatModel chatModel = OpenAiChatModel
+        ChatModel chatModel = OpenAiResponsesChatModel
                 .builder()
                 .apiKey(setting.getApiKey())
                 .baseUrl(setting.getBaseUrl())

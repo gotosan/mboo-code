@@ -14,10 +14,6 @@ import java.util.List;
 @Getter
 @Builder
 public class Setting {
-    @Schema(description = "模型供应商，例如 openai")
-    @JSONField(name = "provider")
-    private String provider;
-
     @Schema(description = "模型供应商 API Key")
     @JSONField(name = "api_key")
     private String apiKey;
@@ -41,7 +37,6 @@ public class Setting {
     private static final List<String> DEFAULT_IGNORED_FILE_PATTERN_EXCEPTIONS = List.of(".env.example", ".env.template", ".env.sample");
 
     private static final Setting DEFAULT_SETTING = Setting.builder()
-            .provider("openai")
             .apiKey("")
             .baseUrl("")
             .ignoredFilePatterns(DEFAULT_IGNORED_FILE_PATTERNS)

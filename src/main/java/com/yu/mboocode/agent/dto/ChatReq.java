@@ -9,7 +9,7 @@ public record ChatReq(
         @NotBlank(message = "模型名称不能为空")
         String modelName,
 
-        @Schema(description = "推理深度，仅 provider 支持时生效")
+        @Schema(description = "推理深度，仅模型支持时生效")
         String reasoningEffort,
 
         @Schema(description = "用户消息")

@@ -30,6 +30,8 @@ $env:MBOO_API_BASE_URL="http://localhost:8080"
 $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 ```
 
+当前版本仅支持 OpenAI Responses API 接口，不支持 Chat Completions API，也不支持通过 `provider` 切换其他模型供应商。后端 `.mboo/setting.json` 使用 `api_key` 和 `base_url` 配置接口访问参数，不再包含 `provider` 字段。
+
 打开 [http://localhost:3000](http://localhost:3000) 使用会话页面。
 
 ## 前后端接口
