@@ -147,6 +147,7 @@ public class TurnService {
                 UserMessagePayload.builder()
                         .messageId(userMessageId)
                         .text(userMessage)
+                        .modelName(params.modelName())
                         .build()
         ));
 

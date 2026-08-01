@@ -51,6 +51,9 @@
 | --- | --- | --- | --- |
 | `messageId` | `String` | 是 | 用户消息唯一 ID |
 | `text` | `String` | 是 | 用户输入原文 |
+| `modelName` | `String` | 否 | 本条消息使用的模型名称；旧会话事件没有该字段 |
+
+新写入的 `USER_MESSAGE` 会记录 `modelName`，用于前端重新打开会话时恢复最近使用的模型。读取旧 JSONL 时该字段允许为空，前端按全局最近发送模型和模型候选列表回退。
 
 ### `ASSISTANT_MESSAGE_DELTA`
 

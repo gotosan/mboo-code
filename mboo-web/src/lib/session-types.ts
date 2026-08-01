@@ -49,6 +49,7 @@ export type CancelledPayload = {
 export type UserMessagePayload = {
   messageId: string;
   text: string;
+  modelName?: string;
 };
 
 export type AssistantMessagePayload = {

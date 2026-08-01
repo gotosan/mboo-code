@@ -20,4 +20,7 @@ public class UserMessagePayload implements SessionEventPayload {
 
     @Schema(description = "消息文本")
     private String text;
+
+    @Schema(description = "本条消息使用的模型名称，旧会话事件可为空")
+    private String modelName;
 }

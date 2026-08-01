@@ -24,12 +24,6 @@ npm run dev
 $env:MBOO_API_BASE_URL="http://localhost:8080"
 ```
 
-可以通过公开环境变量设置页面默认模型名：
-
-```powershell
-$env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
-```
-
 当前版本仅支持 OpenAI Responses API 接口，不支持 Chat Completions API，也不支持通过 `provider` 切换其他模型供应商。后端 `.mboo/setting.json` 使用 `api_key` 和 `base_url` 配置接口访问参数，不再包含 `provider` 字段。
 
 打开 [http://localhost:3000](http://localhost:3000) 使用会话页面。
@@ -38,6 +32,7 @@ $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 
 | 前端接口 | 后端接口 | 说明 |
 | --- | --- | --- |
+| `GET /api/model/list` | `GET /config/modelList` | 查询后端启动时缓存的模型候选 |
 | `GET /api/session/list` | `GET /session/list` | 查询活跃会话 |
 | `GET /api/session/list/archived` | `GET /session/list/archived` | 查询归档会话 |
 | `GET /api/session/{sessionId}` | `GET /session/{sessionId}` | 查询会话详情（打开会话时与 events 并行拉取） |
@@ -48,7 +43,7 @@ $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 | `DELETE /api/session/{sessionId}` | `DELETE /session/{sessionId}` | 删除会话 |
 | `POST /api/session/{sessionId}/approvals/{approvalId}` | `POST /session/{sessionId}/approvals/{approvalId}` | 处理工具授权（`ALLOW_ONCE` / `ALLOW_SESSION` / `DENY`） |
 | `POST /api/session/chat` | `POST /session/chat` | 代理 SSE 会话事件流 |
-| `POST /api/workspace/select-directory` | `POST /workspace/select-directory` | 打开本机工作区目录选择窗口 |
+| `POST /api/workspace/select-directory` | `POST /config/selectDirectory` | 打开本机工作区目录选择窗口 |
 
 普通 JSON 接口使用后端统一响应结构：
 
@@ -63,6 +58,8 @@ $env:NEXT_PUBLIC_MBOO_DEFAULT_MODEL="模型名称"
 ```
 
 聊天请求字段为 `modelName`、`reasoningEffort`、`userMessage`、`workspacePath` 和 `sessionId`。`sessionId` 为空字符串时，后端会创建新会话；此时 `workspacePath` 为空会自动创建 `.mboo/workspaces/{yyyy-MM-dd}/{sessionId}`，已有会话会忽略请求中的工作区路径。
+
+模型输入支持从候选列表选择或手动填写。打开已有会话时优先使用该会话最后一条用户消息记录的模型；新会话优先使用浏览器保存的上一次发送模型，没有保存值时使用候选列表第一项。候选列表由后端启动时查询一次，更新供应商配置或模型后需要重启后端。
 
 工具授权请求字段为 `decision`：`ALLOW_ONCE`（允许本次）、`ALLOW_SESSION`（本会话允许）、`DENY`（拒绝）。`approvalId` 来自 SSE 事件 `TOOL_APPROVAL_REQUIRED.payload.approvalId`。
 

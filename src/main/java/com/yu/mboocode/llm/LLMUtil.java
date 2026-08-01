@@ -6,11 +6,10 @@ import dev.langchain4j.model.openai.OpenAiResponsesChatRequestParameters;
 
 public class LLMUtil {
     public static ChatRequestParameters buildChatReq(String modelName, String reasoningEffort) {
-        ChatRequestParameters chatRequestParameters = OpenAiResponsesChatRequestParameters
+        return OpenAiResponsesChatRequestParameters
                 .builder()
                 .modelName(modelName)
-                .reasoningEffort(StrUtil.blankToDefault(reasoningEffort, "medium"))
+                .reasoningEffort(StrUtil.isBlank(reasoningEffort) ? null : reasoningEffort)
                 .build();
-        return chatRequestParameters;
     }
 }

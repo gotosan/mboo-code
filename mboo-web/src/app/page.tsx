@@ -34,7 +34,7 @@ const STORAGE_KEYS = {
   sessionPreviews: "mboo-web.sessionPreviews",
 };
 
-const DEFAULT_MODEL = process.env.NEXT_PUBLIC_MBOO_DEFAULT_MODEL ?? "";
+const MANUAL_MODEL_VALUE = "__manual__";
 
 const REASONING_OPTIONS = [
   { value: "", label: "默认" },
@@ -115,6 +115,7 @@ type ChatMessage = {
   state?: MessageState;
   turnId?: string | null;
   createdAt?: string;
+  modelName?: string;
   /** 助手时间线；有值时渲染以 parts 为准 */
   parts?: AssistantPart[];
   /** 由 parts 派生，供授权统计等复用 */
@@ -165,7 +166,11 @@ export default function Home() {
     useState<SessionListTab>("active");
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState("");
-  const [modelName, setModelName] = useState(DEFAULT_MODEL);
+  const [modelName, setModelName] = useState("");
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [modelOptionsError, setModelOptionsError] = useState("");
+  const [isLoadingModelOptions, setIsLoadingModelOptions] = useState(true);
+  const [isManualModel, setIsManualModel] = useState(true);
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("idle");
@@ -218,9 +223,19 @@ export default function Home() {
   const sessionDrawerPanelRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const lastSentModelRef = useRef("");
+  const modelOptionsRef = useRef<string[]>([]);
+  const modelNameRef = useRef("");
   const isRunning = connectionState === "running";
   const highlightedSessionId = openingSessionId || sessionId;
   const isSessionSwitching = Boolean(openingSessionId) || isLoadingHistory;
+
+  const applyModelName = useCallback((value: string, manual?: boolean) => {
+    const nextValue = value.trim();
+    modelNameRef.current = nextValue;
+    setModelName(nextValue);
+    setIsManualModel(manual ?? !modelOptionsRef.current.includes(nextValue));
+  }, []);
 
 
   useEffect(() => {
@@ -237,12 +252,14 @@ export default function Home() {
       currentSessionIdRef.current = storedSessionId;
       setSessionId(storedSessionId);
     }
-    setModelName(localStorage.getItem(STORAGE_KEYS.modelName) ?? DEFAULT_MODEL);
+    const storedModelName = localStorage.getItem(STORAGE_KEYS.modelName) ?? "";
+    lastSentModelRef.current = storedModelName;
+    applyModelName(storedModelName);
     setReasoningEffort(
       localStorage.getItem(STORAGE_KEYS.reasoningEffort) ?? "",
     );
     setSessionPreviews(readSessionPreviewMap());
-  }, []);
+  }, [applyModelName]);
 
   useEffect(() => {
     currentSessionIdRef.current = sessionId;
@@ -253,13 +270,32 @@ export default function Home() {
     connectionStateRef.current = connectionState;
   }, [connectionState]);
 
-  // 设计决策：输入中防抖写 localStorage，避免每个按键同步磁盘（optimize）
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      saveLocalValue(STORAGE_KEYS.modelName, modelName);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [modelName]);
+    let cancelled = false;
+    const loadModelOptions = async () => {
+      try {
+        const response = await fetch("/api/model/list", { cache: "no-store" });
+        const options = (await readApiData<string[]>(response)) ?? [];
+        if (cancelled) return;
+        modelOptionsRef.current = options;
+        setModelOptions(options);
+        setModelOptionsError("");
+        const nextModelName = modelNameRef.current || lastSentModelRef.current || options[0] || "";
+        applyModelName(nextModelName, !nextModelName || !options.includes(nextModelName));
+      } catch (error) {
+        if (!cancelled) {
+          setModelOptionsError(toErrorMessage(error));
+          setIsManualModel(true);
+        }
+      } finally {
+        if (!cancelled) setIsLoadingModelOptions(false);
+      }
+    };
+    void loadModelOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyModelName]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -718,6 +754,16 @@ export default function Home() {
     [commitSessionMessages],
   );
 
+  const preferredModelName = useCallback((sessionMessages?: ChatMessage[]) => {
+    if (sessionMessages) {
+      for (let index = sessionMessages.length - 1; index >= 0; index -= 1) {
+        const message = sessionMessages[index];
+        if (message.role === "user" && message.modelName?.trim()) return message.modelName.trim();
+      }
+    }
+    return lastSentModelRef.current || modelOptionsRef.current[0] || "";
+  }, []);
+
   const handleSessionEvent = useCallback(
     (event: SessionEvent) => {
       const eventSessionId = event.sessionId || "";
@@ -754,6 +800,7 @@ export default function Home() {
             text: event.payload.text,
             turnId: event.turnId,
             createdAt: event.createdAt,
+            modelName: event.payload.modelName,
           };
           const index = withoutOptimistic.findIndex((item) => item.id === message.id);
           if (index < 0) {
@@ -892,8 +939,9 @@ export default function Home() {
     setWorkspaceMessage("");
     setIsSelectingWorkspace(false);
     setConnectionState("idle");
+    applyModelName(preferredModelName());
     localStorage.removeItem(STORAGE_KEYS.sessionId);
-  }, []);
+  }, [applyModelName, preferredModelName]);
 
   const refreshSessions = useCallback(async () => {
     setIsLoadingSessions(true);
@@ -1015,6 +1063,7 @@ export default function Home() {
       } else if (!quiet) {
         setMessages(messagesBySessionRef.current[nextSessionId] ?? historyMessages);
       }
+      if (!quiet) applyModelName(preferredModelName(historyMessages));
       setSessionId(nextSessionId);
       if (nextStatus) {
         setViewingSessionStatus(nextStatus);
@@ -1048,7 +1097,7 @@ export default function Home() {
         setOpeningSessionId((current) => (current === nextSessionId ? null : current));
       }
     }
-  }, [rememberSessionPreview]);
+  }, [applyModelName, preferredModelName, rememberSessionPreview]);
 
   useEffect(() => {
     void refreshSessions();
@@ -1110,7 +1159,9 @@ export default function Home() {
         historyLoadVersionRef.current += 1;
         currentSessionIdRef.current = nextSessionId;
         setSessionId(nextSessionId);
-        setMessages(messagesBySessionRef.current[nextSessionId] ?? []);
+        const streamingMessages = messagesBySessionRef.current[nextSessionId] ?? [];
+        setMessages(streamingMessages);
+        applyModelName(preferredModelName(streamingMessages));
         if (status) {
           setViewingSessionStatus(status);
         }
@@ -1128,6 +1179,7 @@ export default function Home() {
         streamSessionKeyRef.current = nextSessionId;
         setSessionId(nextSessionId);
         setMessages(cached);
+        applyModelName(preferredModelName(cached));
         if (status) {
           setViewingSessionStatus(status);
         }
@@ -1143,7 +1195,7 @@ export default function Home() {
       setOpeningSessionId(nextSessionId);
       await loadSessionEvents(nextSessionId, { quiet: false, status });
     },
-    [loadSessionEvents, openingSessionId, viewingSessionStatus],
+    [applyModelName, loadSessionEvents, openingSessionId, preferredModelName, viewingSessionStatus],
   );
 
   const beginRenameSession = useCallback((session: SessionInfo) => {
@@ -1332,6 +1384,9 @@ export default function Home() {
       }
 
       const controller = new AbortController();
+      lastSentModelRef.current = selectedModelName;
+      saveLocalValue(STORAGE_KEYS.modelName, selectedModelName);
+      applyModelName(selectedModelName);
       abortControllerRef.current = controller;
       setConnectionState("running");
       setErrorMessage("");
@@ -1361,6 +1416,7 @@ export default function Home() {
           role: "user",
           text: userMessage,
           createdAt: new Date().toISOString(),
+          modelName: selectedModelName,
         },
       ]);
 
@@ -1428,6 +1484,7 @@ export default function Home() {
     },
     [
       addSystemMessage,
+      applyModelName,
       archivedSessions,
       commitSessionMessages,
       handleSessionEvent,
@@ -2304,16 +2361,51 @@ export default function Home() {
                           isComposerSettingsOpen || !modelName.trim() ? "grid" : "hidden"
                         } sm:grid`}
                       >
-                        <label className="block min-w-0 text-[11px] font-medium text-text-3">
-                          模型
-                          <input
-                            id="model-input"
+                        <div className="block min-w-0 text-[11px] font-medium text-text-3">
+                          <label htmlFor="model-select">模型</label>
+                          <select
+                            id="model-select"
                             className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
-                            placeholder="例如 gpt-4.1"
-                            value={modelName}
-                            onChange={(event) => setModelName(event.target.value)}
-                          />
-                        </label>
+                            value={isManualModel ? MANUAL_MODEL_VALUE : modelName}
+                            onChange={(event) => {
+                              if (event.target.value === MANUAL_MODEL_VALUE) {
+                                setIsManualModel(true);
+                                return;
+                              }
+                              applyModelName(event.target.value, false);
+                            }}
+                          >
+                            {modelOptions.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                            <option value={MANUAL_MODEL_VALUE}>手动输入</option>
+                          </select>
+                          {isManualModel ? (
+                            <input
+                              id="model-input"
+                              className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
+                              aria-label="手动模型名称"
+                              placeholder="例如 gpt-4.1"
+                              value={modelName}
+                              onChange={(event) => applyModelName(event.target.value, true)}
+                              autoComplete="off"
+                            />
+                          ) : null}
+                          <span
+                            className={`mt-1 block min-h-3.5 truncate text-[10px] ${modelOptionsError ? "text-danger" : "text-text-3"}`}
+                            title={modelOptionsError}
+                          >
+                            {isLoadingModelOptions
+                              ? "正在加载模型候选"
+                              : modelOptionsError
+                                ? "候选加载失败，可手动填写"
+                                : modelOptions.length === 0
+                                  ? "暂无模型候选"
+                                  : `${modelOptions.length} 个模型候选`}
+                          </span>
+                        </div>
                         <label className="block min-w-0 text-[11px] font-medium text-text-3">
                           推理
                           <select
@@ -3575,6 +3667,7 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
         text: event.payload.text,
         turnId: event.turnId,
         createdAt: event.createdAt,
+        modelName: event.payload.modelName,
       });
       continue;
     }
