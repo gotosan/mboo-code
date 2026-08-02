@@ -36,6 +36,8 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     private SessionEventStore sessionEventStore;
     @Resource
     private PersistentChatMemoryStore persistentChatMemoryStore;
+    @Resource
+    private ToolResultStore toolResultStore;
 
     @Transactional
     public Sessions getActiveOrCreateSession(String sessionId, String workspacePath) {
@@ -176,6 +178,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         }
 
         if (StrUtil.isNotBlank(session.getTranscriptUri())) {
+            toolResultStore.deleteResults(session.getTranscriptUri());
             sessionEventStore.deleteTranscript(session.getTranscriptUri());
         }
         persistentChatMemoryStore.deleteMessages(sessionId);

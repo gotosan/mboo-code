@@ -25,6 +25,7 @@ import type {
   ToolApprovalDecision,
   ToolCallStatus,
   ToolPermissionType,
+  ToolResultDetail,
 } from "@/lib/session-types";
 
 const STORAGE_KEYS = {
@@ -79,7 +80,9 @@ type ToolCallView = {
   argumentsText: string;
   parsedArguments?: Record<string, unknown>;
   pathText?: string;
-  resultPreview: string;
+  resultId?: string;
+  resultSizeBytes?: number;
+  rawOutputAvailable?: boolean;
   errorCode?: string;
   errorMessage: string;
   durationMs?: number;
@@ -92,6 +95,8 @@ type ToolCallView = {
   approvalIndex?: number;
   approvalCount?: number;
 };
+
+type ToolResultLoader = (resultId: string, force?: boolean) => Promise<ToolResultDetail>;
 
 // 助手消息按事件序交错：text / tool，避免工具永远沉底
 type AssistantTextPart = {
@@ -2621,7 +2626,30 @@ const SessionMessageList = memo(function SessionMessageList({
 }: SessionMessageListProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
+  const toolResultCacheRef = useRef<Map<string, Promise<ToolResultDetail>>>(new Map());
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+
+  const loadToolResult = useCallback<ToolResultLoader>(async (resultId, force = false) => {
+    const cacheKey = `${sessionId}:${resultId}`;
+    if (force) toolResultCacheRef.current.delete(cacheKey);
+    const cached = toolResultCacheRef.current.get(cacheKey);
+    if (cached) return cached;
+
+    const request = (async () => {
+      const response = await fetch(
+        `/api/session/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(resultId)}`,
+        { cache: "no-store" },
+      );
+      return readApiData<ToolResultDetail>(response);
+    })();
+    toolResultCacheRef.current.set(cacheKey, request);
+    try {
+      return await request;
+    } catch (error) {
+      toolResultCacheRef.current.delete(cacheKey);
+      throw error;
+    }
+  }, [sessionId]);
 
   const syncStickState = useCallback(() => {
     const scroller = scrollerRef.current;
@@ -2683,7 +2711,7 @@ const SessionMessageList = memo(function SessionMessageList({
         <div className="mx-auto flex min-h-full max-w-[46rem] flex-col">
           {messages.map((message) => (
             <div key={message.id} className="message-item pb-4">
-              <MessageBubble message={message} />
+              <MessageBubble message={message} sessionId={sessionId} loadToolResult={loadToolResult} />
             </div>
           ))}
           <div className="h-2 shrink-0" aria-hidden />
@@ -2705,8 +2733,12 @@ const SessionMessageList = memo(function SessionMessageList({
 
 const MessageBubble = memo(function MessageBubble({
   message,
+  sessionId,
+  loadToolResult,
 }: {
   message: ChatMessage;
+  sessionId: string;
+  loadToolResult: ToolResultLoader;
 }) {
   if (message.role === "assistant") {
     // 设计决策：助手像 QQ 聊天记录里的文档流，少卡片阴影，长回复优先
@@ -2761,6 +2793,8 @@ const MessageBubble = memo(function MessageBubble({
                   <ToolTrace
                     key={part.id}
                     toolCalls={[part.toolCall]}
+                    sessionId={sessionId}
+                    loadToolResult={loadToolResult}
                     isRunning={
                       message.state === "streaming" &&
                       (part.toolCall.status === "started" ||
@@ -2782,6 +2816,8 @@ const MessageBubble = memo(function MessageBubble({
                 {message.toolCalls && message.toolCalls.length > 0 ? (
                   <ToolTrace
                     toolCalls={message.toolCalls}
+                    sessionId={sessionId}
+                    loadToolResult={loadToolResult}
                     isRunning={message.state === "streaming"}
                   />
                 ) : null}
@@ -2825,9 +2861,13 @@ const MessageBubble = memo(function MessageBubble({
 const ToolTrace = memo(function ToolTrace({
   toolCalls,
   isRunning,
+  sessionId,
+  loadToolResult,
 }: {
   toolCalls: ToolCallView[];
   isRunning: boolean;
+  sessionId: string;
+  loadToolResult: ToolResultLoader;
 }) {
   const [open, setOpen] = useState(false);
   const hasPendingApproval = toolCalls.some(
@@ -2872,6 +2912,8 @@ const ToolTrace = memo(function ToolTrace({
               key={toolCall.id}
               toolCall={toolCall}
               toolLabel={getToolLabel(toolCall.toolName)}
+              sessionId={sessionId}
+              loadToolResult={loadToolResult}
             />
           ))}
         </div>
@@ -2883,11 +2925,42 @@ const ToolTrace = memo(function ToolTrace({
 const ToolTraceItem = memo(function ToolTraceItem({
   toolCall,
   toolLabel,
+  sessionId,
+  loadToolResult,
 }: {
   toolCall: ToolCallView;
   toolLabel: string;
+  sessionId: string;
+  loadToolResult: ToolResultLoader;
 }) {
   const [open, setOpen] = useState(false);
+  const [resultState, setResultState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [resultDetail, setResultDetail] = useState<ToolResultDetail | null>(null);
+  const [resultError, setResultError] = useState("");
+
+  const requestResult = useCallback(async (force = false) => {
+    if (!toolCall.resultId || sessionId === PENDING_SESSION_KEY) return;
+    setResultState("loading");
+    setResultError("");
+    try {
+      const detail = await loadToolResult(toolCall.resultId, force);
+      setResultDetail(detail);
+      setResultState("loaded");
+    } catch (error) {
+      setResultState("error");
+      setResultError(toErrorMessage(error));
+    }
+  }, [loadToolResult, sessionId, toolCall.resultId]);
+
+  useEffect(() => {
+    setResultDetail(null);
+    setResultError("");
+    setResultState("idle");
+  }, [toolCall.resultId]);
+
+  useEffect(() => {
+    if (open && toolCall.resultId && resultState === "idle") void requestResult();
+  }, [open, requestResult, resultState, toolCall.resultId]);
 
   return (
     <div className="overflow-hidden rounded-[var(--radius-sm)] border border-line bg-panel">
@@ -2927,8 +3000,31 @@ const ToolTraceItem = memo(function ToolTraceItem({
               className="max-h-32"
             />
           ) : null}
-          {toolCall.resultPreview ? (
-            <ToolResultPreview toolName={toolCall.toolName} text={toolCall.resultPreview} />
+          {resultState === "loading" ? (
+            <p className="flex items-center gap-1.5 text-[11px] text-text-3" role="status">
+              <LoaderCircle className="size-3 animate-spin" aria-hidden />
+              加载工具结果
+            </p>
+          ) : null}
+          {(toolCall.status === "completed" || toolCall.status === "failed") && !toolCall.resultId ? (
+            <p className="text-[11px] text-text-3">工具结果不可用</p>
+          ) : null}
+          {resultState === "loaded" && resultDetail?.resultPreview ? (
+            <ToolResultPreview toolName={toolCall.toolName} text={resultDetail.resultPreview} />
+          ) : null}
+          {resultState === "error" ? (
+            <div className="flex items-center justify-between gap-2 rounded-[3px] border border-danger/30 bg-danger-soft px-2 py-1.5">
+              <p className="min-w-0 break-words text-[11px] text-danger">{resultError || "工具结果加载失败"}</p>
+              <button
+                className="qq-icon-button size-7 shrink-0"
+                type="button"
+                aria-label="重试加载工具结果"
+                title="重试加载工具结果"
+                onClick={() => void requestResult(true)}
+              >
+                <RefreshCw className="size-3.5" aria-hidden />
+              </button>
+            </div>
           ) : null}
           {toolCall.errorMessage || toolCall.errorCode ? (
             <div className="space-y-1">
@@ -3603,7 +3699,6 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
       argumentsText: parsed.argumentsText,
       parsedArguments: parsed.parsedArguments,
       pathText: parsed.pathText,
-      resultPreview: "",
       errorMessage: "",
       createdAt: event.createdAt,
       approvalId: event.payload.approvalId,
@@ -3625,7 +3720,9 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
     argumentsText: parsed.argumentsText,
     parsedArguments: parsed.parsedArguments,
     pathText: parsed.pathText,
-    resultPreview: started ? "" : payloadDisplayText(event.payload.resultPreview),
+    resultId: started ? undefined : event.payload.resultId,
+    resultSizeBytes: started ? undefined : event.payload.resultSizeBytes,
+    rawOutputAvailable: started ? undefined : event.payload.rawOutputAvailable,
     errorCode: started ? undefined : event.payload.errorCode || undefined,
     errorMessage: started ? "" : event.payload.errorMessage || "",
     durationMs: started ? undefined : event.payload.durationMs,

@@ -14,6 +14,7 @@ import com.yu.mboocode.agent.enums.SessionEventType;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.SessionTurn;
 import com.yu.mboocode.agent.model.Sessions;
+import com.yu.mboocode.agent.model.ToolResultArtifact;
 import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.tool.event.ToolEventFormatterRegistry;
 import com.yu.mboocode.common.util.DateTimeUtil;
@@ -53,6 +54,8 @@ public class TurnService {
     private ChatMemoryProvider chatMemoryProvider;
     @Resource
     private ToolEventFormatterRegistry toolEventFormatterRegistry;
+    @Resource
+    private ToolResultStore toolResultStore;
 
     private final Map<String, ActiveTurnRuntime> activeTurnRuntime = new ConcurrentHashMap<>();
 
@@ -234,13 +237,17 @@ public class TurnService {
                         String resultText = toolResultText(toolExecution);
                         ToolEventFormatterRegistry.EndedFormat endedFormat = toolEventFormatterRegistry.formatEnded(request.name(), resultText, failed);
                         ToolCallEndedPayload.ToolCallStatus status = failed ? ToolCallEndedPayload.ToolCallStatus.FAILED : ToolCallEndedPayload.ToolCallStatus.COMPLETED;
+                        ToolResultArtifact artifact = toolResultStore.saveResult(sessionTurn.transcriptUri(), sessionTurn.sessionId(), sessionTurn.turnId(),
+                                assistantMessageId, request.id(), request.name(), status, resultText, endedFormat.resultPreview());
                         ToolCallEndedPayload payload = ToolCallEndedPayload.builder()
                                 .messageId(assistantMessageId)
                                 .toolCallId(request.id())
                                 .toolName(request.name())
                                 .arguments(toolEventFormatterRegistry.formatArguments(request.name(), request.arguments()))
                                 .status(status)
-                                .resultPreview(endedFormat.resultPreview())
+                                .resultId(artifact.getResultId())
+                                .resultSizeBytes(artifact.getResultSizeBytes())
+                                .rawOutputAvailable(artifact.getRawOutputAvailable())
                                 .errorCode(failed ? StrUtil.blankToDefault(endedFormat.errorCode(), "TOOL_EXECUTION_FAILED") : null)
                                 .errorMessage(failed ? StrUtil.blankToDefault(endedFormat.errorMessage(), endedFormat.resultPreview()) : null)
                                 .durationMs(toolExecution.duration().toMillis())

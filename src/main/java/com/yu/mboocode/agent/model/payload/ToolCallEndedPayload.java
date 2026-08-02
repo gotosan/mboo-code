@@ -32,8 +32,14 @@ public class ToolCallEndedPayload implements SessionEventPayload {
     @Schema(description = "工具调用结束状态")
     private ToolCallStatus status;
 
-    @Schema(description = "工具结果摘要")
-    private String resultPreview;
+    @Schema(description = "工具结果 ID")
+    private String resultId;
+
+    @Schema(description = "工具结果 UTF-8 字节数")
+    private Long resultSizeBytes;
+
+    @Schema(description = "是否存在命令原始输出")
+    private Boolean rawOutputAvailable;
 
     @Schema(description = "错误编码，成功时为空")
     private String errorCode;

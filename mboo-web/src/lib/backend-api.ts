@@ -35,6 +35,25 @@ export async function proxyBackendJson(path: string, init: RequestInit = {}) {
   });
 }
 
+export async function proxyBackendResponse(path: string, init: RequestInit = {}) {
+  const apiBaseUrl = getApiBaseUrl();
+  const upstream = await fetch(`${apiBaseUrl}${path}`, {
+    ...init,
+    cache: "no-store",
+  });
+  const headers = new Headers();
+  const contentType = upstream.headers.get("Content-Type");
+  const contentDisposition = upstream.headers.get("Content-Disposition");
+  if (contentType) headers.set("Content-Type", contentType);
+  if (contentDisposition) headers.set("Content-Disposition", contentDisposition);
+  headers.set("Cache-Control", "no-store");
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers,
+  });
+}
+
 export function parseUpstreamErrorMessage(text: string) {
   if (!text.trim()) {
     return "后端没有返回有效响应";

@@ -169,12 +169,16 @@ Content-Type: application/json
 | `toolName` | `String` | 是 | 稳定工具名称 |
 | `arguments` | `String` | 是 | 工具参数 JSON 字符串；文件工具使用格式化后的安全参数摘要 |
 | `status` | `String` | 是 | `completed` 或 `failed` |
-| `resultPreview` | `String` | 否 | 工具结果摘要；普通工具最多 2,000 字符，五个文件工具和 `run_command` 最多 4,000 字符，超限时保留头尾并插入省略字符数提示 |
+| `resultId` | `String` | 是 | 独立工具结果 ID；结果正文和展示摘要不写入 JSONL |
+| `resultSizeBytes` | `Long` | 否 | 返回给模型的完整工具结果 UTF-8 字节数 |
+| `rawOutputAvailable` | `Boolean` | 否 | 是否存在 `run_command` 未经模型结果上限裁剪的原始合并输出 |
 | `errorCode` | `String` | 否 | 失败时优先记录真实文件工具或权限错误码；无法提取明确错误码时回退为 `TOOL_EXECUTION_FAILED` |
-| `errorMessage` | `String` | 否 | 面向用户的错误说明；可与 `resultPreview` 不同 |
+| `errorMessage` | `String` | 否 | 面向用户的错误说明；不依赖结果文件即可展示 |
 | `durationMs` | `Long` | 否 | 工具调用耗时，单位毫秒 |
 
 授权被拒绝、授权超时或权限校验失败时，权限执行器会返回失败的工具结果，随后通常形成 `TOOL_CALL_ENDED(status=failed)`。该工具调用可能没有 `TOOL_CALL_STARTED`。
+
+`GET /session/{sessionId}/tool-results/{resultId}` 返回展示摘要和大小等元数据；`GET /session/{sessionId}/tool-results/{resultId}/content?source=result|raw` 分别返回完整模型结果或命令原始输出。接口按会话校验结果归属，不返回服务器绝对路径。
 
 ## 6. 典型顺序
 

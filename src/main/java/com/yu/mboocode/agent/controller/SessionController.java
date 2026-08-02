@@ -2,7 +2,9 @@ package com.yu.mboocode.agent.controller;
 
 import com.yu.mboocode.common.dto.R;
 import com.yu.mboocode.common.enums.SSEEvent;
+import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.agent.dto.ToolApprovalReq;
+import com.yu.mboocode.agent.dto.ToolResultDetailResp;
 import com.yu.mboocode.llm.LLMUtil;
 import com.yu.mboocode.agent.dto.ChatReq;
 import com.yu.mboocode.agent.dto.SessionUpdateReq;
@@ -11,13 +13,19 @@ import com.yu.mboocode.agent.model.Sessions;
 import com.yu.mboocode.agent.service.SessionService;
 import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.service.TurnService;
+import com.yu.mboocode.agent.service.ToolResultStore;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
 import org.jspecify.annotations.NonNull;
 import org.springframework.http.MediaType;
+import org.springframework.http.CacheControl;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -25,6 +33,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
@@ -44,6 +53,8 @@ public class SessionController {
     private SessionService sessionService;
     @Resource
     private ToolApprovalService toolApprovalService;
+    @Resource
+    private ToolResultStore toolResultStore;
 
     @Operation(summary = "活跃会话列表")
     @GetMapping("/list")
@@ -67,6 +78,30 @@ public class SessionController {
     @GetMapping("/{sessionId}/events")
     public R<List<SessionEvent>> events(@PathVariable String sessionId) {
         return R.ok(sessionService.readSessionEvents(sessionId));
+    }
+
+    @Operation(summary = "工具结果详情")
+    @GetMapping("/{sessionId}/tool-results/{resultId}")
+    public R<ToolResultDetailResp> toolResult(@PathVariable String sessionId, @PathVariable String resultId) {
+        return R.ok(toolResultStore.getDetail(sessionId, resultId));
+    }
+
+    @Operation(summary = "工具结果完整内容")
+    @GetMapping("/{sessionId}/tool-results/{resultId}/content")
+    public ResponseEntity<?> toolResultContent(@PathVariable String sessionId, @PathVariable String resultId,
+                                               @RequestParam(defaultValue = "result") String source) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setCacheControl(CacheControl.noStore());
+        headers.setContentDisposition(ContentDisposition.inline().filename("tool-result-" + resultId + ".txt").build());
+        if ("result".equals(source)) {
+            headers.setContentType(MediaType.TEXT_PLAIN);
+            return ResponseEntity.ok().headers(headers).body(toolResultStore.getResultContent(sessionId, resultId));
+        }
+        if ("raw".equals(source)) {
+            headers.setContentType(MediaType.TEXT_PLAIN);
+            return ResponseEntity.ok().headers(headers).body(new FileSystemResource(toolResultStore.getRawOutputPath(sessionId, resultId)));
+        }
+        throw new ServiceException("工具结果内容来源无效");
     }
 
     @Operation(summary = "更新会话")

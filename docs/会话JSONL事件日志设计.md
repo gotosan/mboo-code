@@ -14,8 +14,8 @@
 - 事件类型与 Payload Java 类型由 `SessionEventType` 一一绑定，追加和读取时都会校验类型匹配。
 - `ASSISTANT_MESSAGE_DELTA` 只通过 SSE 推送，不写入 JSONL。
 - `TOOL_APPROVAL_REQUIRED` 会写入 JSONL，但可处理的待授权上下文只保存在当前应用进程内。
-- 工具事件在写入 JSONL 前统一完成参数脱敏和结果格式化，写入 JSONL 与通过 SSE 推送的是同一份 `SessionEvent` 内容。
-- 普通工具结果摘要最多 2,000 字符，五个文件工具最多 4,000 字符；前端历史回放不再进行第二次内容截断。
+- 工具参数在写入 JSONL 前统一脱敏；工具结果正文和展示摘要独立保存在会话 `tool-results` 目录中，`TOOL_CALL_ENDED` 只记录 `resultId` 和结果元数据。
+- 写入 JSONL 与通过 SSE 推送的是同一份引用型 `SessionEvent` 内容，前端在展开工具项时按 `resultId` 懒加载展示摘要。
 - 旧版事件数据整体不保证兼容，也不提供迁移。
 
 ## 事件集合
@@ -129,7 +129,7 @@ Content-Type: application/json
 
 1. 按 `eventId` 去重。
 2. 渲染 `USER_MESSAGE`。
-3. 将 `TOOL_APPROVAL_REQUIRED`、`TOOL_CALL_STARTED` 和 `TOOL_CALL_ENDED` 按 `messageId`、`toolCallId` 合并到助手消息。
+3. 将 `TOOL_APPROVAL_REQUIRED`、`TOOL_CALL_STARTED` 和 `TOOL_CALL_ENDED` 按 `messageId`、`toolCallId` 合并到助手消息；结束事件只恢复结果引用，结果内容在工具项展开时单独加载。
 4. 使用 `ASSISTANT_MESSAGE` 恢复 `complete`、`cancel` 或 `error` 状态及其完整或部分文本。
 5. 使用 `ERROR` 和 `CANCELLED` 恢复系统错误或取消提示。
 6. 将回放结束后仍处于等待或提交状态的授权卡片标记为已失效，禁止再次提交历史 `approvalId`。
@@ -141,6 +141,10 @@ Content-Type: application/json
 ## 文件与并发写入
 
 - 新会话的相对路径为 `sessions/{sessionId}/session.jsonl`，最终相对于应用数据目录解析；数据库也允许保存绝对 `transcriptUri`。
+- 工具结果目录固定为事件日志父目录下的 `tool-results`；每次结果使用 `{resultId}.json`，`run_command` 原始合并输出额外使用 `{resultId}.output` 或 `{resultId}.output.partial`。
+- `resultId` 为 `tr_` 加 `sessionId + turnId + toolCallId` 的 SHA-256，不直接使用模型返回的调用 ID 作为文件名。
+- 工具结果和命令原始输出先写同目录随机 `.tmp` 文件，再通过 `ATOMIC_MOVE` 发布；超过 24 小时的残留临时文件在访问目录时清理，正式结果不自动过期。
+- 工具结果先于 `TOOL_CALL_ENDED` 写入；结果成功而事件追加失败时允许留下孤立制品，永久删除会话时统一清理。
 - 同一 `transcriptUri` 通过 64 段本地分段锁串行执行修复和追加，保证当前单进程内不会并发交叉写入。
 - 每次追加前创建父目录，并检查最后一行是否为可解析事件。
 - 写入使用 UTF-8、追加模式，每条事件占一行并以换行结束。

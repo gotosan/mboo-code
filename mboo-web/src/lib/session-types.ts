@@ -92,10 +92,26 @@ export type ToolCallEndedPayload = {
   toolName: string;
   arguments: string;
   status: "completed" | "failed";
-  resultPreview?: string;
+  resultId: string;
+  resultSizeBytes?: number;
+  rawOutputAvailable?: boolean;
   errorCode?: string;
   errorMessage?: string;
   durationMs?: number;
+};
+
+export type ToolResultDetail = {
+  resultId: string;
+  toolCallId: string;
+  toolName: string;
+  status: "completed" | "failed";
+  contentType: string;
+  resultPreview: string;
+  resultSizeBytes?: number;
+  rawOutputAvailable?: boolean;
+  rawOutputComplete?: boolean;
+  rawOutputSizeBytes?: number;
+  createdAt?: string;
 };
 
 export type SessionEventPayload =

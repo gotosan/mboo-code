@@ -3,9 +3,13 @@ package com.yu.mboocode.agent.tool.command;
 import com.yu.mboocode.agent.tool.dto.CommandExecutionData;
 import com.yu.mboocode.agent.tool.BoundedTextCollector;
 import com.yu.mboocode.agent.tool.ToolTextTruncator;
+import com.yu.mboocode.agent.service.ToolResultStore;
+import com.yu.mboocode.common.exception.ServiceException;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.CodingErrorAction;
@@ -18,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 @Component
+@Slf4j
 public class CommandExecutor {
     public static final int MAX_CONCURRENT_COMMANDS = 4;
     public static final long TERMINATION_GRACE_MS = 2_000;
@@ -29,6 +34,8 @@ public class CommandExecutor {
     private RunningCommandRegistry runningCommandRegistry;
     @Resource
     private ToolTextTruncator truncator;
+    @Resource
+    private ToolResultStore toolResultStore;
 
     public CommandExecutionData execute(String sessionId, String turnId, String toolCallId, ResolvedCommand command) {
         RunningCommand running = runningCommandRegistry.register(sessionId, turnId, toolCallId);
@@ -41,6 +48,12 @@ public class CommandExecutor {
             sessionAcquired = true;
             concurrentCommands.acquire();
             globalAcquired = true;
+            ToolResultStore.RawOutputCapture rawOutputCapture;
+            try {
+                rawOutputCapture = toolResultStore.openRawOutputCapture(sessionId, turnId, toolCallId);
+            } catch (ServiceException e) {
+                throw new CommandToolException(CommandToolErrorCode.COMMAND_OUTPUT_PERSIST_FAILED, "无法创建命令原始输出文件，命令未执行", e);
+            }
             Process process;
             try {
                 ProcessBuilder builder = new ProcessBuilder(shellResolver.processArguments(command));
@@ -58,12 +71,13 @@ public class CommandExecutor {
                 processStartNanos = System.nanoTime();
                 process.getOutputStream().close();
             } catch (Exception e) {
+                rawOutputCapture.abort();
                 throw new CommandToolException(CommandToolErrorCode.COMMAND_START_FAILED, "Shell 进程启动失败", e);
             }
 
             BoundedTextCollector collector = new BoundedTextCollector(RunCommandTool.MAX_OUTPUT_CHARACTERS, RunCommandTool.MAX_OUTPUT_LINES);
             CompletableFuture<OutputRead> outputFuture = new CompletableFuture<>();
-            Thread.startVirtualThread(() -> readOutput(process, collector, outputFuture));
+            Thread.startVirtualThread(() -> readOutput(process, collector, rawOutputCapture, outputFuture));
             boolean timedOut = false;
             try {
                 if (!process.waitFor(command.timeoutMs(), TimeUnit.MILLISECONDS)) {
@@ -76,7 +90,19 @@ public class CommandExecutor {
                 Thread.currentThread().interrupt();
             }
 
+            boolean rawOutputIncomplete = timedOut || running.cancelReason() != null;
+            boolean rawOutputStateFailed = false;
+            if (rawOutputIncomplete) {
+                try {
+                    rawOutputCapture.markIncomplete();
+                } catch (IOException e) {
+                    rawOutputStateFailed = true;
+                    log.warn("标记命令原始输出不完整失败 sessionId:{} turnId:{} toolCallId:{}", sessionId, turnId, toolCallId, e);
+                }
+            }
+
             OutputRead output;
+            boolean restoreOutputWaitInterrupt = Thread.interrupted();
             try {
                 output = outputFuture.get(3, TimeUnit.SECONDS);
             } catch (java.util.concurrent.TimeoutException e) {
@@ -85,7 +111,26 @@ public class CommandExecutor {
                 } catch (Exception ignored) {
                     // 输出管道无法及时关闭时按输出读取失败返回。
                 }
-                output = new OutputRead(false, true);
+                try {
+                    rawOutputCapture.markIncomplete();
+                    output = outputFuture.get(1, TimeUnit.SECONDS);
+                } catch (Exception outputCloseError) {
+                    if (outputCloseError instanceof InterruptedException) restoreOutputWaitInterrupt = true;
+                    rawOutputCapture.abort();
+                    output = new OutputRead(false, true, true);
+                }
+            } catch (InterruptedException e) {
+                restoreOutputWaitInterrupt = true;
+                try {
+                    process.getInputStream().close();
+                    rawOutputCapture.markIncomplete();
+                    output = outputFuture.get(1, TimeUnit.SECONDS);
+                } catch (Exception outputCloseError) {
+                    rawOutputCapture.abort();
+                    output = new OutputRead(false, true, true);
+                }
+            } finally {
+                if (restoreOutputWaitInterrupt) Thread.currentThread().interrupt();
             }
             if (running.cancelReason() != null && running.process() != null) {
                 runningCommandRegistry.terminate(running, running.cancelReason());
@@ -98,6 +143,8 @@ public class CommandExecutor {
                     running.cancelReason() == RunningCommand.CancelReason.CANCELLED || running.cancelReason() == RunningCommand.CancelReason.SHUTDOWN,
                     collected.truncated(), collected.omittedCharacters() > 0 ? collected.omittedCharacters() : null,
                     collected.omittedLines() > 0 ? collected.omittedLines() : null, output.encodingWarning(), running.terminationComplete());
+            if (output.rawPersistFailed() || rawOutputStateFailed) throw new CommandToolException(CommandToolErrorCode.COMMAND_OUTPUT_PERSIST_FAILED,
+                    "命令已经执行，但完整输出保存失败，请勿自动重试", data);
             if (running.cancelReason() == RunningCommand.CancelReason.INTERRUPTED) throw new CommandToolException(CommandToolErrorCode.COMMAND_INTERRUPTED, "命令执行线程被中断", data);
             if (data.cancelled()) throw new CommandToolException(CommandToolErrorCode.COMMAND_CANCELLED, "命令已取消", data);
             if (data.timedOut()) throw new CommandToolException(CommandToolErrorCode.COMMAND_TIMEOUT, "命令执行超时", data);
@@ -123,22 +170,40 @@ public class CommandExecutor {
         }
     }
 
-    private void readOutput(Process process, BoundedTextCollector collector, CompletableFuture<OutputRead> result) {
+    private void readOutput(Process process, BoundedTextCollector collector, ToolResultStore.RawOutputCapture rawOutputCapture, CompletableFuture<OutputRead> result) {
         boolean warning = false;
+        boolean readFailed = false;
+        boolean rawPersistFailed = false;
         try (Reader reader = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8.newDecoder()
                 .onMalformedInput(CodingErrorAction.REPLACE).onUnmappableCharacter(CodingErrorAction.REPLACE))) {
             char[] buffer = new char[4096];
             int read;
             while ((read = reader.read(buffer)) >= 0) {
                 for (int i = 0; i < read; i++) warning |= buffer[i] == '\ufffd';
+                if (!rawPersistFailed) {
+                    try {
+                        rawOutputCapture.append(buffer, 0, read);
+                    } catch (Exception e) {
+                        rawPersistFailed = true;
+                        rawOutputCapture.abort();
+                    }
+                }
                 collector.append(buffer, 0, read);
             }
-            result.complete(new OutputRead(warning, false));
         } catch (Exception e) {
-            result.complete(new OutputRead(warning, true));
+            readFailed = true;
         }
+        if (!rawPersistFailed) {
+            try {
+                rawOutputCapture.finish(!readFailed);
+            } catch (Exception e) {
+                rawPersistFailed = true;
+                rawOutputCapture.abort();
+            }
+        }
+        result.complete(new OutputRead(warning, readFailed, rawPersistFailed));
     }
 
-    private record OutputRead(boolean encodingWarning, boolean failed) {
+    private record OutputRead(boolean encodingWarning, boolean failed, boolean rawPersistFailed) {
     }
 }

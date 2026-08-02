@@ -27,7 +27,7 @@
 - 文件读取、搜索和修改结果在当前工具卡片中可读、可滚动、可复制。
 - `edit_file`、`write_file` 执行成功后能够展示修改摘要和 unified diff。
 - JSONL 历史回放与 SSE 实时事件使用同一套归并和展示逻辑。
-- 新事件与历史旧事件均能安全降级，不因参数或结果格式变化导致页面异常。
+- 新事件中的结果引用缺失或结果文件损坏时只影响当前工具项，不导致页面异常；旧结果事件不提供兼容读取。
 
 ## 3. 非目标
 
@@ -84,8 +84,8 @@
 - 后端写入 JSONL 的事件与通过 SSE 发送的事件内容一致。
 - 前端不得针对实时事件和历史事件维护两套文件工具解析逻辑。
 - 实时状态和历史状态均由同一 `toToolCallView` 转换。
-- 文件工具事件结果最多为 4,000 字符，前端只负责展示，不做第二次内容截断。
-- 后端截断占位符必须原样显示，不能由前端隐藏或替换。
+- `TOOL_CALL_ENDED` 只携带 `resultId` 和结果元数据，前端展开工具项时懒加载最多 4,000 字符的展示摘要。
+- 后端结果制品中的截断占位符必须原样显示，不能由前端隐藏或替换。
 
 ### 5.4 授权阶段不展示 diff
 
@@ -126,7 +126,9 @@ type ToolCallView = {
   argumentsText: string;
   parsedArguments?: Record<string, unknown>;
   pathText?: string;
-  resultPreview: string;
+  resultId?: string;
+  resultSizeBytes?: number;
+  rawOutputAvailable?: boolean;
   errorCode?: string;
   errorMessage: string;
   durationMs?: number;
@@ -222,7 +224,7 @@ type ToolCallView = {
 参数区和结果区各提供一个轻量复制按钮：
 
 - 参数复制 `argumentsText`。
-- 结果复制当前 `resultPreview`，包括后端截断占位符。
+- 结果复制按 `resultId` 懒加载得到的 `resultPreview`，包括后端截断占位符。
 - 复制成功只提供短暂的本地状态提示，不写入会话事件。
 - 浏览器拒绝剪贴板权限时显示非阻塞错误提示。
 
@@ -283,9 +285,9 @@ type ToolCallView = {
 
 ### 10.1 通用规则
 
-- `resultPreview` 为空时不渲染结果区。
+- `resultId` 为空时不请求结果；加载后的 `resultPreview` 为空时不渲染结果区。
 - 结果统一按纯文本处理，不使用 `dangerouslySetInnerHTML`。
-- 前端不再次裁剪后端已经限制到 4,000 字符的事件结果。
+- 前端不再次裁剪后端已经限制到 4,000 字符的结果摘要。
 - 结果容器设置最大高度并允许滚动，不能撑开整个消息列表。
 - 后端中间截断占位符原样显示：
 
@@ -404,7 +406,7 @@ TOOL_CALL_ENDED        -> completed / failed
 
 - 历史加载继续使用 `reduceSessionEventsToMessages`。
 - 当前会话仍在流式执行时，不用历史结果覆盖本地实时消息。
-- JSONL 中的 4,000 字符结果直接用于历史展示。
+- JSONL 只恢复结果引用；实时和历史工具项展开时都通过同一接口懒加载结果摘要，并在页面内按 `sessionId + resultId` 缓存成功请求。
 - 历史页面不请求 LLM 使用的 12,000 字符 diff，也不尝试恢复完整 diff。
 
 ## 13. 右侧状态与通知
@@ -514,7 +516,7 @@ TOOL_CALL_ENDED        -> completed / failed
 
 - 文件工具失败显示后端中文错误和真实错误码。
 - 参数或结果不是合法 JSON 时正常回退为纯文本。
-- 历史旧事件缺字段时页面不报错。
+- 结果引用缺失、结果文件不存在或内容损坏时仅当前工具项显示加载失败，页面其他历史内容正常展示。
 - 原始编辑内容和整文件写入内容不会出现在参数区。
 
 ### 17.5 实时与历史
