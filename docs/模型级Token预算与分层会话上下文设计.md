@@ -48,15 +48,17 @@
 - `AiCodeService` 使用 `@MemoryId` 按 session 隔离 ChatMemory。
 - `TurnService` 保证同一 session 同时只有一个活跃 turn。
 - `AiCodeServiceFactory` 在启动时扫描并注册工具。
+- `ModelOptionService` 在启动时调用当前模型供应商的 `/models`，但目前只缓存模型 ID。
 - 当前 `ChatRequestParameters` 只携带 `modelName` 和 `reasoningEffort`，没有模型窗口和输出上限配置。
 
 当前主要问题：
 
 1. `MessageWindowChatMemory` 只设置最多 `10_000` 条消息，不能限制真实 token。
-2. 不同模型的上下文窗口、输出上限和 tokenizer 可能不同。
+2. 不同模型的上下文窗口和输出上限不同，供应商对 token 的实际计算还包含项目无法在调用前完整还原的协议开销。
 3. 工具 Schema 是运行时注册的，固定预留无法随工具数量变化。
 4. 历史工具结果可能显著大于普通对话文本。
 5. 当前没有中期摘要，也没有摘要覆盖游标和版本保护。
+6. 当前 `/models` 返回的 `owned_by` 不能稳定代表 OpenCode 模型目录中的供应商，无法据此关联能力。
 
 ## 总体分层
 
@@ -81,46 +83,173 @@
 
 ## 模型级 Token 能力
 
-### 模型能力配置
+### 能力数据来源
 
-在 `Setting` 中增加模型能力列表。建议字段：
+模型能力不写入 `Setting`，也不维护本地手工模型配置。
 
-```json
-{
-  "model_profiles": [
-    {
-      "model_name_pattern": "example-model-*",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 16384,
-      "tokenizer_type": "OPENAI_COMPATIBLE",
-      "tool_growth_reserve_tokens": 16384,
-      "safety_ratio": 0.05,
-      "summary_max_output_tokens": 4096
-    }
-  ]
-}
+项目每次启动只拉取一次：
+
+```text
+https://models.opencode.ai/api.json
 ```
 
-字段含义：
+该接口是本期模型上下文窗口、输入输出限制和模型功能能力的唯一目录来源。每次启动只发送一次 HTTP 请求，不自动重试。缓存只保存在当前进程内，不写磁盘，不使用上次启动的旧文件作为降级数据，也不在运行期间定时刷新。
 
-| 字段 | 说明 |
-| --- | --- |
-| `modelNamePattern` | 精确模型名或通配规则。 |
-| `contextWindowTokens` | 输入、输出和推理 token 共用的总窗口。 |
-| `maxOutputTokens` | 主模型单次请求保留的最大输出 token。 |
-| `tokenizerType` | 选择 token 估算器。 |
-| `toolGrowthReserveTokens` | 当前 turn 后续工具调用结果的增长预留。 |
-| `safetyRatio` | tokenizer 误差、协议包装和供应商差异的安全比例。 |
-| `summaryMaxOutputTokens` | 摘要模型最大输出 token。 |
+### OpenCode 数据结构
 
-匹配顺序：
+OpenCode 接口根对象按供应商分组，每个供应商对象下包含 `models`，模型能力位于具体模型对象中：
 
-1. 精确模型名。
-2. 最具体的通配规则。
-3. 供应商默认配置。
-4. 没有匹配时使用保守默认窗口 `32768`，并记录中文警告日志。
+```text
+根对象
+└── providerId
+    └── models
+        └── modelKey
+            ├── id
+            ├── name
+            ├── family
+            ├── status
+            ├── limit.context / input / output
+            ├── tool_call
+            ├── reasoning
+            ├── reasoning_options
+            ├── attachment
+            └── modalities.input / output
+```
 
-`maxOutputTokens` 不应只用于预算计算，后续实现时还应写入实际模型请求参数，避免预算预留和供应商真实行为不一致。
+根对象中的供应商 key、供应商对象的 `id` 以及 `/models.data[].owned_by` 都不参与匹配，也不进入清洗后的缓存。
+
+### 清洗后模型结构
+
+清洗后缓存不可变的 `ModelCapability`：
+
+```text
+modelId
+name
+family
+status
+limit.context
+limit.input
+limit.output
+toolCall
+reasoning
+reasoningOptions
+attachment
+inputModalities
+outputModalities
+```
+
+字段说明：
+
+| 缓存字段 | 类型 | 是否可空 | 说明 |
+| --- | --- | --- | --- |
+| `modelId` | `String` | 否 | 模型稳定标识，也是调用供应商模型接口时传入的 `modelName`，并作为能力缓存的唯一键。 |
+| `name` | `String` | 否 | 模型面向用户的展示名称，不参与模型匹配。 |
+| `family` | `String` | 是 | 模型家族标识，可用于归类展示和请求兼容策略；为空时只能按 `modelId` 判断。 |
+| `status` | `String` | 是 | OpenCode 给出的生命周期状态，例如 `alpha`、`beta` 或 `deprecated`；仅用于展示和风险提示，不代表当前供应商一定不可调用。 |
+| `limit.context` | `Long` | 否 | 单次请求可使用的总上下文窗口上限，包含输入、输出以及模型可能使用的推理 token，是预算公式中的 `C`。 |
+| `limit.input` | `Long` | 是 | 模型单次请求允许的输入 token 独立上限；为空表示目录未单独声明，预算计算时回退到 `limit.context`。 |
+| `limit.output` | `Long` | 否 | 模型单次请求允许的最大输出 token 上限，包含供应商计入输出侧的推理 token；实际请求可以设置更小值，不能超过该值。 |
+| `toolCall` | `Boolean` | 否 | 模型是否声明支持工具或函数调用；为 `false` 时不能为该模型启用当前 Code Agent 工具链。 |
+| `reasoning` | `Boolean` | 否 | 模型是否声明具备可控制或可识别的推理能力；具体控制方式仍以 `reasoningOptions` 为准。 |
+| `reasoningOptions` | `List<Map<String, Object>>` | 否 | 推理控制能力列表，例如开关、effort 候选值或 token 预算范围；空列表表示目录没有提供可配置选项。 |
+| `attachment` | `Boolean` | 否 | 模型是否声明支持附件输入；它是总体能力开关，具体可接受的附件内容类型仍以 `inputModalities` 为准。 |
+| `inputModalities` | `List<String>` | 否 | 模型支持的输入模态，例如 `text`、`image`、`audio`、`video` 或 `pdf`，用于请求校验和前端输入能力展示。 |
+| `outputModalities` | `List<String>` | 否 | 模型支持的输出模态，例如 `text`、`image` 或 `audio`，用于请求参数校验和前端结果能力展示。 |
+
+`limit` 表示模型能力上限，不等于本次请求实际占用量。实际输出预留、安全余量和工具增长预留仍由 `ContextBudgetPolicy` 计算，并且不得突破这些能力上限。
+
+字段映射：
+
+| 缓存字段 | OpenCode 来源 | 清洗规则 |
+| --- | --- | --- |
+| `modelId` | `model.id` | 去除首尾空白，区分大小写。 |
+| `name` | `model.name` | 去除首尾空白。 |
+| `family` | `model.family` | 可为空，不根据模型 ID 猜测。 |
+| `status` | `model.status` | 可为空；保留 `alpha`、`beta`、`deprecated` 等原值，不自行过滤。 |
+| `limit.context` | `model.limit.context` | 必须是正整数。 |
+| `limit.input` | `model.limit.input` | 可为空；存在时必须是正整数。 |
+| `limit.output` | `model.limit.output` | 必须是正整数。 |
+| `toolCall` | `model.tool_call` | 缺失时按 `false`。 |
+| `reasoning` | `model.reasoning` | 缺失时按 `false`。 |
+| `reasoningOptions` | `model.reasoning_options` | 对象包装成单元素列表，数组保持顺序，缺失时为空列表。 |
+| `attachment` | `model.attachment` | 缺失时按 `false`。 |
+| `inputModalities` | `model.modalities.input` | 字符串列表，保持首次出现顺序并去重，缺失时为空列表。 |
+| `outputModalities` | `model.modalities.output` | 字符串列表，保持首次出现顺序并去重，缺失时为空列表。 |
+
+`reasoning_options` 当前既可能是单个对象，也可能是对象数组；缓存统一为只读列表，列表元素保留 `type`、`values`、`min`、`max` 等原始选项字段，不把未知类型强行转换成枚举。
+
+一条 OpenCode 模型记录满足以下条件时视为有效：
+
+- `model.id` 非空。
+- `model.name` 非空。
+- `limit.context` 为正整数。
+- `limit.output` 为正整数。
+- `limit.input` 为空或为正整数。
+
+其他可选能力字段缺失不会导致整条记录失效。
+
+### 重复 ID
+
+OpenCode 目录中的同一模型 ID 可能出现在多个供应商分组中。解析根对象和 `models` 时必须保持接口原始顺序：
+
+1. 按响应中的供应商出现顺序遍历。
+2. 按供应商 `models` 中的模型出现顺序遍历。
+3. 无效记录直接跳过，不占用该 ID。
+4. 对同一个 `model.id`，缓存第一条有效记录。
+5. 后续重复记录不得覆盖已经缓存的记录。
+
+实现上使用保持插入顺序的 Map，并在记录通过完整校验后执行 `putIfAbsent`。
+
+### 与供应商 `/models` 匹配
+
+当前模型供应商的 `/models` 继续提供实际可选模型集合。匹配规则：
+
+1. 按 `/models.data` 原始顺序读取 `data[].id`。
+2. `id` 去除首尾空白，空值忽略。
+3. `/models` 内重复 ID 只处理第一次。
+4. 使用 `data[].id` 与清洗后的 `ModelCapability.modelId` 做区分大小写的精确匹配。
+5. 完全忽略 `data[].owned_by`，也不使用 OpenCode 根级 `providerId`。
+6. 只缓存和返回匹配成功的模型；未匹配模型没有可靠 token 能力，不进入候选列表。
+
+最终模型列表顺序以 `/models.data` 为准，而不是 OpenCode 目录顺序。
+
+`ConfigController` 的模型列表接口后续应返回清洗后的模型能力对象，不再只返回字符串 ID。前端仍以 `modelId` 作为实际聊天请求的 `modelName`。
+
+### 启动时序和失败语义
+
+建议新增 `OpenCodeModelCatalogService`，由 `ModelOptionService` 显式依赖：
+
+```text
+读取 Setting 中的模型供应商连接配置
+→ 拉取并清洗 OpenCode 模型目录
+→ 拉取当前供应商 /models
+→ 按 modelId 生成可用模型能力缓存
+→ 其他需要模型能力的 Bean 开始提供服务
+```
+
+OpenCode 模型目录是项目启动的必需依赖。以下情况直接抛出启动异常，停止 Spring 应用启动：
+
+- 网络异常或请求超时。
+- HTTP 状态不是成功状态。
+- 响应为空。
+- JSON 解析失败或根结构不是对象。
+- 清洗后没有任何有效模型记录。
+
+不能捕获异常后只记录警告并继续启动，也不能回退到固定 `32768` 或固定 `256K`。日志需要包含请求地址、失败阶段和 HTTP 状态，但不能记录响应中的潜在敏感内容。
+
+单条模型记录无效时跳过并统计数量；只要清洗后的全局目录非空，就不因局部脏数据停止启动。
+
+本设计只将 OpenCode 目录拉取失败定义为启动致命错误。当前供应商 `/models` 的配置缺失和请求失败行为仍由 `ModelOptionService` 负责；匹配成功前不能对外暴露没有能力数据的模型。
+
+### 运行时查询
+
+`ContextBudgetService` 根据聊天请求的 `modelName` 从已匹配缓存中精确查询 `ModelCapability`。查询不到时直接拒绝请求：
+
+```text
+当前模型没有可用的能力元数据，请刷新模型服务配置并重启应用
+```
+
+不再对未知模型使用保守窗口猜测值。
 
 ### 推理模型
 
@@ -128,112 +257,242 @@
 
 | 推理深度 | 建议处理 |
 | --- | --- |
-| 空或低 | 使用模型配置的默认输出上限。 |
-| 中 | 使用默认输出上限，或由模型配置覆盖。 |
-| 高及以上 | 使用模型配置的高推理输出上限，不能只按最终可见回答估算。 |
+| 模型不支持推理 | 忽略推理选项，按普通模型预算。 |
+| `reasoningOptions` 包含 `effort` | 只允许其 `values` 中声明的推理深度。 |
+| `reasoningOptions` 包含 `toggle` | 前端和请求层按开关处理，不猜测 effort 枚举。 |
+| `reasoningOptions` 包含 `budget_tokens` | 预算值必须满足目录声明的最小值和最大值。 |
 
-第一版不根据推理深度动态猜测倍率，优先使用模型配置的明确值。
+OpenCode 的 `reasoningOptions` 描述支持的控制方式，不直接给出隐藏推理 token 的实际消耗。第一版不根据推理深度动态猜测倍率，输出预留由统一预算策略决定，并受 `limit.output` 约束。
 
 ## Token 估算
 
-### 估算器接口
+### 核心原则
 
-新增统一的 `ContextTokenEstimator`，负责：
+参考 OpenCode 的实现，本项目不集成模型专用 tokenizer，不追求在调用前精确复现供应商 token 计算。
 
-- 估算普通文本。
-- 估算 `ChatMessage` 列表。
-- 估算工具 Schema。
-- 估算 System Prompt、摘要边界标签和消息协议包装。
-- 返回估算来源和误差系数，便于日志和排查。
+设计参考 OpenCode `dev` 分支提交 `1882c33827cf0ce5c948b69ab5a87ed8f6790cf8`：
 
-估算策略：
+- `packages/core/src/util/token.ts`：通用字符数除以 `4` 的粗估。
+- `packages/app/src/components/session/session-context-breakdown.ts`：按字符粗估分项，并以供应商实际输入 usage 校正分项总和。
+- `packages/opencode/src/session/session.ts`：将供应商 usage 归一化为非缓存输入、缓存读写、可见输出和推理。
+- `packages/opencode/src/session/overflow.ts`：优先使用供应商实际 total 判断上下文是否需要压缩。
 
-1. 模型存在对应 tokenizer 时使用精确 tokenizer。
-2. 模型只声明兼容 tokenizer 时使用兼容实现，并增加至少 `10%` 余量。
-3. 无可用 tokenizer 时使用：
+采用两阶段方案：
+
+1. 调用前按字符数进行低成本粗估，用于预算分配、短期窗口选择和是否压缩的预判断。
+2. 调用后以供应商返回的实际 usage 为事实值，修正本次消耗记录，并作为下一次请求的估算基线。
+
+粗估永远不是计费或审计事实。供应商返回实际 usage 后，不再使用本次粗估值表示真实消耗。
+
+### 字符粗估
+
+OpenCode 通用 token 工具使用每 `4` 个字符约等于 `1` token；上下文明细展示使用向上取整。本项目预算场景采用向上取整：
 
 ```text
-fallbackTokens = ceil(UTF-8 字节数 / 3) × 1.2
+roughTokens(text) = max(0, ceil(text.length / 4))
 ```
 
-该回退对中文约等于每个汉字一个 token，对英文和代码也比常见的每四个字符一个 token 更保守。
+`text.length` 使用 Java `String.length()` 的 UTF-16 code unit 数量，与 JavaScript 字符串长度口径接近。不能改为 UTF-8 字节数，也不再使用 `UTF-8 字节数 / 3 × 1.2`。
+
+粗估范围：
+
+- 基础 System Prompt。
+- 中期摘要和摘要边界文本。
+- 短期 `UserMessage`、`AiMessage` 和工具协议消息。
+- 当前用户消息。
+- 工具 Schema 的请求等价 JSON。
+- 已知的角色、消息和请求包装文本。
+
+分别计算各类字符数后再向上取整，避免多个小片段在总和前被舍去。
+
+### 分项粗估
+
+```text
+roughSystemTokens
+roughToolSchemaTokens
+roughSummaryTokens
+roughShortTermTokens
+roughCurrentUserTokens
+roughProtocolTokens
+
+roughInputTokens = 上述分项之和
+```
+
+其中 `roughProtocolTokens` 只包含项目明确生成的角色标识、摘要标签和请求包装。供应商 SDK 或网关追加的未知协议开销不猜测，由实际 usage 校正为 `otherTokens`。
 
 ### 工具 Schema 成本
 
 工具 Schema 不能继续使用固定 `8000` token 预留。
 
-`AiCodeServiceFactory` 应将实际用于 `.tools(...)` 的 `ToolSpecification` 列表同时提供给预算组件。预算组件使用与请求等价的 JSON 结构序列化后估算 token，并按模型缓存结果。
+`AiCodeServiceFactory` 应将实际用于 `.tools(...)` 的 `ToolSpecification` 列表同时提供给预算组件。预算组件使用与请求等价的 JSON 结构序列化，缓存字符数和 `ceil(length / 4)` 的粗估结果。
 
 缓存键建议包含：
 
 ```text
-modelName + tokenizerType + toolCatalogVersion
+roughEstimatorVersion + toolCatalogVersion
 ```
 
-当前工具在应用启动后固定，因此第一版不需要为每个请求重复计算。后续接入动态 MCP 工具时，根据工具目录版本失效缓存。
+粗估公式与模型无关，不需要为不同 `modelId` 重复缓存。当前工具在应用启动后固定，因此第一版不需要为每个请求重复计算；后续接入动态 MCP 工具时，根据工具目录版本失效缓存。
 
-### 实际 usage 校准
+### 供应商 usage 归一化
 
-如果供应商响应包含输入 token usage，应记录：
+每次底层模型调用完成后，从供应商响应读取实际 usage。工具循环可能触发多次模型调用，必须记录最后一次成功调用的 usage 及其请求粗估，不能使用整个 AI Service 聚合值冒充最后一次请求输入。
+
+归一化字段：
 
 ```text
-modelName
-estimatedInputTokens
-actualInputTokens
-estimateRatio
-systemTokens
-toolSchemaTokens
-summaryTokens
-shortTermTokens
-currentUserTokens
+inputTotalTokens
+nonCachedInputTokens
+cacheReadTokens
+cacheWriteTokens
+outputTotalTokens
+visibleOutputTokens
+reasoningTokens
+providerTotalTokens
 ```
 
-可以按模型维护估算误差的移动平均值，用于调整安全系数；不能根据单次响应自动修改 `contextWindowTokens`。
+规则：
+
+- 供应商输入总数已经包含缓存 token 时，缓存读写是其子集，不能再次相加。
+- 供应商输出总数已经包含推理 token 时，推理 token 是其子集，不能再次相加。
+- 需要非重叠明细时，使用非负减法：
+
+```text
+nonCachedInputTokens = max(0, inputTotalTokens - cacheReadTokens - cacheWriteTokens)
+visibleOutputTokens = max(0, outputTotalTokens - reasoningTokens)
+```
+
+- 供应商提供 `totalTokens` 时直接作为总量事实。
+- 未提供总量时，使用非重叠字段求和：
+
+```text
+actualTotalTokens = nonCachedInputTokens
+                  + cacheReadTokens
+                  + cacheWriteTokens
+                  + visibleOutputTokens
+                  + reasoningTokens
+```
+
+- 供应商未返回某项明细时保留为未知，不把未知字段伪造成可靠的 `0`；只有展示或防御性计算时才按 `0` 处理。
+
+### 以实际输入校正分项
+
+供应商 `inputTotalTokens` 是本次输入总量事实。字符粗估只负责解释各部分占比：
+
+1. 计算 System、用户、助手、工具和摘要的粗估合计 `roughInputTokens`。
+2. 如果 `roughInputTokens <= inputTotalTokens`，保留各分项粗估，差值记为：
+
+```text
+otherTokens = inputTotalTokens - roughInputTokens
+```
+
+3. 如果 `roughInputTokens > inputTotalTokens`，按比例缩小全部粗估分项：
+
+```text
+scale = inputTotalTokens / roughInputTokens
+correctedPartTokens = floor(roughPartTokens × scale)
+otherTokens = inputTotalTokens - correctedPartTokens 总和
+```
+
+校正后全部输入分项之和必须等于供应商实际 `inputTotalTokens`。该分项仅用于监控和解释，不回写消息内容。
+
+### 下一次请求校正
+
+保存最近一次成功底层模型调用的 `ContextUsageSnapshot`：
+
+```text
+modelId
+roughInputTokens
+actualInputTokens
+actualTotalTokens
+correctionFactor
+systemPromptHash
+toolCatalogVersion
+requestProtocolVersion
+createdAt
+```
+
+下一次调用前，先计算当前请求的 `currentRoughInputTokens`。只有 `modelId`、System Prompt 版本、工具目录版本和请求协议版本都与快照一致，并且上次粗估大于 `0` 时才使用校正：
+
+```text
+correctionFactor = clamp(
+    lastActualInputTokens / lastRoughInputTokens,
+    0.5,
+    4.0
+)
+correctedInputTokens = ceil(currentRoughInputTokens × correctionFactor)
+```
+
+比例下限防止供应商偶发的异常小 usage 让预算过度放大，比例上限防止小请求的固定协议开销无限放大后续估算。结果不得小于 `0`。
+
+模型切换、System Prompt 变化、工具目录变化、请求协议版本变化或快照缺失时，丢弃旧校正，直接使用本次 `roughInputTokens`。不维护跨模型移动平均值，也不根据 usage 修改 OpenCode 缓存的 `limit`。
+
+### usage 缺失
+
+供应商没有返回有效 `inputTotalTokens` 时：
+
+- 本次真实输入消耗标记为未知。
+- 不创建或更新 `ContextUsageSnapshot`。
+- 下一次继续使用字符粗估。
+- 仍然保留输出、安全余量和工具增长预留。
+- 记录模型 ID 和 usage 缺失日志，但不记录完整请求内容。
 
 ## 请求预算
 
 ### 预算变量
 
 ```text
-C = 模型总上下文窗口
-O = 最大输出和推理 token 预留
+C = limit.context，模型总上下文窗口
+L = limit.input；为空时使用 C
+OC = limit.output，模型允许的最大输出
+O = 当前请求实际使用的输出和推理 token 预留，且 O <= OC
 S = 安全余量
 G = 当前 turn 工具结果增长预留
-P = 基础 System Prompt token
-T = 工具 Schema token
-U = 当前用户消息 token
-D = 消息角色、摘要标签和请求协议包装 token
-M = 中期摘要 token
-R = 短期原始消息 token
+P = 基础 System Prompt 粗估 token
+T = 工具 Schema 粗估 token
+U = 当前用户消息粗估 token
+D = 消息角色、摘要标签和请求协议包装粗估 token
+M = 中期摘要粗估 token
+R = 短期原始消息粗估 token
 ```
 
 计算公式：
 
 ```text
-S = max(2048, ceil(C × safetyRatio))
-G = 已配置值；未配置时 clamp(C × 10%, 8192, 32768)
+requestUsesReasoning = 模型支持推理，并且当前请求实际启用推理
+requestedOutputReserve = requestUsesReasoning ? 32768 : 16384
+O = min(OC, requestedOutputReserve)
+S = max(2048, ceil(C × 5%))
+G = clamp(C × 10%, 8192, 32768)
 
-maxInputTokens = C - O - S - G
+maxInputTokens = min(L, C - O - S - G)
 fixedInputTokens = P + T + U + D
 historyBudgetTokens = maxInputTokens - fixedInputTokens
-estimatedInputTokens = fixedInputTokens + M + R
+roughInputTokens = fixedInputTokens + M + R
+budgetInputTokens = 存在有效 usage 校正 ? correctedInputTokens : roughInputTokens
 ```
+
+`requestedOutputReserve`、`5%` 安全比例、工具增长公式和摘要输出目标属于项目的 `ContextBudgetPolicy`，使用代码常量统一维护，不进入 `Setting`。远端目录提供能力上限，项目策略决定单次请求实际使用多少预算。
+
+主模型请求的实际 `maxOutputTokens` 应设置为同一个 `O`，不能只在预算中预留但不约束供应商请求。
+
+如果 `C - O - S - G <= 0`，说明当前统一策略不适合该模型，直接返回模型预算无效错误，不能把负数或零预算交给后续压缩流程。
 
 必须满足：
 
 ```text
 fixedInputTokens <= maxInputTokens
-M + R <= historyBudgetTokens
+budgetInputTokens <= maxInputTokens
 ```
 
-如果 `fixedInputTokens` 已经超过 `maxInputTokens`，清空全部历史也不能解决，应在调用模型前直接返回“当前输入或工具配置超过模型上下文限制”。
+如果 `fixedInputTokens` 已经超过 `maxInputTokens`，清空全部历史也不能解决，应在调用模型前直接返回“当前输入或工具配置超过模型上下文限制”。中期和短期的裁剪目标以 `budgetInputTokens` 为准，每移除或加入一个 turn 后重新执行粗估和校正。
 
 ### 阈值
 
 令：
 
 ```text
-usageRatio = estimatedInputTokens / maxInputTokens
+usageRatio = budgetInputTokens / maxInputTokens
 ```
 
 | 使用率 | 状态 | 处理 |
@@ -251,6 +510,16 @@ targetInputTokens = maxInputTokens × 60%
 
 压缩不应只降到 `70%` 以下，否则下一两个 turn 就会再次触发。
 
+主模型调用完成后，再使用供应商实际 usage 进行一次事实判断：
+
+```text
+postCallTokens = providerTotalTokens
+              ?? (nonCachedInputTokens + cacheReadTokens + cacheWriteTokens
+                  + visibleOutputTokens + reasoningTokens)
+```
+
+如果 `postCallTokens >= maxInputTokens × 70%`，将当前 session 标记为下次调用前需要整理上下文。该判断参考 OpenCode 使用实际 usage 触发自动压缩的方式，优先级高于调用前粗估；当前工具循环仍由 `G` 预留保护，不在工具请求和结果中间拆分 turn。
+
 ### 中短期预算分配
 
 预算采用弹性分配，不为每一层预留不可使用的固定空间：
@@ -263,7 +532,7 @@ targetInputTokens = maxInputTokens × 60%
 
 ### 计算示例
 
-假设模型配置：
+假设 OpenCode 能力和当前预算策略得到：
 
 ```text
 C = 131072
@@ -278,7 +547,7 @@ G = 16384
 maxInputTokens = 91750
 ```
 
-如果 System Prompt、工具 Schema、当前用户消息和协议包装共 `10000` token：
+如果 System Prompt、工具 Schema、当前用户消息和协议包装粗估共 `10000` token：
 
 ```text
 historyBudgetTokens = 81750
@@ -286,6 +555,8 @@ historyBudgetTokens = 81750
 压缩后总输入目标约 = 55050
 压缩后中短期合计目标约 = 45050
 ```
+
+如果存在相同模型和协议版本的上一轮实际 usage，还需要按“下一次请求校正”得到 `budgetInputTokens`，最终阈值判断使用校正值，不直接使用示例中的粗估总量。
 
 ## 短期上下文
 
@@ -406,6 +677,7 @@ CREATE TABLE mboo_chat_memory (
     summary_model_name TEXT,
     summary_prompt_version INTEGER NOT NULL DEFAULT 1,
     summary_revision INTEGER NOT NULL DEFAULT 0,
+    last_usage_json TEXT,
     version INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
@@ -424,6 +696,7 @@ CREATE TABLE mboo_chat_memory (
 | `summaryModelName` | 最近一次生成摘要使用的模型。 |
 | `summaryPromptVersion` | 摘要提示词和 JSON Schema 版本。 |
 | `summaryRevision` | 滚动摘要次数，用于触发重建。 |
+| `lastUsageJson` | 最近一次成功底层模型调用的 `ContextUsageSnapshot`，用于应用重启后的下一次请求校正；没有实际输入 usage 时为空。 |
 | `version` | 整行乐观锁版本。 |
 
 JSONL 事件顺序以文件顺序为准，不能用雪花 `eventId` 排序。第一版通过 `eventId` 定位后按文件顺序继续读取；后续为长会话增加字节 offset 或事件序号索引。
@@ -512,12 +785,14 @@ JSONL 事件顺序以文件顺序为准，不能用雪花 `eventId` 排序。第
 - 使用低推理深度。
 - 支持取消。
 - 使用结构化输出。
-- 输出上限使用 `summaryMaxOutputTokens`。
+- 输出预留使用 `min(limit.output, 4096)`，并写入摘要模型实际请求参数。
 
 摘要模型自身预算：
 
 ```text
-summaryMaxInputTokens = C - summaryMaxOutputTokens - S
+summaryOutputTokens = min(limit.output, 4096)
+summaryInputLimit = limit.input 为空时使用 limit.context
+summaryMaxInputTokens = min(summaryInputLimit, limit.context - summaryOutputTokens - S)
 ```
 
 每批原始 turn 输入最多使用 `summaryMaxInputTokens × 60%`，为旧摘要、提示词和结构化输出协议保留空间。单次候选超限时必须按完整 turn 分批滚动，不能切开 turn。
@@ -627,7 +902,7 @@ CONTEXT_COMPACTION_STATUS completed
 当压缩前仍满足：
 
 ```text
-estimatedInputTokens <= maxInputTokens × 85%
+budgetInputTokens <= maxInputTokens × 85%
 ```
 
 摘要调用失败时：
@@ -684,6 +959,8 @@ estimatedInputTokens <= maxInputTokens × 85%
 
 不能用包含空摘要字段的实体覆盖 `summary_json`、覆盖游标和摘要元数据。
 
+供应商 usage 到达后，通过独立的条件更新写入 `last_usage_json`。写入前需要确认 session、模型 ID 和本次底层请求标识仍匹配，迟到 usage 不能覆盖更新的上下文快照。
+
 ### 压缩更新
 
 压缩使用一条带版本条件的原子更新，同时修改：
@@ -713,22 +990,43 @@ JSONL 是事实来源，SQLite 上下文损坏不能影响历史回放。
 
 ## 组件设计
 
-### `ModelTokenProfileService`
+### `OpenCodeModelCatalogService`
 
-- 读取并匹配模型能力配置。
-- 为未知模型提供保守回退。
-- 校验窗口、输出上限和安全比例。
+- 项目启动时拉取一次 OpenCode 模型目录。
+- 按响应原始顺序清洗字段、校验记录并处理重复 ID。
+- 暴露只读的全局 `modelId -> ModelCapability` 目录。
+- 拉取或全局清洗失败时抛出异常，阻止项目启动。
+
+### `ModelOptionService`
+
+- 显式依赖 `OpenCodeModelCatalogService`。
+- 拉取当前供应商 `/models` 并按 `data[].id` 精确匹配能力目录。
+- 忽略 `owned_by` 和 OpenCode `providerId`。
+- 按 `/models.data` 顺序缓存只读的可用 `ModelCapability` 列表和 ID 索引。
+- 为 `ConfigController` 和 `ContextBudgetService` 提供同一份匹配结果。
 
 ### `ContextTokenEstimator`
 
-- 估算文本、消息、工具 Schema 和协议包装。
-- 缓存静态 System Prompt 和工具 Schema 成本。
-- 输出分项 token 明细。
+- 按 `ceil(String.length() / 4)` 粗估文本、消息、工具 Schema 和协议包装。
+- 缓存静态 System Prompt 和工具 Schema 字符数及粗估结果。
+- 输出 System、用户、助手、工具、摘要和协议分项。
+- 不加载 tokenizer，不负责解释供应商实际 usage。
+
+### `ModelUsageTracker`
+
+- 在每次底层模型请求发出前保存请求标识、粗估输入和校正兼容信息。
+- 从模型监听器读取每次供应商响应的原始 usage，不能只读取整个工具循环的聚合 usage。
+- 归一化非缓存输入、缓存读写、可见输出、推理和总量，避免子集重复相加。
+- 使用实际输入校正粗估分项，并生成 `ContextUsageSnapshot`。
+- 将最近有效快照持久化到当前 session 的 `last_usage_json`。
+- usage 缺失、迟到或请求标识不匹配时不更新校正快照。
 
 ### `ContextBudgetService`
 
-- 根据当前模型计算 `maxInputTokens`。
-- 计算短期、中期、当前用户和工具成本。
+- 从 `ModelOptionService` 精确查询当前 `modelName` 的能力，未匹配时拒绝请求。
+- 使用 `limit.context`、`limit.input`、`limit.output` 和代码预算策略计算 `maxInputTokens`。
+- 计算短期、中期、当前用户和工具的字符粗估。
+- 存在兼容 `ContextUsageSnapshot` 时校正本次输入估算，否则使用粗估。
 - 返回 `NORMAL`、`COMPACT`、`URGENT` 或 `OVERFLOW`。
 - 给出压缩目标和各层预算。
 
@@ -757,6 +1055,7 @@ JSONL 是事实来源，SQLite 上下文损坏不能影响历史回放。
 
 - 复用同一份工具目录构建 AI Service 和工具 token 预算。
 - 配置 `systemMessageTransformer` 注入摘要。
+- 配置模型监听器，将每次底层请求与供应商 usage 交给 `ModelUsageTracker`。
 - 保留较大的消息数量上限作为异常兜底。
 
 ### `TurnService`
@@ -803,10 +1102,13 @@ JSONL 是事实来源，SQLite 上下文损坏不能影响历史回放。
 
 ### 第一阶段：预算可观测
 
-- 增加模型能力配置和保守回退。
-- 实现分项 token 估算。
-- 共享工具目录并计算真实工具 Schema 成本。
-- 只记录预算和实际 usage，不执行压缩。
+- 增加 OpenCode 模型目录启动加载、清洗和致命失败处理。
+- 将供应商 `/models` 与 OpenCode 能力按模型 ID 匹配，并调整模型列表返回结构。
+- 实现按字符数除以 `4` 的分项粗估。
+- 共享工具目录并缓存工具 Schema 字符粗估。
+- 归一化每次底层模型调用的供应商实际 usage。
+- 实现 `ContextUsageSnapshot` 持久化和下一次请求校正。
+- 只记录预算和校正结果，不执行压缩。
 
 ### 第二阶段：短期与中期压缩
 
@@ -831,9 +1133,16 @@ JSONL 是事实来源，SQLite 上下文损坏不能影响历史回放。
 
 | 项目 | 决策 |
 | --- | --- |
-| 模型窗口 | 按 `modelName` 配置，未知模型保守回退，不再固定 `256K`。 |
-| 预算依据 | token 为主，消息数量只作为异常兜底。 |
-| 工具 Schema | 根据实际注册工具计算并缓存。 |
+| 模型能力来源 | 启动时拉取一次 OpenCode 模型目录，不写入 `Setting`。 |
+| 模型匹配 | 仅按 `model.id == /models.data[].id` 精确匹配，忽略 `owned_by` 和 `providerId`。 |
+| 重复 ID | 按 OpenCode 响应顺序保留第一条有效记录。 |
+| 启动失败 | OpenCode 目录拉取、解析或全局清洗失败时停止项目启动。 |
+| 未匹配模型 | 不使用固定窗口回退，拒绝进入 token 预算和聊天流程。 |
+| 调用前估算 | 参考 OpenCode，统一使用 `ceil(String.length() / 4)` 字符粗估，不集成 tokenizer。 |
+| 实际消耗 | 供应商 usage 是事实值，缓存、推理等子项归一化后不得重复计数。 |
+| 下一轮校正 | 使用最近一次兼容的实际输入基线校正当前粗估，不维护跨模型移动平均。 |
+| 预算依据 | 校正后的输入估算为主，消息数量只作为异常兜底。 |
+| 工具 Schema | 根据实际注册工具序列化后进行字符粗估并缓存。 |
 | 压缩单位 | 完整 turn。 |
 | 短期目标 | 预算内尽量保留最近 `4～8` 个 turn，不设绝对最小数量。 |
 | 中期形态 | 第一版使用单份结构化完整摘要。 |
@@ -847,8 +1156,21 @@ JSONL 是事实来源，SQLite 上下文损坏不能影响历史回放。
 
 ## 验收标准
 
-- 同一 session 切换不同模型时使用对应窗口预算。
-- 未配置模型使用保守回退并产生明确日志。
+- 项目每次启动只请求一次 `https://models.opencode.ai/api.json`，运行期间不重复刷新。
+- OpenCode 请求失败、非成功状态、响应无法解析或没有有效记录时，Spring 启动失败。
+- 缓存只包含规定的模型能力字段，不包含 `owned_by` 或 `providerId`。
+- OpenCode 重复模型 ID 保留响应顺序中的第一条有效记录。
+- 第一条重复记录无效时会继续查找，保留后续第一条有效记录。
+- `/models.data` 仅按 ID 精确匹配，结果顺序与 `/models.data` 一致。
+- 未匹配模型不会进入候选列表，也不能使用猜测窗口发起聊天。
+- 同一 session 切换不同模型时使用对应 `limit` 计算预算。
+- 所有调用前文本估算统一使用 `ceil(String.length() / 4)`，没有 tokenizer 或 UTF-8 字节估算分支。
+- 工具 Schema 使用请求等价 JSON 的字符粗估，不使用固定 token 数。
+- 每次底层模型调用分别采集 usage，工具循环聚合值不能作为下一轮输入基线。
+- 实际输入 usage 存在时，校正后输入分项总和等于供应商输入总数。
+- 缓存读写和推理 token 不会与其所属输入或输出总数重复相加。
+- 同模型且协议版本一致时，下一次请求使用最近实际输入校正；不兼容时退回当前粗估。
+- usage 缺失时不伪造实际值，也不覆盖已有有效校正快照。
 - 日志可以看到 System Prompt、工具、摘要、短期、当前输入和预留 token 明细。
 - 上下文低于阈值时不调用摘要模型。
 - 压缩只处理完整历史 turn，不包含当前 turn。
@@ -858,4 +1180,3 @@ JSONL 是事实来源，SQLite 上下文损坏不能影响历史回放。
 - 紧急压缩后仍超限时在调用供应商前返回明确错误。
 - 应用重启后可以从 SQLite 恢复摘要和短期消息。
 - SQLite 上下文损坏时可以从 JSONL 重建。
-
