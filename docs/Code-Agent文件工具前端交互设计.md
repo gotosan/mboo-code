@@ -105,7 +105,6 @@
 | `read_file` | 读取文件 |
 | `edit_file` | 编辑文件 |
 | `write_file` | 写入文件 |
-| `getWeather` | 查询天气 |
 
 五个真实文件工具接入后移除 `demoWriteFile` 的名称映射。
 

@@ -51,7 +51,6 @@ const TOOL_LABELS: Record<string, string> = {
   edit_file: "编辑文件",
   write_file: "写入文件",
   run_command: "执行命令",
-  getWeather: "查询天气",
 };
 
 const FILE_TOOL_NAMES = new Set([

@@ -694,7 +694,6 @@ DTO、record 和枚举按项目要求添加 Swagger `@Schema` 注解。函数名
 - 每个 `@Tool` 方法必须同时具有 `@ToolPermission`，继续由 `ToolPermissionRegistry.register` 启动期校验。
 - 不再逐个手写方法名和参数类型。
 - 继续使用静态工具列表和 `PermissionToolExecutor`，不引入动态 `ToolProvider`。
-- 保留 `WeatherTool` 及其 `TOOL` 权限逻辑。
 - 五个真实文件工具接入后移除并删除 `FileWritePermissionDemoTool`。
 
 ### 16.5 现有组件调整
@@ -744,7 +743,7 @@ DTO、record 和枚举按项目要求添加 Swagger `@Schema` 注解。函数名
 12. 调整 `ToolApprovalService`、`PermissionToolExecutor` 和 `TurnService`。
 13. 改造 `AiCodeServiceFactory` 自动扫描注册工具。
 14. 更新 `system-prompt.txt`。
-15. 删除 `FileWritePermissionDemoTool` 并保留现有天气工具回归能力。
+15. 删除 `FileWritePermissionDemoTool`。
 
 ## 19. 验收清单
 
