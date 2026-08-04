@@ -4,6 +4,8 @@ import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.config.Setting;
 import com.yu.mboocode.llm.listener.MyAiServiceCompletedListener;
 import com.yu.mboocode.llm.listener.MyChatModelListener;
+import com.yu.mboocode.llm.listener.ModelUsageRequestListener;
+import com.yu.mboocode.llm.listener.ModelUsageResponseListener;
 import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
 import com.yu.mboocode.agent.tool.ToolRequestValidatorRegistry;
 import com.yu.mboocode.agent.tool.permission.ToolPermissionRegistry;
@@ -44,6 +46,10 @@ public class AiCodeServiceFactory {
     private ToolRequestValidatorRegistry toolRequestValidatorRegistry;
     @Resource
     private ApplicationContext applicationContext;
+    @Resource
+    private ModelUsageRequestListener modelUsageRequestListener;
+    @Resource
+    private ModelUsageResponseListener modelUsageResponseListener;
 
     @Bean
     public ChatMemoryProvider chatMemoryProvider() {
@@ -81,7 +87,7 @@ public class AiCodeServiceFactory {
                 .streamingChatModel(streamingChatModel)
                 .chatMemoryProvider(chatMemoryProvider)
                 .tools(tools)
-                .registerListeners(new MyAiServiceCompletedListener())
+                .registerListeners(modelUsageRequestListener, modelUsageResponseListener, new MyAiServiceCompletedListener())
                 .build();
     }
 

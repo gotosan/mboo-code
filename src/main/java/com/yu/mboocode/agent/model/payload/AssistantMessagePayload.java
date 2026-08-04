@@ -1,6 +1,7 @@
 package com.yu.mboocode.agent.model.payload;
 
 import com.yu.mboocode.common.enums.CodeEnum;
+import com.yu.mboocode.agent.model.ContextUsageSnapshot;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 
@@ -27,6 +28,9 @@ public class AssistantMessagePayload implements SessionEventPayload {
 
     @Schema(description = "本轮耗时，单位毫秒")
     private Long durationMs;
+
+    @Schema(description = "最后一次有效上下文用量")
+    private ContextUsageSnapshot contextUsage;
 
     @AllArgsConstructor
     @Getter

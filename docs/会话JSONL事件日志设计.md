@@ -12,7 +12,7 @@
 - `turnId` 只负责关联同一轮中的事件，不使用独立的 turn 开始、完成或失败事件。
 - JSONL 每行都是完整 `SessionEvent`，已写入事件不修改。
 - 事件类型与 Payload Java 类型由 `SessionEventType` 一一绑定，追加和读取时都会校验类型匹配。
-- `ASSISTANT_MESSAGE_DELTA` 只通过 SSE 推送，不写入 JSONL。
+- 运行时事件只通过 SSE 推送，不写入 JSONL；当前包括 `ASSISTANT_MESSAGE_DELTA` 和 `CONTEXT_USAGE_UPDATED`。
 - `TOOL_APPROVAL_REQUIRED` 会写入 JSONL，但可处理的待授权上下文只保存在当前应用进程内。
 - 工具参数在写入 JSONL 前统一脱敏；工具结果正文和展示摘要独立保存在会话 `tool-results` 目录中，`TOOL_CALL_ENDED` 只记录 `resultId` 和结果元数据。
 - 写入 JSONL 与通过 SSE 推送的是同一份引用型 `SessionEvent` 内容，前端在展开工具项时按 `resultId` 懒加载展示摘要。
@@ -33,11 +33,12 @@ public enum SessionEventType {
     CANCELLED,
 
     // 运行时事件，不写入 JSONL
-    ASSISTANT_MESSAGE_DELTA
+    ASSISTANT_MESSAGE_DELTA,
+    CONTEXT_USAGE_UPDATED
 }
 ```
 
-除 `ASSISTANT_MESSAGE_DELTA` 外，当前由后端产生的其余事件都会写入 JSONL。完整字段定义见[《会话事件 Payload 字段说明》](./会话事件Payload字段说明.md)。
+`SessionEventType` 使用显式持久化标记维护运行时事件集合，`SessionEventStore` 拒绝将运行时事件写入 JSONL。完整字段定义见[《会话事件 Payload 字段说明》](./会话事件Payload字段说明.md)。
 
 ## SSE 协议
 
@@ -50,15 +51,18 @@ public enum SessionEventType {
 1. 创建或加载活跃 session，生成 `turnId` 并占用 `active_turn_id`。
 2. 写入并推送 `USER_MESSAGE`。
 3. 模型生成文本时推送 `ASSISTANT_MESSAGE_DELTA`，后端同时在内存中累计文本。
-4. 工具执行前进行权限评估。
-5. 无需授权或已有权限时，直接写入并推送 `TOOL_CALL_STARTED`。
-6. 权限不足时，先写入并推送 `TOOL_APPROVAL_REQUIRED`，聊天 SSE 保持连接，工具执行线程等待用户决策。
-7. 用户允许后写入并推送 `TOOL_CALL_STARTED`；用户拒绝、等待超时或校验失败时，不产生该开始事件。
-8. 工具执行或权限执行器返回失败结果后，写入并推送 `TOOL_CALL_ENDED`。
-9. 模型正常结束时写入并推送 `ASSISTANT_MESSAGE(state=complete)`。
-10. SSE 完成，并在 `doFinally` 中按 `sessionId + turnId` 清理当前 `active_turn_id` 和进程内 runtime。
+4. 每次底层模型调用返回有效 usage 时推送 `CONTEXT_USAGE_UPDATED`，并在 runtime 中覆盖最后一次有效用量。
+5. 工具执行前进行权限评估。
+6. 无需授权或已有权限时，直接写入并推送 `TOOL_CALL_STARTED`。
+7. 权限不足时，先写入并推送 `TOOL_APPROVAL_REQUIRED`，聊天 SSE 保持连接，工具执行线程等待用户决策。
+8. 用户允许后写入并推送 `TOOL_CALL_STARTED`；用户拒绝、等待超时或校验失败时，不产生该开始事件。
+9. 工具执行或权限执行器返回失败结果后，写入并推送 `TOOL_CALL_ENDED`。
+10. 模型正常结束时写入并推送 `ASSISTANT_MESSAGE(state=complete)`，其中携带本轮最后一次有效 `contextUsage`。
+11. SSE 完成，并在 `doFinally` 中按 `sessionId + turnId` 清理当前 `active_turn_id`、usage 关联和进程内 runtime。
 
 所有助手 delta、工具事件、工具授权事件和最终助手消息共用同一个 `messageId`。前端收到最终 `ASSISTANT_MESSAGE` 后，使用其中的完整 `text` 覆盖本地累计文本，同时保留已经合并的工具调用信息。
+
+上下文用量表示最后一次成功底层模型调用的实际总 Token，不在 turn 内累计。正常终态以及已有非空助手文本的取消、错误终态会把最后一次有效值写入 `ASSISTANT_MESSAGE.contextUsage`；没有有效 usage 时保持为空，不写入零值，也不额外伪造助手终态。
 
 ## 工具授权
 

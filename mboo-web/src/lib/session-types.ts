@@ -6,7 +6,8 @@ export type SessionEventType =
   | "TOOL_APPROVAL_REQUIRED"
   | "ERROR"
   | "CANCELLED"
-  | "ASSISTANT_MESSAGE_DELTA";
+  | "ASSISTANT_MESSAGE_DELTA"
+  | "CONTEXT_USAGE_UPDATED";
 
 export type SessionEventSource = "USER" | "ASSISTANT" | "SYSTEM";
 
@@ -26,6 +27,33 @@ export type ChatReq = {
   userMessage: string;
   workspacePath: string;
   sessionId: string;
+};
+
+export type ModelLimit = {
+  context: number;
+  input?: number | null;
+  output: number;
+};
+
+export type ModelInfo = {
+  modelId: string;
+  name: string;
+  family?: string | null;
+  status?: string | null;
+  limit: ModelLimit;
+  toolCall: boolean;
+  reasoning: boolean;
+  reasoningOptions: Record<string, unknown>[];
+  attachment: boolean;
+  inputModalities: string[];
+  outputModalities: string[];
+};
+
+export type ContextUsageSnapshot = {
+  modelId: string;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens: number;
 };
 
 type SessionEventBase<TType extends SessionEventType, TPayload> = {
@@ -60,11 +88,16 @@ export type AssistantMessagePayload = {
   text: string;
   errorMessage?: string;
   durationMs?: number;
+  contextUsage?: ContextUsageSnapshot | null;
 };
 
 export type AssistantMessageDeltaPayload = {
   messageId: string;
   text: string;
+};
+
+export type ContextUsageUpdatedPayload = ContextUsageSnapshot & {
+  messageId: string;
 };
 
 export type ToolCallStartedPayload = {
@@ -120,6 +153,7 @@ export type SessionEventPayload =
   | UserMessagePayload
   | AssistantMessagePayload
   | AssistantMessageDeltaPayload
+  | ContextUsageUpdatedPayload
   | ToolCallStartedPayload
   | ToolApprovalRequiredPayload
   | ToolCallEndedPayload
@@ -134,4 +168,5 @@ export type SessionEvent =
   | SessionEventBase<"TOOL_CALL_ENDED", ToolCallEndedPayload>
   | SessionEventBase<"ERROR", ErrorPayload>
   | SessionEventBase<"CANCELLED", CancelledPayload>
-  | SessionEventBase<"ASSISTANT_MESSAGE_DELTA", AssistantMessageDeltaPayload>;
+  | SessionEventBase<"ASSISTANT_MESSAGE_DELTA", AssistantMessageDeltaPayload>
+  | SessionEventBase<"CONTEXT_USAGE_UPDATED", ContextUsageUpdatedPayload>;

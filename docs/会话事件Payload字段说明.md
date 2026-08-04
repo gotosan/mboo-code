@@ -40,6 +40,7 @@
 | `ERROR` | `ErrorPayload` | `SYSTEM` | 是 | 当前 turn 执行错误 |
 | `CANCELLED` | `CancelledPayload` | `SYSTEM` | 是 | SSE 取消导致当前 turn 结束 |
 | `ASSISTANT_MESSAGE_DELTA` | `AssistantMessageDeltaPayload` | `ASSISTANT` | 否 | 助手文本增量，仅通过 SSE 推送 |
+| `CONTEXT_USAGE_UPDATED` | `ContextUsageUpdatedPayload` | `SYSTEM` | 否 | 最后一次有效模型调用的上下文用量，仅通过 SSE 推送 |
 
 表中的来源是当前后端生成事件时使用的值。前端为即时更新 UI 而本地构造的 `CANCELLED` 来源为 `USER`，且不会写入 JSONL。
 
@@ -64,6 +65,18 @@
 
 前端按到达顺序追加同一 `messageId` 的 delta。消息进入 `complete`、`cancel` 或 `error` 后，迟到 delta 必须忽略。
 
+### `CONTEXT_USAGE_UPDATED`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `messageId` | `String` | 是 | 与当前助手消息及其终态快照相同的消息 ID |
+| `modelId` | `String` | 是 | 本次底层模型请求实际使用的模型 ID |
+| `inputTokens` | `Long` | 否 | 供应商返回的输入 Token 数 |
+| `outputTokens` | `Long` | 否 | 供应商返回的输出 Token 数 |
+| `totalTokens` | `Long` | 是 | 供应商返回的总 Token 数，缺失时由有效输入与输出相加 |
+
+该事件只用于运行时更新，不写入 JSONL。工具循环产生多次有效 usage 时会发送多次，后一次覆盖前一次；usage 缺失、无效、迟到或模型不匹配时不发送。
+
 ### `ASSISTANT_MESSAGE`
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -73,6 +86,7 @@
 | `text` | `String` | 是 | 完整回复，或取消、错误前累计的部分回复 |
 | `errorMessage` | `String` | 否 | `state=error` 时的模型错误信息 |
 | `durationMs` | `Long` | 否 | 本轮耗时，单位毫秒 |
+| `contextUsage` | `ContextUsageSnapshot` | 否 | 本轮最后一次有效底层模型调用的上下文用量 |
 
 状态含义：
 
@@ -83,6 +97,8 @@
 状态枚举通过 `CodeEnum` 序列化为以上小写 code，不使用 Java 枚举名 `COMPLETE`、`CANCEL`、`ERROR`。
 
 最终 `ASSISTANT_MESSAGE` 是权威快照。前端按 `messageId` 使用其 `text` 覆盖累计 delta，同时保留已经归并的工具调用信息。当前代码在取消或错误时仅当累计文本非空才写入该事件；没有累计文本时不会生成对应的助手终态快照。
+
+`ContextUsageSnapshot` 包含 `modelId`、可空的 `inputTokens`、可空的 `outputTokens` 和必填的 `totalTokens`。它不保存占用百分比，前端使用当前模型详情中的 `limit.context` 计算；旧 JSONL 缺少该字段时按暂无上下文用量兼容。
 
 ## 4. 错误与取消事件
 
@@ -187,6 +203,7 @@ Content-Type: application/json
 ```text
 USER_MESSAGE
 ASSISTANT_MESSAGE_DELTA（0 到多次，仅 SSE）
+CONTEXT_USAGE_UPDATED（底层模型每次返回有效 usage 时，仅 SSE）
 TOOL_CALL_STARTED / TOOL_CALL_ENDED（0 到多次）
 ASSISTANT_MESSAGE state=complete
 SSE 完成
@@ -246,4 +263,5 @@ CANCELLED / ASSISTANT_MESSAGE state=cancel（助手事件仅已有非空文本�
 
 - 旧 JSONL 中的 turn 生命周期事件，以及旧的助手状态 `completed`、`interrupted`，均不再兼容。
 - `TOOL_APPROVAL_REQUIRED.permissionType`、`approvalIndex` 和 `approvalCount` 为后续新增字段；前端对缺失权限类型按 `TOOL`、缺失阶段字段按单阶段兼容。
+- `ASSISTANT_MESSAGE.contextUsage` 为后续新增字段；旧事件缺失时正常回放并显示空用量圆环。
 - JSONL 解析依赖已知的事件类型和来源。未知枚举值会被视为格式错误。

@@ -10,8 +10,10 @@ import com.yu.mboocode.agent.dto.ChatReq;
 import com.yu.mboocode.agent.dto.SessionPermissionModeReq;
 import com.yu.mboocode.agent.dto.SessionUpdateReq;
 import com.yu.mboocode.agent.model.SessionEvent;
+import com.yu.mboocode.agent.model.ModelInfo;
 import com.yu.mboocode.agent.model.Sessions;
 import com.yu.mboocode.agent.service.SessionService;
+import com.yu.mboocode.agent.service.ModelOptionService;
 import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.service.TurnService;
 import com.yu.mboocode.agent.service.ToolResultStore;
@@ -39,6 +41,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import dev.langchain4j.model.chat.request.ChatRequestParameters;
 
 import java.time.Duration;
 import java.util.List;
@@ -57,6 +60,8 @@ public class SessionController {
     private ToolApprovalService toolApprovalService;
     @Resource
     private ToolResultStore toolResultStore;
+    @Resource
+    private ModelOptionService modelOptionService;
 
     @Operation(summary = "活跃会话列表")
     @GetMapping("/list")
@@ -148,8 +153,11 @@ public class SessionController {
     @Operation(summary = "聊天")
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<@NonNull ServerSentEvent<@NonNull SessionEvent>> chat(@Valid @RequestBody ChatReq req) {
+        ModelInfo modelInfo = modelOptionService.requireModelInfo(req.modelName());
+        String reasoningEffort = modelOptionService.validateReasoningEffort(modelInfo, req.reasoningEffort());
+        ChatRequestParameters requestParameters = LLMUtil.buildChatReq(modelInfo.modelId(), reasoningEffort);
         Sinks.One<Void> streamEnded = Sinks.one();
-        Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(req.sessionId(), req.workspacePath(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), LLMUtil.buildChatReq(req.modelName(), req.reasoningEffort())))
+        Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(req.sessionId(), req.workspacePath(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), requestParameters))
                 .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build())
                 .doFinally(_ -> streamEnded.tryEmitEmpty());
         Flux<ServerSentEvent<SessionEvent>> heartbeatEvents = Flux.interval(SSE_HEARTBEAT_INTERVAL)

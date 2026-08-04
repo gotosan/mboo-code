@@ -3,7 +3,7 @@
 ## 1. 文档状态
 
 - 状态：已实施。
-- 更新时间：2026-07-27。
+- 更新时间：2026-08-04。
 - 适用范围：当前 `mboo-code` 本地 Code Agent 后端。
 - 工具设计来源：`docs/工具与工作区权限方案.md`。
 - 权限设计基线：现有 `ToolPermissionType`、`ToolApprovalService`、`PermissionToolExecutor`、`FilePermissionUtil` 和会话权限持久化实现。
@@ -26,7 +26,7 @@
 - 相对路径、绝对路径、符号链接和 Windows Junction 均经过统一的真实路径校验。
 - 工具结果有明确的数量、字符数和文件大小边界。
 - 修改采用同目录临时文件和原子替换，并降低并发覆盖风险。
-- JSONL 与 SSE 使用同一份事件内容，避免实时记录和历史回放不一致。
+- JSONL 与 SSE 使用同一份引用型事件内容，完整工具结果和展示摘要独立保存，避免实时记录和历史回放不一致。
 - 文件正文、编辑文本和整文件写入内容不会直接进入工具开始事件或授权事件。
 
 ## 3. 非目标
@@ -83,7 +83,7 @@
 - 授权前只校验 JSON、必填参数、字符串长度、数值范围、路径和权限。
 - 用户授权后才读取当前文件、计算新内容并执行修改。
 - 执行成功后向模型返回修改摘要和 diff。
-- JSONL/SSE 在工具结束事件中记录经过事件上限裁剪的结果。
+- 工具执行结束后先独立保存返回给模型的完整结果和展示摘要，再通过 `TOOL_CALL_ENDED.resultId` 引用该结果。
 
 因为文件内容检查发生在授权后，即使最终判断为 `NO_CHANGES`，在尚未拥有写权限时也可能先出现一次写权限申请。
 
@@ -287,7 +287,7 @@
 | 搜索单条匹配片段 | 300 字符 |
 | 搜索模型结果最大长度 | 40,000 字符 |
 | LLM 修改 diff 最大长度 | 12,000 字符 |
-| JSONL/SSE 文件工具结果最大长度 | 4,000 字符 |
+| 工具结果制品 `resultPreview` 最大长度 | 4,000 字符 |
 
 参数 JSON、必填字段、字符串长度和数值范围在权限申请前校验。文件存在性、编码、当前内容、最终大小和 `NO_CHANGES` 等需要读取文件的校验在权限通过后执行。
 
@@ -496,12 +496,12 @@ Windows UNC 网络共享路径可以使用，但必须按工作区外真实目�
 ### 11.2 两级 diff 上限
 
 - 返回给 LLM 的 diff 最多 12,000 字符。
-- JSONL/SSE 中的 diff 最多 4,000 字符。
+- 工具结果制品 `resultPreview` 中的 diff 最多 4,000 字符。
 - 达到上限时保留头尾，在中间插入：`...（已截断，省略 xxx 个字符）...`。
 - LLM 结构化结果保留 `diffTruncated`。
-- JSONL/SSE 不记录 `diffTruncated`，由占位符直接表达截断状态。
+- `resultPreview` 不单独记录 `diffTruncated`，由占位符直接表达截断状态。
 
-事件层不得再次对已经生成的事件 diff 做第二次截断。
+结果制品保存完整 `resultText`；预览格式化层只对 `resultPreview` 执行一次展示截断，事件层不再保存或二次截断 diff。
 
 ## 12. ripgrep 依赖
 
@@ -604,8 +604,10 @@ Windows UNC 网络共享路径可以使用，但必须按工作区外真实目�
   -> 文件工具通过 @ToolMemoryId 获取 sessionId
   -> 根据 sessionId 查询 workspacePath 并执行工具
   -> 返回完整模型结果
-  -> ToolEventFormatter 生成事件结果
-  -> 同一 SessionEvent 写入 JSONL 并通过 SSE 推送
+  -> ToolEventFormatter 生成展示摘要
+  -> ToolResultStore 原子保存完整 resultText 和 resultPreview
+  -> TOOL_CALL_ENDED 只携带 resultId 和结果元数据
+  -> 同一引用型 SessionEvent 写入 JSONL 并通过 SSE 推送
 ```
 
 授权事件不包含修改 diff。`ALLOW_SESSION` 按现有逻辑先持久化目录权限，再唤醒等待中的工具执行。
@@ -615,14 +617,15 @@ Windows UNC 网络共享路径可以使用，但必须按工作区外真实目�
 ### 15.1 一致性原则
 
 - 写入 JSONL 的 `SessionEvent` 与通过 SSE 发送的事件必须是同一份内容。
-- 不再区分“实时完整事件”和“历史审计事件”。
-- 文件工具模型结果和事件结果可以有不同上限，但事件一旦生成后不再针对 JSONL 或 SSE分别修改。
+- JSONL/SSE 事件不携带工具结果正文或展示摘要，只携带 `resultId` 和结果元数据。
+- 返回给模型的完整结果与前端展示摘要保存在同一个工具结果制品中，分别使用 `resultText` 和 `resultPreview`。
+- 工具结果必须先成功落盘，再生成 `TOOL_CALL_ENDED`；结果保存失败时提示工具可能已经产生副作用，不得自动重试。
 
 ### 15.2 工具事件格式化
 
 新增 `ToolEventFormatterRegistry`，与 `ToolPermissionRegistry` 分离。
 
-`TurnService` 不再直接把原始 `request.arguments()` 和原始工具结果写入事件，而是调用对应格式化器。
+`TurnService` 不再直接把原始 `request.arguments()` 和原始工具结果写入事件：参数通过格式化器生成安全摘要，工具结果通过格式化器生成 `resultPreview` 后与完整 `resultText` 一起写入结果制品，结束事件只引用 `resultId`。
 
 #### `TOOL_CALL_STARTED.arguments`
 
@@ -634,21 +637,38 @@ Windows UNC 网络共享路径可以使用，但必须按工作区外真实目�
 
 `TOOL_APPROVAL_REQUIRED.arguments` 使用同一份脱敏参数摘要。
 
-#### `TOOL_CALL_ENDED.resultPreview`
+#### `ToolResultArtifact.resultPreview`
 
-- 五个文件工具都可以记录实际结果。
+- 五个文件工具都保存返回给模型的完整 `resultText`，不对制品中的该字段做事件级截断。
+- `resultPreview` 只用于前端展示和中期摘要等受限读取场景。
 - 最多 4,000 字符。
 - 超限时保留头尾并插入省略字符数占位符。
 - `edit_file`、`write_file` 可以记录执行后的修改摘要和事件版 diff。
-- `read_file`、`search_text`、`glob_files` 可以记录经过事件上限截断的结果内容。
+- `read_file`、`search_text`、`glob_files` 可以记录经过展示上限截断的结果内容。
 
 未配置专用格式化器的现有工具继续使用通用截断逻辑。
+
+这里的完整 `resultText` 是文件工具经过分页、数量、字符和文件大小限制后实际返回给模型的完整字符串，不代表绕过工具契约读取原始数据源的无限量内容。
+
+#### `TOOL_CALL_ENDED` 结果引用
+
+结束事件记录：
+
+- `resultId`：独立工具结果 ID。
+- `resultSizeBytes`：完整 `resultText` 的 UTF-8 字节数。
+- `rawOutputAvailable`：是否存在 `run_command` 原始输出；文件工具通常为 `false`。
+- `errorCode`、`errorMessage`：不读取结果文件也能展示的失败信息。
+
+结果制品固定保存到 session 事件日志同级的 `tool-results/{resultId}.json`。前端通过结果详情接口懒加载 `resultPreview`，需要完整内容时通过内容接口读取 `resultText`；接口按 session 校验归属，不返回服务器绝对路径。
+
+永久删除会话时先删除 `tool-results` 目录，再删除 JSONL 和会话派生数据；归档会话继续保留结果制品。
 
 ### 15.3 错误事件
 
 - 从统一工具结果中提取真实 `errorCode` 和 `message`。
 - 不再将所有文件工具失败统一写为 `TOOL_EXECUTION_FAILED`。
-- 错误结果同样受 4,000 字符事件上限约束。
+- 完整错误工具结果保存在制品 `resultText`；只有 `resultPreview` 受 4,000 字符展示上限约束。
+- `TOOL_CALL_ENDED.errorCode` 和 `errorMessage` 直接保留必要错误信息，不能依赖结果制品才能展示失败原因。
 
 ## 16. 后端代码组织
 
@@ -705,7 +725,8 @@ DTO、record 和枚举按项目要求添加 Swagger `@Schema` 注解。函数名
 | `FilePermissionUtil` | 增强真实目标、符号链接、Junction、Windows 特殊路径和外部目录解析 |
 | `ToolApprovalService` | 接入文件工具参数预校验和脱敏参数摘要；保持现有授权等待与持久化逻辑 |
 | `PermissionToolExecutor` | 统一结构化权限错误，并保留执行前路径复核 |
-| `TurnService` | 通过 `ToolEventFormatterRegistry` 生成开始、审批和结束事件内容 |
+| `ToolResultStore` | 原子保存完整工具结果和展示摘要，读取时校验 session 归属，删除会话时清理结果目录 |
+| `TurnService` | 通过 `ToolEventFormatterRegistry` 生成展示摘要，保存结果制品后生成引用型结束事件 |
 | `AiCodeServiceFactory` | 自动扫描和注册工具 Bean |
 | `system-prompt.txt` | 增加文件工具使用原则 |
 
@@ -785,7 +806,9 @@ DTO、record 和枚举按项目要求添加 Swagger `@Schema` 注解。函数名
 
 - JSONL 与 SSE 的事件内容完全一致。
 - `edit/write` 原始文本和完整内容不进入开始事件、授权事件或 JSONL。
-- 五个文件工具的结束结果按 4,000 字符事件上限记录。
+- 五个文件工具返回给模型的完整结果保存在独立结果制品中，不做事件级截断。
+- `TOOL_CALL_ENDED` 只记录 `resultId`、结果大小和错误等元数据，不记录结果正文或预览。
+- 结果制品中的 `resultPreview` 按 4,000 字符展示上限记录，完整 `resultText` 可以按 session 和 `resultId` 单独读取。
 - 工具失败事件使用真实文件工具或权限错误码。
 
 ## 20. 与现有文档的关系

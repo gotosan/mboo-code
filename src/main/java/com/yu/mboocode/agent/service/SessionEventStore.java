@@ -58,6 +58,7 @@ public class SessionEventStore {
      * 追加一条完整事件
      */
     public SessionEvent appendSession(String transcriptUri, SessionEvent sessionEvent) {
+        if (!sessionEvent.getType().isPersistent()) throw new IllegalArgumentException("运行时事件不能写入 JSONL: " + sessionEvent.getType());
         Lock lock = fileLocks.get(transcriptUri);
         lock.lock();
         try {

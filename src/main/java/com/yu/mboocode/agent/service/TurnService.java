@@ -56,6 +56,8 @@ public class TurnService {
     private ToolEventFormatterRegistry toolEventFormatterRegistry;
     @Resource
     private ToolResultStore toolResultStore;
+    @Resource
+    private ModelUsageTracker modelUsageTracker;
 
     private final Map<String, ActiveTurnRuntime> activeTurnRuntime = new ConcurrentHashMap<>();
 
@@ -157,6 +159,23 @@ public class TurnService {
         String assistantMessageId = IdUtil.getSnowflakeNextIdStr();
         StringBuffer finalText = new StringBuffer();
         Flux<@NonNull SessionEvent> assistantMessageFlux = Flux.create(sink -> {
+            runtime.configureModelUsage(params.modelName(), assistantMessageId, usage -> emitEvent(sink, () -> SessionEvent.builder()
+                    .eventId(IdUtil.getSnowflakeNextIdStr())
+                    .sessionId(sessionTurn.sessionId())
+                    .turnId(sessionTurn.turnId())
+                    .type(SessionEventType.CONTEXT_USAGE_UPDATED)
+                    .source(SessionEventSource.SYSTEM)
+                    .createdAt(DateTimeUtil.now())
+                    .payload(ContextUsageUpdatedPayload.builder()
+                            .messageId(assistantMessageId)
+                            .modelId(usage.modelId())
+                            .inputTokens(usage.inputTokens())
+                            .outputTokens(usage.outputTokens())
+                            .totalTokens(usage.totalTokens())
+                            .build())
+                    .meta(Collections.emptyMap())
+                    .build()));
+            modelUsageTracker.register(runtime);
             // 注册流取消处理器
             sink.onCancel(() -> {
                 runtime.cancelStreaming();
@@ -179,6 +198,7 @@ public class TurnService {
                                     .state(AssistantMessagePayload.AssistantMessageState.CANCEL)
                                     .text(text)
                                     .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
+                                    .contextUsage(runtime.getLatestContextUsage())
                                     .build())
                             .meta(Collections.emptyMap())
                             .build());
@@ -279,6 +299,7 @@ public class TurnService {
                                         .state(AssistantMessagePayload.AssistantMessageState.COMPLETE)
                                         .text(chatResponse.aiMessage().text())
                                         .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
+                                        .contextUsage(runtime.getLatestContextUsage())
                                         .build())
                                 .meta(Collections.emptyMap())
                                 .build()));
@@ -303,6 +324,7 @@ public class TurnService {
                                             .text(text)
                                             .errorMessage(error.getMessage())
                                             .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
+                                            .contextUsage(runtime.getLatestContextUsage())
                                             .build())
                                     .meta(Collections.emptyMap())
                                     .build()));
@@ -335,6 +357,7 @@ public class TurnService {
 
     private void finishTurn(ActiveTurnRuntime runtime) {
         SessionTurn sessionTurn = runtime.getSessionTurn();
+        modelUsageTracker.unregister(runtime);
         try {
             toolApprovalService.cancelTurn(sessionTurn.sessionId(), sessionTurn.turnId());
         } catch (Exception e) {

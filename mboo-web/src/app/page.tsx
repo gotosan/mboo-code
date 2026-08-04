@@ -21,6 +21,8 @@ import { readSessionEventStream } from "@/lib/session-stream";
 import type {
   AssistantMessageState,
   ChatReq,
+  ContextUsageSnapshot,
+  ModelInfo,
   PermissionMode,
   SessionEvent,
   ToolApprovalDecision,
@@ -36,14 +38,16 @@ const STORAGE_KEYS = {
   sessionPreviews: "mboo-web.sessionPreviews",
 };
 
-const MANUAL_MODEL_VALUE = "__manual__";
-
-const REASONING_OPTIONS = [
-  { value: "", label: "默认" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-];
+const REASONING_LABELS: Record<string, string> = {
+  default: "默认",
+  none: "关闭",
+  minimal: "最低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
+  max: "最高",
+};
 
 const TOOL_LABELS: Record<string, string> = {
   glob_files: "查找文件",
@@ -71,6 +75,7 @@ const NEAR_BOTTOM_PX = 120;
 type MessageRole = "user" | "assistant" | "system";
 type MessageState = AssistantMessageState | "streaming" | "info";
 type ConnectionState = "idle" | "running" | "error";
+type ModelInfoState = "idle" | "loading" | "ready" | "error";
 
 type ToolCallView = {
   id: string;
@@ -121,6 +126,7 @@ type ChatMessage = {
   turnId?: string | null;
   createdAt?: string;
   modelName?: string;
+  contextUsage?: ContextUsageSnapshot | null;
   /** 助手时间线；有值时渲染以 parts 为准 */
   parts?: AssistantPart[];
   /** 由 parts 派生，供授权统计等复用 */
@@ -176,8 +182,11 @@ export default function Home() {
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelOptionsError, setModelOptionsError] = useState("");
   const [isLoadingModelOptions, setIsLoadingModelOptions] = useState(true);
-  const [isManualModel, setIsManualModel] = useState(true);
+  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
+  const [modelInfoState, setModelInfoState] = useState<ModelInfoState>("idle");
+  const [modelInfoError, setModelInfoError] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
+  const [contextUsage, setContextUsage] = useState<ContextUsageSnapshot | null>(null);
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -220,6 +229,7 @@ export default function Home() {
   const workspaceSelectionVersionRef = useRef(0);
   // 按会话缓存消息，避免串会话 / 切换后丢失流式结果
   const messagesBySessionRef = useRef<Record<string, ChatMessage[]>>({});
+  const contextUsageBySessionRef = useRef<Record<string, ContextUsageSnapshot | null>>({});
   // 当前 SSE 归属的会话键（新建时先为 pending）
   const streamSessionKeyRef = useRef<string>(PENDING_SESSION_KEY);
   const pendingLocalUserIdRef = useRef<string | null>(null);
@@ -236,11 +246,17 @@ export default function Home() {
   const highlightedSessionId = openingSessionId || sessionId;
   const isSessionSwitching = Boolean(openingSessionId) || isLoadingHistory;
 
-  const applyModelName = useCallback((value: string, manual?: boolean) => {
+  const applyModelName = useCallback((value: string, restoredUsage: ContextUsageSnapshot | null = null) => {
     const nextValue = value.trim();
+    const changed = modelNameRef.current !== nextValue;
     modelNameRef.current = nextValue;
     setModelName(nextValue);
-    setIsManualModel(manual ?? !modelOptionsRef.current.includes(nextValue));
+    if (changed || !nextValue) {
+      setModelInfo(null);
+      setModelInfoState(nextValue ? "loading" : "idle");
+      setModelInfoError("");
+    }
+    setContextUsage(restoredUsage?.modelId === nextValue ? restoredUsage : null);
   }, []);
 
 
@@ -260,12 +276,11 @@ export default function Home() {
     }
     const storedModelName = localStorage.getItem(STORAGE_KEYS.modelName) ?? "";
     lastSentModelRef.current = storedModelName;
-    applyModelName(storedModelName);
     setReasoningEffort(
       localStorage.getItem(STORAGE_KEYS.reasoningEffort) ?? "",
     );
     setSessionPreviews(readSessionPreviewMap());
-  }, [applyModelName]);
+  }, []);
 
   useEffect(() => {
     currentSessionIdRef.current = sessionId;
@@ -286,12 +301,15 @@ export default function Home() {
         modelOptionsRef.current = options;
         setModelOptions(options);
         setModelOptionsError("");
-        const nextModelName = modelNameRef.current || lastSentModelRef.current || options[0] || "";
-        applyModelName(nextModelName, !nextModelName || !options.includes(nextModelName));
+        const storedModelName = lastSentModelRef.current;
+        const nextModelName = options.includes(storedModelName) ? storedModelName : options[0] || "";
+        applyModelName(nextModelName);
       } catch (error) {
         if (!cancelled) {
           setModelOptionsError(toErrorMessage(error));
-          setIsManualModel(true);
+          modelOptionsRef.current = [];
+          setModelOptions([]);
+          applyModelName("");
         }
       } finally {
         if (!cancelled) setIsLoadingModelOptions(false);
@@ -302,6 +320,45 @@ export default function Home() {
       cancelled = true;
     };
   }, [applyModelName]);
+
+  useEffect(() => {
+    if (!modelName) {
+      setModelInfo(null);
+      setModelInfoState("idle");
+      return;
+    }
+    const controller = new AbortController();
+    setModelInfo(null);
+    setModelInfoState("loading");
+    setModelInfoError("");
+    const loadModelInfo = async () => {
+      try {
+        const response = await fetch(`/api/model/${encodeURIComponent(modelName)}`, { cache: "no-store", signal: controller.signal });
+        const info = await readApiData<ModelInfo>(response);
+        if (controller.signal.aborted) return;
+        if (!info || info.modelId !== modelName) throw new Error("模型详情响应与当前模型不匹配");
+        const effortValues = getReasoningEffortValues(info);
+        setModelInfo(info);
+        setModelInfoState("ready");
+        setReasoningEffort((current) => !current || effortValues.includes(current) ? current : "");
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setModelInfo(null);
+        setModelInfoState("error");
+        setModelInfoError(toErrorMessage(error));
+      }
+    };
+    void loadModelInfo();
+    return () => controller.abort();
+  }, [modelName]);
+
+  const reasoningOptions = useMemo(() => {
+    const values = modelInfo ? getReasoningEffortValues(modelInfo) : [];
+    return [{ value: "", label: "供应商默认" }, ...values.map((value) => ({ value, label: REASONING_LABELS[value] ?? value }))];
+  }, [modelInfo]);
+  const hasReasoningOptions = reasoningOptions.length > 1;
+  const isReasoningEffortValid = !reasoningEffort || reasoningOptions.some((option) => option.value === reasoningEffort);
+  const isModelReady = modelInfoState === "ready" && modelInfo?.modelId === modelName;
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -764,10 +821,11 @@ export default function Home() {
     if (sessionMessages) {
       for (let index = sessionMessages.length - 1; index >= 0; index -= 1) {
         const message = sessionMessages[index];
-        if (message.role === "user" && message.modelName?.trim()) return message.modelName.trim();
+        const candidate = message.role === "user" ? message.modelName?.trim() : "";
+        if (candidate && modelOptionsRef.current.includes(candidate)) return candidate;
       }
     }
-    return lastSentModelRef.current || modelOptionsRef.current[0] || "";
+    return modelOptionsRef.current.includes(lastSentModelRef.current) ? lastSentModelRef.current : modelOptionsRef.current[0] || "";
   }, []);
 
   const handleSessionEvent = useCallback(
@@ -823,6 +881,17 @@ export default function Home() {
         return;
       }
 
+      if (event.type === "CONTEXT_USAGE_UPDATED") {
+        const usage = normalizeContextUsage(event.payload);
+        if (!usage) return;
+        contextUsageBySessionRef.current[targetKey] = usage;
+        commitSessionMessages(targetKey, (current) => current.map((message) =>
+          message.id === event.payload.messageId ? { ...message, contextUsage: usage } : message,
+        ));
+        if (isViewingSessionKey(targetKey) && modelNameRef.current === usage.modelId) setContextUsage(usage);
+        return;
+      }
+
       if (event.type === "ASSISTANT_MESSAGE_DELTA") {
         const messageId = event.payload.messageId || event.eventId;
         appendAssistantDelta(targetKey, messageId, event.payload.text || "", event);
@@ -840,6 +909,11 @@ export default function Home() {
         const messageId = event.payload.messageId || event.eventId;
         dropPendingAssistantDelta(targetKey, messageId);
         flushPendingAssistantDeltas();
+        const terminalUsage = normalizeContextUsage(event.payload.contextUsage);
+        if (terminalUsage) {
+          contextUsageBySessionRef.current[targetKey] = terminalUsage;
+          if (isViewingSessionKey(targetKey) && modelNameRef.current === terminalUsage.modelId) setContextUsage(terminalUsage);
+        }
         commitSessionMessages(targetKey, (current) => {
           const index = current.findIndex((item) => item.id === messageId);
           const finalText = event.payload.text || "";
@@ -853,6 +927,7 @@ export default function Home() {
                 state: event.payload.state,
                 turnId: event.turnId,
                 createdAt: event.createdAt,
+                contextUsage: terminalUsage,
                 parts: applyFinalAssistantText(undefined, finalText, messageId),
               }),
             ];
@@ -864,6 +939,7 @@ export default function Home() {
             state: event.payload.state,
             turnId: existing.turnId || event.turnId,
             createdAt: existing.createdAt || event.createdAt,
+            contextUsage: terminalUsage ?? existing.contextUsage,
             parts: applyFinalAssistantText(existing.parts, finalText, messageId),
           });
           return next;
@@ -1061,6 +1137,9 @@ export default function Home() {
         connectionStateRef.current === "running" &&
         streamSessionKeyRef.current === nextSessionId;
       const historyMessages = reduceSessionEventsToMessages(events ?? []);
+      const historyModelName = preferredModelName(historyMessages);
+      const historyUsage = findLastContextUsage(events ?? [], historyModelName);
+      contextUsageBySessionRef.current[nextSessionId] = historyUsage;
 
       // 一次提交视图状态：避免“清空 → loading 壳 → 内容”多次挂载 qq-thread
       currentSessionIdRef.current = nextSessionId;
@@ -1071,7 +1150,11 @@ export default function Home() {
       } else if (!quiet) {
         setMessages(messagesBySessionRef.current[nextSessionId] ?? historyMessages);
       }
-      if (!quiet) applyModelName(preferredModelName(historyMessages));
+      if (!quiet) {
+        applyModelName(historyModelName, historyUsage);
+      } else if (modelNameRef.current === historyModelName) {
+        setContextUsage(historyUsage);
+      }
       setSessionId(nextSessionId);
       if (nextStatus) {
         setViewingSessionStatus(nextStatus);
@@ -1169,7 +1252,7 @@ export default function Home() {
         setSessionId(nextSessionId);
         const streamingMessages = messagesBySessionRef.current[nextSessionId] ?? [];
         setMessages(streamingMessages);
-        applyModelName(preferredModelName(streamingMessages));
+        applyModelName(preferredModelName(streamingMessages), contextUsageBySessionRef.current[nextSessionId] ?? null);
         if (status) {
           setViewingSessionStatus(status);
         }
@@ -1187,7 +1270,7 @@ export default function Home() {
         streamSessionKeyRef.current = nextSessionId;
         setSessionId(nextSessionId);
         setMessages(cached);
-        applyModelName(preferredModelName(cached));
+        applyModelName(preferredModelName(cached), contextUsageBySessionRef.current[nextSessionId] ?? null);
         if (status) {
           setViewingSessionStatus(status);
         }
@@ -1381,12 +1464,12 @@ export default function Home() {
         return;
       }
 
-      if (!selectedModelName) {
-        const message = "请先填写模型名称";
+      if (!selectedModelName || !isModelReady || !isReasoningEffortValid) {
+        const message = modelInfoError || (!selectedModelName ? "当前没有可用模型" : "模型能力信息尚未加载完成");
         setConnectionState("error");
         setErrorMessage(message);
         window.requestAnimationFrame(() => {
-          document.getElementById("model-input")?.focus();
+          document.getElementById("model-select")?.focus();
         });
         return;
       }
@@ -1394,7 +1477,6 @@ export default function Home() {
       const controller = new AbortController();
       lastSentModelRef.current = selectedModelName;
       saveLocalValue(STORAGE_KEYS.modelName, selectedModelName);
-      applyModelName(selectedModelName);
       abortControllerRef.current = controller;
       setConnectionState("running");
       setErrorMessage("");
@@ -1492,16 +1574,18 @@ export default function Home() {
     },
     [
       addSystemMessage,
-      applyModelName,
       archivedSessions,
       commitSessionMessages,
       handleSessionEvent,
       input,
       isLoadingHistory,
+      isModelReady,
+      isReasoningEffortValid,
       isRunning,
       isSelectingWorkspace,
       maybeAutoTitleSession,
       modelName,
+      modelInfoError,
       pendingWorkspacePath,
       reasoningEffort,
       refreshSessions,
@@ -1667,15 +1751,15 @@ export default function Home() {
     setIsSessionDrawerOpen(false);
   }, []);
 
-  const focusModelInput = useCallback(() => {
+  const focusModelSelect = useCallback(() => {
     setIsComposerSettingsOpen(true);
     requestAnimationFrame(() => {
-      const input = document.getElementById("model-input");
-      if (!(input instanceof HTMLInputElement)) {
+      const select = document.getElementById("model-select");
+      if (!(select instanceof HTMLSelectElement)) {
         return;
       }
-      input.focus();
-      input.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      select.focus();
+      select.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
   }, []);
 
@@ -2314,8 +2398,8 @@ export default function Home() {
                                 type="button"
                                 onClick={() => {
                                   setInput(hint);
-                                  if (!modelName.trim()) {
-                                    focusModelInput();
+                                  if (!isModelReady) {
+                                    focusModelSelect();
                                   }
                                 }}
                               >
@@ -2366,15 +2450,15 @@ export default function Home() {
                     </div>
                   ) : null}
                 <form className="qq-composer mx-auto w-full max-w-[46rem]" onSubmit={sendMessage}>
-                  {!modelName.trim() ? (
+                  {!isModelReady ? (
                     <div className="flex items-center justify-between gap-2 border-b border-running/30 bg-running-soft px-2.5 py-1.5 text-[11px] text-running">
-                      <span>请先填写模型名称后再发送</span>
+                      <span>{modelInfoError || (modelName ? "正在加载模型能力信息" : "当前没有可用模型")}</span>
                       <button
                         className="rounded-[2px] font-medium underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]"
                         type="button"
-                        onClick={focusModelInput}
+                        onClick={focusModelSelect}
                       >
-                        去填写
+                        查看模型
                       </button>
                     </div>
                   ) : null}
@@ -2398,70 +2482,62 @@ export default function Home() {
                         />
                       </button>
                       <div
-                        className={`grid gap-2 px-2.5 py-2 sm:grid-cols-[minmax(0,11rem)_7rem_minmax(0,1fr)] ${
+                        className={`grid gap-2 px-2.5 py-2 sm:grid-cols-[minmax(0,14rem)_7rem_minmax(0,1fr)] ${
                           isComposerSettingsOpen || !modelName.trim() ? "grid" : "hidden"
                         } sm:grid`}
                       >
                         <div className="block min-w-0 text-[11px] font-medium text-text-3">
                           <label htmlFor="model-select">模型</label>
-                          <select
-                            id="model-select"
-                            className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
-                            value={isManualModel ? MANUAL_MODEL_VALUE : modelName}
-                            onChange={(event) => {
-                              if (event.target.value === MANUAL_MODEL_VALUE) {
-                                setIsManualModel(true);
-                                return;
-                              }
-                              applyModelName(event.target.value, false);
-                            }}
-                          >
-                            {modelOptions.map((option) => (
-                              <option key={option} value={option}>
-                                {option}
-                              </option>
-                            ))}
-                            <option value={MANUAL_MODEL_VALUE}>手动输入</option>
-                          </select>
-                          {isManualModel ? (
-                            <input
-                              id="model-input"
-                              className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
-                              aria-label="手动模型名称"
-                              placeholder="例如 gpt-4.1"
+                          <div className="mt-1 flex items-center gap-1.5">
+                            <select
+                              id="model-select"
+                              className="qq-input h-8 min-w-0 flex-1 px-2 text-xs text-text-1 outline-none"
                               value={modelName}
-                              onChange={(event) => applyModelName(event.target.value, true)}
-                              autoComplete="off"
-                            />
-                          ) : null}
+                              disabled={isLoadingModelOptions || modelOptions.length === 0}
+                              onChange={(event) => applyModelName(event.target.value)}
+                            >
+                              {modelOptions.length === 0 ? <option value="">暂无可用模型</option> : null}
+                              {modelOptions.map((option) => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                            <ContextUsageIndicator usage={contextUsage} contextLimit={modelInfo?.limit.context} />
+                          </div>
                           <span
-                            className={`mt-1 block min-h-3.5 truncate text-[10px] ${modelOptionsError ? "text-danger" : "text-text-3"}`}
-                            title={modelOptionsError}
+                            className={`mt-1 block min-h-3.5 truncate text-[10px] ${modelOptionsError || modelInfoError ? "text-danger" : "text-text-3"}`}
+                            title={modelOptionsError || modelInfoError}
                           >
                             {isLoadingModelOptions
                               ? "正在加载模型候选"
                               : modelOptionsError
-                                ? "候选加载失败，可手动填写"
+                                ? "模型候选加载失败"
                                 : modelOptions.length === 0
                                   ? "暂无模型候选"
-                                  : `${modelOptions.length} 个模型候选`}
+                                  : modelInfoState === "loading"
+                                    ? "正在加载模型能力"
+                                    : modelInfoError || `${modelOptions.length} 个模型候选`}
                           </span>
                         </div>
-                        <label className="block min-w-0 text-[11px] font-medium text-text-3">
-                          推理
-                          <select
-                            className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
-                            value={reasoningEffort}
-                            onChange={(event) => setReasoningEffort(event.target.value)}
-                          >
-                            {REASONING_OPTIONS.map((option) => (
-                              <option key={option.value || "default"} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <div className="min-w-0">
+                        {hasReasoningOptions ? (
+                          <label className="block min-w-0 text-[11px] font-medium text-text-3">
+                            推理
+                            <select
+                              className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
+                              value={reasoningEffort}
+                              disabled={!isModelReady}
+                              onChange={(event) => setReasoningEffort(event.target.value)}
+                            >
+                              {reasoningOptions.map((option) => (
+                                <option key={option.value || "provider-default"} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : null}
+                        <div className={`min-w-0 ${hasReasoningOptions ? "" : "sm:col-span-2"}`}>
                           <WorkspaceBar
                             compact
                             displayedPath={displayedWorkspacePath}
@@ -2549,15 +2625,17 @@ export default function Home() {
                       ) : (
                         <button
                           className={`qq-button-primary inline-flex h-10 min-w-[72px] items-center justify-center px-4 text-xs sm:h-[30px] sm:min-w-[64px] ${
-                            !input.trim() || !modelName.trim() || isSessionSwitching || isSelectingWorkspace
+                            !input.trim() || !isModelReady || !isReasoningEffortValid || isSessionSwitching || isSelectingWorkspace
                               ? "qq-button-locked"
                               : ""
                           }`}
-                          disabled={isRunning || isSessionSwitching || isSelectingWorkspace || !input.trim() || !modelName.trim()}
+                          disabled={isRunning || isSessionSwitching || isSelectingWorkspace || !input.trim() || !isModelReady || !isReasoningEffortValid}
                           type="submit"
                           title={
-                            !modelName.trim()
-                              ? "请先填写模型名称"
+                            !isModelReady
+                              ? modelInfoError || "模型能力信息尚未加载完成"
+                              : !isReasoningEffortValid
+                                ? "当前模型不支持所选思考深度"
                               : !input.trim()
                                 ? "请先输入任务"
                                 : "发送"
@@ -2596,6 +2674,43 @@ export default function Home() {
         </div>
       </div>
     </main>
+  );
+}
+
+function ContextUsageIndicator({ usage, contextLimit }: { usage: ContextUsageSnapshot | null; contextLimit?: number }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const valid = usage && usage.totalTokens >= 0 && typeof contextLimit === "number" && contextLimit > 0;
+  const ratio = valid ? usage.totalTokens / contextLimit : 0;
+  const clampedRatio = Math.max(0, Math.min(1, ratio));
+  const label = valid
+    ? `${(ratio * 100).toFixed(1)}% · ${formatTokens(usage.totalTokens)} / ${formatTokens(contextLimit)} 上下文已使用`
+    : "暂无上下文用量数据";
+  const background = valid
+    ? `conic-gradient(var(--accent) ${clampedRatio * 360}deg, color-mix(in srgb, var(--line) 45%, white) 0deg)`
+    : "color-mix(in srgb, var(--line) 45%, white)";
+
+  return (
+    <button
+      className="group relative size-8 shrink-0 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)]"
+      type="button"
+      aria-label={label}
+      aria-expanded={isOpen}
+      title={label}
+      onClick={() => setIsOpen((current) => !current)}
+      onBlur={() => setIsOpen(false)}
+    >
+      <span className="absolute inset-1 rounded-full" style={{ background }} aria-hidden>
+        <span className="absolute inset-[3px] rounded-full bg-panel-elevated" />
+      </span>
+      <span
+        className={`pointer-events-none absolute right-0 top-[calc(100%+0.25rem)] z-30 w-max max-w-[17rem] rounded-[3px] border border-line bg-panel-elevated px-2 py-1 text-left text-[10px] font-normal text-text-1 shadow-panel transition-opacity ${
+          isOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+        }`}
+        role="tooltip"
+      >
+        {label}
+      </span>
+    </button>
   );
 }
 
@@ -3778,6 +3893,41 @@ function isToolCallEvent(event: SessionEvent): event is ToolCallEvent {
   );
 }
 
+function getReasoningEffortValues(modelInfo: ModelInfo) {
+  const values = new Set<string>();
+  for (const option of modelInfo.reasoningOptions) {
+    if (option.type !== "effort" || !Array.isArray(option.values)) continue;
+    for (const value of option.values) {
+      if (typeof value !== "string") continue;
+      const cleaned = value.trim();
+      if (cleaned) values.add(cleaned);
+    }
+  }
+  return [...values];
+}
+
+function normalizeContextUsage(value?: ContextUsageSnapshot | null): ContextUsageSnapshot | null {
+  if (!value || typeof value.modelId !== "string" || !value.modelId.trim()) return null;
+  if (typeof value.totalTokens !== "number" || !Number.isFinite(value.totalTokens) || value.totalTokens < 0) return null;
+  const inputTokens = typeof value.inputTokens === "number" && Number.isFinite(value.inputTokens) && value.inputTokens >= 0 ? value.inputTokens : null;
+  const outputTokens = typeof value.outputTokens === "number" && Number.isFinite(value.outputTokens) && value.outputTokens >= 0 ? value.outputTokens : null;
+  return { modelId: value.modelId.trim(), inputTokens, outputTokens, totalTokens: value.totalTokens };
+}
+
+function findLastContextUsage(events: SessionEvent[], modelId: string) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type !== "ASSISTANT_MESSAGE") continue;
+    const usage = normalizeContextUsage(event.payload.contextUsage);
+    if (usage?.modelId === modelId) return usage;
+  }
+  return null;
+}
+
+function formatTokens(tokens: number) {
+  return `${(tokens / 1000).toFixed(1)}K`;
+}
+
 function toToolCallView(event: ToolCallEvent): ToolCallView {
   const { payload } = event;
   const toolName = payload.toolName || "unknown_tool";
@@ -3918,6 +4068,7 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
             state: event.payload.state,
             turnId: event.turnId,
             createdAt: event.createdAt,
+            contextUsage: normalizeContextUsage(event.payload.contextUsage),
             parts: applyFinalAssistantText(undefined, finalText, messageId),
           }),
         );
@@ -3929,6 +4080,7 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
           state: event.payload.state,
           turnId: existing.turnId || event.turnId,
           createdAt: existing.createdAt || event.createdAt,
+          contextUsage: normalizeContextUsage(event.payload.contextUsage) ?? existing.contextUsage,
           parts: applyFinalAssistantText(existing.parts, finalText, messageId),
         });
         messages = next;
