@@ -627,7 +627,7 @@ public class ContextManagementService {
                 text = systemPromptText;
                 if (text == null) {
                     try {
-                        text = new ClassPathResource("system-prompt.txt").getContentAsString(StandardCharsets.UTF_8);
+                        text = new ClassPathResource("prompt/system-prompt.txt").getContentAsString(StandardCharsets.UTF_8);
                     } catch (IOException e) {
                         log.error("读取系统提示词失败", e);
                         text = "";

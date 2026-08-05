@@ -14,6 +14,6 @@ import dev.langchain4j.service.memory.ChatMemoryAccess;
  * 保证下一次调用从持久化存储重新加载。</p>
  */
 public interface AiCodeService extends ChatMemoryAccess {
-    @SystemMessage(fromResource = "system-prompt.txt")
+    @SystemMessage(fromResource = "prompt/system-prompt.txt")
     TokenStream chatStream(@MemoryId String memoryId, @UserMessage String message, ChatRequestParameters params);
 }

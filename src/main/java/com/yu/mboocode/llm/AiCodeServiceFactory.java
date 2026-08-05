@@ -105,6 +105,21 @@ public class AiCodeServiceFactory {
                 .build();
     }
 
+    /**
+     * 上下文压缩摘要服务。只配置非流式 ChatModel，不配工具、ChatMemory、系统消息转换器和
+     * 主对话 usage 监听器；同时不注册 MyChatModelListener，避免日志记录摘要输入输出正文。
+     */
+    @Bean
+    public ContextSummaryAiService getContextSummaryAiService() {
+        ChatModel chatModel = OpenAiResponsesChatModel
+                .builder()
+                .apiKey(setting.getApiKey())
+                .baseUrl(setting.getBaseUrl())
+                .modelName("")
+                .build();
+        return AiServices.builder(ContextSummaryAiService.class).chatModel(chatModel).build();
+    }
+
     private List<AiServiceTool> discoverTools() {
         List<ToolMethod> methods = new ArrayList<>();
         Set<Object> seenBeans = Collections.newSetFromMap(new IdentityHashMap<>());
