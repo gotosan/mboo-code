@@ -4,6 +4,7 @@ export type SessionEventType =
   | "TOOL_CALL_STARTED"
   | "TOOL_CALL_ENDED"
   | "TOOL_APPROVAL_REQUIRED"
+  | "CONTEXT_COMPRESSION"
   | "ERROR"
   | "CANCELLED"
   | "ASSISTANT_MESSAGE_DELTA"
@@ -100,6 +101,28 @@ export type ContextUsageUpdatedPayload = ContextUsageSnapshot & {
   messageId: string;
 };
 
+export type ContextCompressionTrigger = "auto" | "manual";
+export type ContextCompressionState = "started" | "completed" | "failed" | "skipped";
+
+export type ContextCompressionPayload = {
+  compressionId: string;
+  trigger: ContextCompressionTrigger;
+  state: ContextCompressionState;
+  modelId?: string | null;
+  previousUsage?: ContextUsageSnapshot | null;
+  previousContextLimit?: number | null;
+  summarizedTurnCount?: number | null;
+  retainedTurnCount?: number | null;
+  compactedToolCallCount?: number | null;
+  beforeMessageCount?: number | null;
+  afterMessageCount?: number | null;
+  beforeEstimatedTokens?: number | null;
+  afterEstimatedTokens?: number | null;
+  durationMs?: number | null;
+  skipReason?: string | null;
+  errorMessage?: string | null;
+};
+
 export type ToolCallStartedPayload = {
   messageId: string;
   toolCallId: string;
@@ -157,6 +180,7 @@ export type SessionEventPayload =
   | ToolCallStartedPayload
   | ToolApprovalRequiredPayload
   | ToolCallEndedPayload
+  | ContextCompressionPayload
   | ErrorPayload
   | CancelledPayload;
 
@@ -166,6 +190,7 @@ export type SessionEvent =
   | SessionEventBase<"TOOL_CALL_STARTED", ToolCallStartedPayload>
   | SessionEventBase<"TOOL_APPROVAL_REQUIRED", ToolApprovalRequiredPayload>
   | SessionEventBase<"TOOL_CALL_ENDED", ToolCallEndedPayload>
+  | SessionEventBase<"CONTEXT_COMPRESSION", ContextCompressionPayload>
   | SessionEventBase<"ERROR", ErrorPayload>
   | SessionEventBase<"CANCELLED", CancelledPayload>
   | SessionEventBase<"ASSISTANT_MESSAGE_DELTA", AssistantMessageDeltaPayload>

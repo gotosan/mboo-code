@@ -12,6 +12,7 @@ import {
   Menu,
   RefreshCw,
   RotateCcw,
+  Shrink,
   Square,
   Trash2,
   X,
@@ -21,6 +22,7 @@ import { readSessionEventStream } from "@/lib/session-stream";
 import type {
   AssistantMessageState,
   ChatReq,
+  ContextCompressionState,
   ContextUsageSnapshot,
   ModelInfo,
   PermissionMode,
@@ -196,6 +198,8 @@ export default function Home() {
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  // 主动上下文压缩运行状态：运行期间禁用发送和重复压缩
+  const [isCompressing, setIsCompressing] = useState(false);
   // 正在打开的目标会话：拉取完成前不切换主线程，只做侧栏高亮与轻量进度
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -223,6 +227,8 @@ export default function Home() {
   const autoTitleAttemptedRef = useRef<Set<string>>(new Set());
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const compressionAbortRef = useRef<AbortController | null>(null);
+  const isCompressingRef = useRef(false);
   const currentSessionIdRef = useRef("");
   const shouldLoadSessionRef = useRef(false);
   const connectionStateRef = useRef<ConnectionState>("idle");
@@ -961,6 +967,63 @@ export default function Home() {
         return;
       }
 
+      if (event.type === "CONTEXT_COMPRESSION") {
+        const payload = event.payload;
+        const compressionId = payload.compressionId || event.eventId;
+        const view = describeCompressionState(payload.state, payload.errorMessage, false);
+        commitSessionMessages(targetKey, (current) => {
+          const id = `compression_${compressionId}`;
+          const message: ChatMessage = {
+            id,
+            role: "system",
+            text: view.text,
+            state: view.state,
+            turnId: event.turnId,
+            createdAt: event.createdAt,
+          };
+          const index = current.findIndex((item) => item.id === id);
+          if (index < 0) {
+            return [...current, message];
+          }
+          const next = [...current];
+          next[index] = { ...next[index], ...message, createdAt: next[index].createdAt || event.createdAt };
+          return next;
+        });
+        if (payload.state === "completed") {
+          // 压缩成功后旧 usage 失效，等待本轮主模型产生的新 usage
+          contextUsageBySessionRef.current[targetKey] = null;
+          if (isViewingSessionKey(targetKey)) {
+            setContextUsage(null);
+          }
+        }
+        if (payload.state === "failed" && payload.trigger === "auto") {
+          // 自动压缩失败：本次用户消息未进入正式会话，移除乐观消息并恢复输入
+          const localUserId = pendingLocalUserIdRef.current;
+          pendingLocalUserIdRef.current = null;
+          let restoredText = "";
+          if (localUserId) {
+            commitSessionMessages(targetKey, (current) => {
+              const index = current.findIndex((item) => item.id === localUserId);
+              if (index < 0) {
+                return current;
+              }
+              restoredText = current[index].text;
+              return current.filter((item) => item.id !== localUserId);
+            });
+          }
+          if (isViewingSessionKey(targetKey)) {
+            setConnectionState("error");
+            setErrorMessage(view.text);
+            setActiveTurnId(null);
+            if (restoredText) {
+              setLastFailedInput(restoredText);
+              setInput((current) => current || restoredText);
+            }
+          }
+        }
+        return;
+      }
+
       if (event.type === "CANCELLED") {
         markStreamingMessagesCancelled(targetKey, event.turnId);
         if (isViewingSessionKey(targetKey)) {
@@ -1460,7 +1523,7 @@ export default function Home() {
       const userMessage = input.trim();
       const selectedModelName = modelName.trim();
 
-      if (!userMessage || isRunning || isSessionSwitching || isSelectingWorkspace) {
+      if (!userMessage || isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace) {
         return;
       }
 
@@ -1578,6 +1641,7 @@ export default function Home() {
       commitSessionMessages,
       handleSessionEvent,
       input,
+      isCompressing,
       isLoadingHistory,
       isModelReady,
       isReasoningEffortValid,
@@ -1612,6 +1676,69 @@ export default function Home() {
     });
     void refreshSessions();
   }, [activeTurnId, handleSessionEvent, refreshSessions]);
+
+  // 主动压缩上下文：SSE 事件复用 handleSessionEvent 归并展示
+  const compressContext = useCallback(async () => {
+    const targetSessionId = currentSessionIdRef.current;
+    if (
+      !targetSessionId ||
+      connectionStateRef.current === "running" ||
+      isCompressingRef.current ||
+      viewingSessionStatus !== "active"
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    compressionAbortRef.current = controller;
+    isCompressingRef.current = true;
+    setIsCompressing(true);
+    try {
+      const response = await fetch(
+        `/api/session/${encodeURIComponent(targetSessionId)}/context/compress`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "text/event-stream",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ modelName: modelNameRef.current }),
+          signal: controller.signal,
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await readSessionEventStream(
+        response,
+        (sessionEvent) => {
+          if (compressionAbortRef.current !== controller || controller.signal.aborted) {
+            return;
+          }
+          handleSessionEvent(sessionEvent);
+        },
+        { signal: controller.signal },
+      );
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        addSystemMessage(toErrorMessage(error), "error");
+      }
+    } finally {
+      if (compressionAbortRef.current === controller) {
+        compressionAbortRef.current = null;
+        isCompressingRef.current = false;
+        setIsCompressing(false);
+        setActiveTurnId(null);
+      }
+    }
+  }, [addSystemMessage, handleSessionEvent, viewingSessionStatus]);
+
+  const stopCompression = useCallback(() => {
+    compressionAbortRef.current?.abort();
+    compressionAbortRef.current = null;
+    isCompressingRef.current = false;
+    setIsCompressing(false);
+    setActiveTurnId(null);
+  }, []);
 
   const startNewSession = useCallback(() => {
     clearCurrentSession();
@@ -2564,6 +2691,28 @@ export default function Home() {
                       >
                         清空
                       </button>
+                      {sessionId && viewingSessionStatus === "active" ? (
+                        <button
+                          className="qq-button inline-flex h-8 items-center gap-1 px-2.5 text-xs text-text-2 sm:h-6 sm:px-2 sm:text-[11px]"
+                          type="button"
+                          disabled={!isCompressing && (isRunning || isSessionSwitching)}
+                          onClick={() => (isCompressing ? stopCompression() : void compressContext())}
+                          title={isCompressing ? "停止压缩" : "压缩上下文"}
+                          aria-label={isCompressing ? "停止压缩" : "压缩上下文"}
+                        >
+                          {isCompressing ? (
+                            <>
+                              <Square className="size-3 fill-current" aria-hidden />
+                              停止压缩
+                            </>
+                          ) : (
+                            <>
+                              <Shrink className="size-3" aria-hidden />
+                              压缩
+                            </>
+                          )}
+                        </button>
+                      ) : null}
                       <span className="max-w-[12rem] truncate text-[11px] text-text-3">
                         {isRunning ? (
                           <span className="sm:hidden">生成中，可点停止</span>
@@ -3917,11 +4066,34 @@ function normalizeContextUsage(value?: ContextUsageSnapshot | null): ContextUsag
 function findLastContextUsage(events: SessionEvent[], modelId: string) {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
+    // 遇到已完成的压缩：更早的 usage 全部失效，等待压缩后的新 usage
+    if (event.type === "CONTEXT_COMPRESSION" && event.payload.state === "completed") return null;
     if (event.type !== "ASSISTANT_MESSAGE") continue;
     const usage = normalizeContextUsage(event.payload.contextUsage);
     if (usage?.modelId === modelId) return usage;
   }
   return null;
+}
+
+/**
+ * 压缩状态文案：界面只展示简短状态，不展示摘要、turn 数或 Token 统计。
+ * interrupted 用于历史回放中只剩 started 的压缩。
+ */
+function describeCompressionState(
+  state: ContextCompressionState,
+  errorMessage: string | null | undefined,
+  interrupted: boolean,
+): { text: string; state: MessageState } {
+  if (state === "started") {
+    return { text: interrupted ? "上下文压缩已中断" : "正在压缩上下文…", state: "info" };
+  }
+  if (state === "completed") {
+    return { text: "上下文压缩完成", state: "info" };
+  }
+  if (state === "skipped") {
+    return { text: "当前上下文无需压缩", state: "info" };
+  }
+  return { text: `上下文压缩失败${errorMessage ? `：${errorMessage}` : ""}`, state: "error" };
 }
 
 function formatTokens(tokens: number) {
@@ -4085,6 +4257,21 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
         });
         messages = next;
       }
+      continue;
+    }
+
+    if (event.type === "CONTEXT_COMPRESSION") {
+      const payload = event.payload;
+      // 相同 compressionId 归并为一个压缩项；只有 started 的历史压缩显示为已中断
+      const view = describeCompressionState(payload.state, payload.errorMessage, true);
+      messages = upsertMessageSnapshot(messages, {
+        id: `compression_${payload.compressionId || event.eventId}`,
+        role: "system",
+        text: view.text,
+        state: view.state,
+        turnId: event.turnId,
+        createdAt: event.createdAt,
+      });
       continue;
     }
 

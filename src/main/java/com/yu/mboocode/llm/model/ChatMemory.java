@@ -25,6 +25,24 @@ public class ChatMemory {
     @Schema(description = "早期会话历史摘要")
     private String summaryText;
 
+    @Schema(description = "上一次聊天实际使用的模型 ID；usage 缺失时仍保留，供摘要模型选择")
+    private String lastModelId;
+
+    @Schema(description = "最近一次有效主对话 ContextUsageSnapshot JSON；模型摘要成功后清空")
+    private String lastContextUsageJson;
+
+    @Schema(description = "产生该 usage 时模型的上下文窗口")
+    private Long lastContextLimit;
+
+    @Schema(description = "最近一次有效主对话 usage 时间")
+    private String lastUsageAt;
+
+    @Schema(description = "最近一次模型摘要成功提交时间")
+    private String summaryUpdatedAt;
+
+    @Schema(description = "已与摘要一起提交、但尚未确认写入 JSONL 的压缩完成事件 JSON；正常为空")
+    private String pendingCompressionEventJson;
+
     @Schema(description = "会话上下文最近更新时间")
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private String updatedAt;

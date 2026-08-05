@@ -3,6 +3,7 @@ package com.yu.mboocode.agent.enums;
 import com.yu.mboocode.agent.model.payload.AssistantMessageDeltaPayload;
 import com.yu.mboocode.agent.model.payload.AssistantMessagePayload;
 import com.yu.mboocode.agent.model.payload.CancelledPayload;
+import com.yu.mboocode.agent.model.payload.ContextCompressionPayload;
 import com.yu.mboocode.agent.model.payload.ContextUsageUpdatedPayload;
 import com.yu.mboocode.agent.model.payload.ErrorPayload;
 import com.yu.mboocode.agent.model.payload.SessionEventPayload;
@@ -25,6 +26,8 @@ public enum SessionEventType {
     TOOL_CALL_STARTED(ToolCallStartedPayload.class, true), //工具调用已开始
     TOOL_CALL_ENDED(ToolCallEndedPayload.class, true), //工具调用已结束
     TOOL_APPROVAL_REQUIRED(ToolApprovalRequiredPayload.class, true), //工具等待用户授权
+
+    CONTEXT_COMPRESSION(ContextCompressionPayload.class, true), //上下文压缩状态
 
     ERROR(ErrorPayload.class, true), //会话执行错误
     CANCELLED(CancelledPayload.class, true), //会话已取消

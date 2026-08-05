@@ -9,7 +9,7 @@
 ## 核心约束
 
 - 一个 session 同一时间只允许一个活跃 turn；进程内 `ActiveTurnRuntime` 用于判断真实存活状态，数据库字段 `active_turn_id` 用于持久化占用和 CAS 校验。
-- `turnId` 只负责关联同一轮中的事件，不使用独立的 turn 开始、完成或失败事件。
+- `turnId` 只负责关联同一轮中的事件，不使用独立的 turn 开始、完成或失败事件。turn 的语义是执行占用（聊天或主动上下文压缩），`active_turn_id` 表示该 session 当前被某个执行占用，详见《上下文管理与压缩设计》。
 - JSONL 每行都是完整 `SessionEvent`，已写入事件不修改。
 - 事件类型与 Payload Java 类型由 `SessionEventType` 一一绑定，追加和读取时都会校验类型匹配。
 - 运行时事件只通过 SSE 推送，不写入 JSONL；当前包括 `ASSISTANT_MESSAGE_DELTA` 和 `CONTEXT_USAGE_UPDATED`。

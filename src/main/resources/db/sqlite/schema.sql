@@ -24,6 +24,12 @@ CREATE INDEX IF NOT EXISTS idx_sessions_active_turn
 CREATE TABLE IF NOT EXISTS mboo_chat_memory (
                           memory_id TEXT PRIMARY KEY, -- 会话 ID
                           messages_json TEXT NOT NULL DEFAULT '[]', -- 模型使用的近期聊天消息
-                          summary_text TEXT, -- 早期历史摘要，暂不启用上下文压缩时保持为空
+                          summary_text TEXT, -- 早期历史摘要
+                          last_model_id TEXT, -- 上一次聊天实际使用的模型 ID
+                          last_context_usage_json TEXT, -- 最近一次有效主对话 ContextUsageSnapshot JSON
+                          last_context_limit INTEGER, -- 产生该 usage 时模型的上下文窗口
+                          last_usage_at TEXT, -- 最近一次有效主对话 usage 时间
+                          summary_updated_at TEXT, -- 最近一次模型摘要成功提交时间
+                          pending_compression_event_json TEXT, -- 已提交但未确认写入 JSONL 的压缩完成事件
                           updated_at TEXT NOT NULL -- 会话记忆最近更新时间
 );

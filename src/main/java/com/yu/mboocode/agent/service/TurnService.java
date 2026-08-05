@@ -5,6 +5,9 @@ import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSON;
 import com.yu.mboocode.agent.dto.ActiveTurnRuntime;
 import com.yu.mboocode.agent.dto.ActiveTurnRuntime.TurnTerminalState;
+import com.yu.mboocode.agent.enums.TurnOperationType;
+import com.yu.mboocode.agent.model.ContextUsageSnapshot;
+import com.yu.mboocode.agent.model.ModelInfo;
 import com.yu.mboocode.agent.model.payload.*;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.AiCodeService;
@@ -18,6 +21,8 @@ import com.yu.mboocode.agent.model.ToolResultArtifact;
 import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.tool.event.ToolEventFormatterRegistry;
 import com.yu.mboocode.common.util.DateTimeUtil;
+import com.yu.mboocode.llm.context.ContextManagementService;
+import com.yu.mboocode.llm.service.ChatMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
@@ -58,11 +63,21 @@ public class TurnService {
     private ToolResultStore toolResultStore;
     @Resource
     private ModelUsageTracker modelUsageTracker;
+    @Resource
+    private ModelOptionService modelOptionService;
+    @Resource
+    private ContextManagementService contextManagementService;
+    @Resource
+    private ChatMemoryService chatMemoryService;
 
     private final Map<String, ActiveTurnRuntime> activeTurnRuntime = new ConcurrentHashMap<>();
 
     public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, TurnProcess turnProcess) {
-        ActiveTurnRuntime runtime = startTurn(sessionId, workspacePath);
+        return turn(sessionId, workspacePath, TurnOperationType.CHAT, turnProcess);
+    }
+
+    public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, TurnOperationType operationType, TurnProcess turnProcess) {
+        ActiveTurnRuntime runtime = startTurn(sessionId, workspacePath, operationType);
         SessionTurn sessionTurn = runtime.getSessionTurn();
         return Flux.defer(() -> {
             if (!runtime.markRunning()) {
@@ -106,10 +121,10 @@ public class TurnService {
         });
     }
 
-    private ActiveTurnRuntime startTurn(String sessionId, String workspacePath) {
+    private ActiveTurnRuntime startTurn(String sessionId, String workspacePath, TurnOperationType operationType) {
         Sessions session = sessionService.getActiveOrCreateSession(sessionId, workspacePath);
         String turnId = IdUtil.getSnowflakeNextIdStr();
-        ActiveTurnRuntime runtime = new ActiveTurnRuntime(new SessionTurn(session.getId(), session.getTranscriptUri(), turnId, System.nanoTime()));
+        ActiveTurnRuntime runtime = new ActiveTurnRuntime(new SessionTurn(session.getId(), session.getTranscriptUri(), turnId, System.nanoTime(), operationType));
 
         while (true) {
             ActiveTurnRuntime existing = activeTurnRuntime.putIfAbsent(session.getId(), runtime);
@@ -142,6 +157,12 @@ public class TurnService {
 
     public Flux<@NonNull SessionEvent> chatStream(SessionTurn sessionTurn, String userMessage, ChatRequestParameters params) {
         ActiveTurnRuntime runtime = getActiveRuntime(sessionTurn);
+        // 自动压缩和硬预算检查必须在写入 USER_MESSAGE 前完成；压缩失败时只推送压缩事件并正常结束
+        ContextManagementService.ChatPreparation preparation = contextManagementService.prepareChatTurn(sessionTurn, params.modelName(), userMessage);
+        Flux<@NonNull SessionEvent> preludeFlux = Flux.fromIterable(preparation.events());
+        if (!preparation.proceed()) {
+            return preludeFlux;
+        }
         String userMessageId = IdUtil.getSnowflakeNextIdStr();
         Flux<@NonNull SessionEvent> userMessageFlux = Flux.just(sessionEventStore.appendSession(
                 sessionTurn.transcriptUri(),
@@ -334,7 +355,7 @@ public class TurnService {
                     })
                     .start();
         }, FluxSink.OverflowStrategy.BUFFER);
-        return userMessageFlux.concatWith(assistantMessageFlux);
+        return preludeFlux.concatWith(userMessageFlux).concatWith(assistantMessageFlux);
     }
 
     private boolean cancelHandle(FluxSink<@NonNull SessionEvent> sink, StreamingHandle streamingHandle, ActiveTurnRuntime runtime) {
@@ -363,6 +384,12 @@ public class TurnService {
         } catch (Exception e) {
             log.error("清理 turn 授权请求失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
         }
+        if (sessionTurn.operationType() == TurnOperationType.CHAT) {
+            // 持久化本轮最后一次有效主模型 usage，供下一轮 70% 触发判断和摘要模型选择
+            persistLastUsage(runtime);
+            // 固定的工具压薄：同步、尽力，必须在释放执行锁前完成
+            contextManagementService.thinOldToolInteractions(sessionTurn.sessionId());
+        }
         try {
             sessionService.clearActiveTurn(sessionTurn.sessionId(), sessionTurn.turnId());
         } catch (Exception e) {
@@ -370,6 +397,20 @@ public class TurnService {
         } finally {
             runtime.finish();
             activeTurnRuntime.remove(sessionTurn.sessionId(), runtime);
+        }
+    }
+
+    private void persistLastUsage(ActiveTurnRuntime runtime) {
+        try {
+            ContextUsageSnapshot usage = runtime.getLatestContextUsage();
+            if (usage == null || usage.totalTokens() == null || usage.totalTokens() <= 0) {
+                return;
+            }
+            ModelInfo modelInfo = modelOptionService.getModelInfoMap().get(usage.modelId());
+            Long contextLimit = modelInfo == null || modelInfo.limit() == null ? null : modelInfo.limit().context();
+            chatMemoryService.saveLastUsage(runtime.getSessionTurn().sessionId(), usage.modelId(), JSON.toJSONString(usage), contextLimit);
+        } catch (Exception e) {
+            log.error("持久化上下文用量失败 sessionId:{} turnId:{}", runtime.getSessionTurn().sessionId(), runtime.getSessionTurn().turnId(), e);
         }
     }
 

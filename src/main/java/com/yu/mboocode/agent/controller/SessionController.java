@@ -3,9 +3,13 @@ package com.yu.mboocode.agent.controller;
 import com.yu.mboocode.common.dto.R;
 import com.yu.mboocode.common.enums.SSEEvent;
 import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.agent.dto.ContextCompressReq;
 import com.yu.mboocode.agent.dto.ToolApprovalReq;
 import com.yu.mboocode.agent.dto.ToolResultDetailResp;
+import com.yu.mboocode.agent.enums.TurnOperationType;
 import com.yu.mboocode.llm.LLMUtil;
+import com.yu.mboocode.llm.context.ContextManagementService;
+import cn.hutool.core.util.StrUtil;
 import com.yu.mboocode.agent.dto.ChatReq;
 import com.yu.mboocode.agent.dto.SessionPermissionModeReq;
 import com.yu.mboocode.agent.dto.SessionUpdateReq;
@@ -62,6 +66,8 @@ public class SessionController {
     private ToolResultStore toolResultStore;
     @Resource
     private ModelOptionService modelOptionService;
+    @Resource
+    private ContextManagementService contextManagementService;
 
     @Operation(summary = "活跃会话列表")
     @GetMapping("/list")
@@ -158,6 +164,26 @@ public class SessionController {
         ChatRequestParameters requestParameters = LLMUtil.buildChatReq(modelInfo.modelId(), reasoningEffort);
         Sinks.One<Void> streamEnded = Sinks.one();
         Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(req.sessionId(), req.workspacePath(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), requestParameters))
+                .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build())
+                .doFinally(_ -> streamEnded.tryEmitEmpty());
+        Flux<ServerSentEvent<SessionEvent>> heartbeatEvents = Flux.interval(SSE_HEARTBEAT_INTERVAL)
+                .map(_ -> ServerSentEvent.<SessionEvent>builder().comment("keep-alive").build())
+                .takeUntilOther(streamEnded.asMono());
+
+        return Flux.merge(sessionEvents, heartbeatEvents);
+    }
+
+    @Operation(summary = "主动压缩上下文")
+    @PostMapping(value = "/{sessionId}/context/compress", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<@NonNull ServerSentEvent<@NonNull SessionEvent>> compressContext(@PathVariable String sessionId, @RequestBody(required = false) ContextCompressReq req) {
+        // 只允许已存在且活跃的会话；不存在或已归档时在创建执行 turn 前拒绝
+        sessionService.getActiveSession(sessionId);
+        String modelName = req == null ? null : StrUtil.trimToNull(req.modelName());
+        if (modelName != null) {
+            modelOptionService.requireModelInfo(modelName);
+        }
+        Sinks.One<Void> streamEnded = Sinks.one();
+        Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(sessionId, null, TurnOperationType.CONTEXT_COMPRESSION, sessionTurn -> contextManagementService.manualCompress(sessionTurn, modelName))
                 .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build())
                 .doFinally(_ -> streamEnded.tryEmitEmpty());
         Flux<ServerSentEvent<SessionEvent>> heartbeatEvents = Flux.interval(SSE_HEARTBEAT_INTERVAL)
