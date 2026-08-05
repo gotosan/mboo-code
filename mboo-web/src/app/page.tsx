@@ -2773,33 +2773,29 @@ const MessageBubble = memo(function MessageBubble({
           </div>
           <div className="min-w-0 space-y-3 text-text-1">
             {message.parts && message.parts.length > 0 ? (
-              message.parts.map((part, partIndex) => {
-                if (part.type === "text") {
-                  if (!part.text && message.state !== "streaming") {
+              groupAssistantParts(message.parts).map((segment, segmentIndex, segments) => {
+                if (segment.type === "text") {
+                  if (!segment.text && message.state !== "streaming") {
                     return null;
                   }
-                  const isLastPart = partIndex === message.parts!.length - 1;
+                  const isLastSegment = segmentIndex === segments.length - 1;
                   return (
                     <AssistantMarkdown
-                      key={part.id}
-                      content={part.text}
-                      messageId={`${message.id}:${part.id}`}
-                      isStreaming={message.state === "streaming" && isLastPart}
+                      key={segment.id}
+                      content={segment.text}
+                      messageId={`${message.id}:${segment.id}`}
+                      isStreaming={message.state === "streaming" && isLastSegment}
                     />
                   );
                 }
+                // 连续 tool 合成一块；key 锚在组首 tool，流式追加时不拆卸载
                 return (
                   <ToolTrace
-                    key={part.id}
-                    toolCalls={[part.toolCall]}
+                    key={`tool-group-${segment.id}`}
+                    toolCalls={segment.toolCalls}
                     sessionId={sessionId}
                     loadToolResult={loadToolResult}
-                    isRunning={
-                      message.state === "streaming" &&
-                      (part.toolCall.status === "started" ||
-                        part.toolCall.status === "waiting_approval" ||
-                        part.toolCall.status === "submitting")
-                    }
+                    isRunning={message.state === "streaming" && isToolGroupRunning(segment.toolCalls)}
                   />
                 );
               })
@@ -2817,7 +2813,7 @@ const MessageBubble = memo(function MessageBubble({
                     toolCalls={message.toolCalls}
                     sessionId={sessionId}
                     loadToolResult={loadToolResult}
-                    isRunning={message.state === "streaming"}
+                    isRunning={message.state === "streaming" && isToolGroupRunning(message.toolCalls)}
                   />
                 ) : null}
               </>
@@ -2872,10 +2868,15 @@ const ToolTrace = memo(function ToolTrace({
   const hasPendingApproval = toolCalls.some(
     (tool) => tool.status === "waiting_approval" || tool.status === "submitting",
   );
-  const summaryText = isRunning
-    ? "调用工具中"
+  const runningCount = toolCalls.filter((tool) =>
+    tool.status === "started" || tool.status === "waiting_approval" || tool.status === "submitting",
+  ).length;
+  const summaryText = isRunning || runningCount > 0
+    ? toolCalls.length > 1
+      ? `调用工具中 · ${runningCount}/${toolCalls.length}`
+      : "调用工具中"
     : toolCalls.length > 1
-      ? "调用了多个工具"
+      ? `调用了 ${toolCalls.length} 个工具`
       : "调用了一个工具";
 
   return (
@@ -3502,6 +3503,43 @@ function diffLineClassName(line: string) {
     return "bg-danger-soft text-danger";
   }
   return "text-text-2";
+}
+
+/** 渲染用分段：相邻 tool 收成一组，text 仍按事件序切开 */
+type AssistantRenderSegment =
+  | { type: "text"; id: string; text: string }
+  | { type: "tool_group"; id: string; toolCalls: ToolCallView[] };
+
+function groupAssistantParts(parts: AssistantPart[]): AssistantRenderSegment[] {
+  const segments: AssistantRenderSegment[] = [];
+  for (const part of parts) {
+    if (part.type === "text") {
+      segments.push({ type: "text", id: part.id, text: part.text });
+      continue;
+    }
+    const last = segments[segments.length - 1];
+    if (last?.type === "tool_group") {
+      // 同一连续 tool 段内追加；已存在的 toolCallId 由 reduce 保证不会重复 part
+      last.toolCalls.push(part.toolCall);
+      continue;
+    }
+    segments.push({
+      type: "tool_group",
+      // 用组内首个 tool id 做稳定锚点，避免流式 N 变大时整组 remount
+      id: part.id,
+      toolCalls: [part.toolCall],
+    });
+  }
+  return segments;
+}
+
+function isToolGroupRunning(toolCalls: ToolCallView[]): boolean {
+  return toolCalls.some(
+    (tool) =>
+      tool.status === "started" ||
+      tool.status === "waiting_approval" ||
+      tool.status === "submitting",
+  );
 }
 
 function collectMessageToolCalls(message: ChatMessage): ToolCallView[] {
