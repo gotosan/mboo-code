@@ -20,8 +20,10 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 应用启动时加载一次模型候选，避免每个前端请求都访问模型供应商。
@@ -77,15 +79,34 @@ public class ModelOptionService {
             }
             if (names.isEmpty()) throw new IllegalStateException("供应商模型列表没有有效模型 ID");
 
+            Map<String, List<ModelInfo>> catalogByNormalizedName = catalog.values().stream()
+                    .collect(Collectors.groupingBy(modelInfo -> normalizeModelName(modelInfo.name()), LinkedHashMap::new, Collectors.toList()));
             LinkedHashMap<String, ModelInfo> matched = new LinkedHashMap<>();
+            int exactMatchCount = 0;
+            int normalizedMatchCount = 0;
+            int ambiguousMatchCount = 0;
             for (String name : names) {
                 ModelInfo modelInfo = catalog.get(name);
-                if (modelInfo != null) matched.put(name, modelInfo);
+                if (modelInfo != null) {
+                    exactMatchCount++;
+                } else {
+                    String normalizedName = normalizeModelName(name);
+                    List<ModelInfo> candidates = StrUtil.isBlank(normalizedName) ? List.of() : catalogByNormalizedName.getOrDefault(normalizedName, List.of());
+                    if (candidates.size() == 1) {
+                        modelInfo = candidates.get(0);
+                        normalizedMatchCount++;
+                    } else if (candidates.size() > 1) {
+                        ambiguousMatchCount++;
+                        log.warn("模型名称归一化匹配存在歧义，供应商模型 ID: {}，候选元数据数量: {}", name, candidates.size());
+                    }
+                }
+                if (modelInfo != null) matched.put(name, bindProviderModelId(name, modelInfo));
             }
             if (matched.isEmpty()) throw new IllegalStateException("供应商模型列表与 models.dev 目录没有匹配模型");
             modelNames = List.copyOf(matched.keySet());
             modelInfoMap = Collections.unmodifiableMap(new LinkedHashMap<>(matched));
-            log.info("模型列表加载完成，供应商有效 ID 数: {}，最终匹配数: {}", names.size(), modelNames.size());
+            log.info("模型列表加载完成，供应商有效 ID 数: {}，精确匹配数: {}，归一化匹配数: {}，歧义未匹配数: {}，最终匹配数: {}",
+                    names.size(), exactMatchCount, normalizedMatchCount, ambiguousMatchCount, modelNames.size());
         } catch (IllegalStateException e) {
             log.error("供应商模型列表加载失败，地址: {}，原因: {}", url, e.getMessage());
             throw e;
@@ -116,5 +137,20 @@ public class ModelOptionService {
         }
         if (!values.contains(cleanedEffort)) throw new ServiceException("当前模型不支持所选思考深度");
         return cleanedEffort;
+    }
+
+    private String normalizeModelName(String value) {
+        if (StrUtil.isBlank(value)) return "";
+        return value.trim().toLowerCase(Locale.ROOT).codePoints()
+                .filter(Character::isLetterOrDigit)
+                .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
+                .toString();
+    }
+
+    private ModelInfo bindProviderModelId(String providerModelId, ModelInfo modelInfo) {
+        if (providerModelId.equals(modelInfo.modelId())) return modelInfo;
+        return new ModelInfo(providerModelId, modelInfo.name(), modelInfo.family(), modelInfo.status(), modelInfo.limit(),
+                modelInfo.toolCall(), modelInfo.reasoning(), modelInfo.reasoningOptions(), modelInfo.attachment(),
+                modelInfo.inputModalities(), modelInfo.outputModalities());
     }
 }
