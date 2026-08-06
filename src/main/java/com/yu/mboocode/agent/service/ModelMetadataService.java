@@ -24,14 +24,14 @@ import java.util.Set;
 
 @Service
 @Slf4j
-public class OpenCodeModelCatalogService {
+public class ModelMetadataService {
     private static final String CATALOG_URL = "https://models.opencode.ai/api.json"; // https://models.dev/api.json 被墙了
     private static final int REQUEST_TIMEOUT = 10_000;
 
-    private volatile Map<String, ModelInfo> catalog;
+    private volatile Map<String, ModelInfo> metadata;
 
-    public synchronized Map<String, ModelInfo> loadCatalog() {
-        if (catalog != null) return catalog;
+    public synchronized Map<String, ModelInfo> loadMetadata() {
+        if (metadata != null) return metadata;
         JSONObject root;
         try (HttpResponse response = HttpRequest.get(CATALOG_URL).header(Header.ACCEPT, "application/json").timeout(REQUEST_TIMEOUT).execute()) {
             if (!response.isOk()) {
@@ -72,9 +72,9 @@ public class OpenCodeModelCatalogService {
             }
         }
         if (cleaned.isEmpty()) throw new IllegalStateException("models.dev 模型目录没有有效模型");
-        catalog = Collections.unmodifiableMap(new LinkedHashMap<>(cleaned));
-        log.info("models.dev 模型目录清洗完成，总记录数: {}，无效记录数: {}，重复 ID 数: {}，有效模型数: {}", totalCount, invalidCount, duplicateCount, catalog.size());
-        return catalog;
+        metadata = Collections.unmodifiableMap(new LinkedHashMap<>(cleaned));
+        log.info("models.dev 模型目录清洗完成，总记录数: {}，无效记录数: {}，重复 ID 数: {}，有效模型数: {}", totalCount, invalidCount, duplicateCount, metadata.size());
+        return metadata;
     }
 
     private ModelInfo cleanModel(JSONObject model) {

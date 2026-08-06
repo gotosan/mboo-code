@@ -35,7 +35,7 @@ public class ModelOptionService {
     @Resource
     private Setting setting;
     @Resource
-    private OpenCodeModelCatalogService openCodeModelCatalogService;
+    private ModelMetadataService modelMetadataService;
 
     @Getter
     private List<String> modelNames = List.of();
@@ -49,7 +49,7 @@ public class ModelOptionService {
         if (StrUtil.isBlank(apiKey) || StrUtil.isBlank(baseUrl)) {
             throw new IllegalStateException("模型服务未配置，请在 setting.json 中填写 api_key 和 base_url");
         }
-        Map<String, ModelInfo> catalog = openCodeModelCatalogService.loadCatalog();
+        Map<String, ModelInfo> metadata = modelMetadataService.loadMetadata();
 
         String url = baseUrl + "/models";
         try (HttpResponse response = HttpRequest.get(url)
@@ -79,19 +79,19 @@ public class ModelOptionService {
             }
             if (names.isEmpty()) throw new IllegalStateException("供应商模型列表没有有效模型 ID");
 
-            Map<String, List<ModelInfo>> catalogByNormalizedName = catalog.values().stream()
+            Map<String, List<ModelInfo>> metadataByNormalizedName = metadata.values().stream()
                     .collect(Collectors.groupingBy(modelInfo -> normalizeModelName(modelInfo.name()), LinkedHashMap::new, Collectors.toList()));
             LinkedHashMap<String, ModelInfo> matched = new LinkedHashMap<>();
             int exactMatchCount = 0;
             int normalizedMatchCount = 0;
             int ambiguousMatchCount = 0;
             for (String name : names) {
-                ModelInfo modelInfo = catalog.get(name);
+                ModelInfo modelInfo = metadata.get(name);
                 if (modelInfo != null) {
                     exactMatchCount++;
                 } else {
                     String normalizedName = normalizeModelName(name);
-                    List<ModelInfo> candidates = StrUtil.isBlank(normalizedName) ? List.of() : catalogByNormalizedName.getOrDefault(normalizedName, List.of());
+                    List<ModelInfo> candidates = StrUtil.isBlank(normalizedName) ? List.of() : metadataByNormalizedName.getOrDefault(normalizedName, List.of());
                     if (candidates.size() == 1) {
                         modelInfo = candidates.get(0);
                         normalizedMatchCount++;
