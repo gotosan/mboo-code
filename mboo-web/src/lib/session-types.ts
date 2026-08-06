@@ -18,6 +18,8 @@ export type ToolApprovalDecision = "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY";
 
 export type ToolPermissionType = "NONE" | "TOOL" | "READ" | "WRITE" | "COMMAND";
 
+export type PermissionMode = "DEFAULT" | "FULL_ACCESS";
+
 export type ChatReq = {
   modelName: string;
   reasoningEffort: string;

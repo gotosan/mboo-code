@@ -21,6 +21,7 @@ import { readSessionEventStream } from "@/lib/session-stream";
 import type {
   AssistantMessageState,
   ChatReq,
+  PermissionMode,
   SessionEvent,
   ToolApprovalDecision,
   ToolCallStatus,
@@ -170,6 +171,7 @@ export default function Home() {
     useState<SessionListTab>("active");
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState("");
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
   const [modelName, setModelName] = useState("");
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelOptionsError, setModelOptionsError] = useState("");
@@ -1053,6 +1055,8 @@ export default function Home() {
         }
       }
 
+      setPermissionMode(parsePermissionMode(detail?.metadataJson));
+
       const streamingThisSession =
         connectionStateRef.current === "running" &&
         streamSessionKeyRef.current === nextSessionId;
@@ -1579,6 +1583,39 @@ export default function Home() {
   const isArchivedView =
     viewingSessionStatus === "archived" ||
     currentSession?.status === "archived";
+
+  const changePermissionMode = useCallback(
+    async (nextMode: PermissionMode) => {
+      if (!sessionId || nextMode === permissionMode) {
+        return;
+      }
+      const previousMode = permissionMode;
+      setPermissionMode(nextMode);
+      try {
+        const response = await fetch(
+          `/api/session/${encodeURIComponent(sessionId)}/permission-mode`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: nextMode }),
+          },
+        );
+        const updated = await readApiData<SessionInfo>(response);
+        if (updated) {
+          const normalized = normalizeSessionInfo(updated);
+          if (normalized.status === "active") {
+            setSessions((current) => upsertSession(current, normalized));
+          } else {
+            setArchivedSessions((current) => upsertSession(current, normalized));
+          }
+        }
+      } catch (error) {
+        setPermissionMode(previousMode);
+        setErrorMessage(toErrorMessage(error));
+      }
+    },
+    [permissionMode, sessionId],
+  );
 
   const recentSessions = useMemo(
     () =>
@@ -2476,10 +2513,29 @@ export default function Home() {
                     />
                   </div>
                   <div className="qq-composer-statusbar">
-                    <p className="min-w-0 truncate text-[11px] text-text-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <select
+                        className="qq-input h-8 shrink-0 px-2 text-[11px] text-text-1 outline-none sm:h-[30px]"
+                        value={permissionMode}
+                        disabled={!sessionId || isSessionSwitching}
+                        onChange={(event) =>
+                          void changePermissionMode(event.target.value as PermissionMode)
+                        }
+                        title={
+                          !sessionId
+                            ? "发送首条消息后可切换权限模式"
+                            : "完全访问：工具调用自动通过，不再询问"
+                        }
+                        aria-label="权限模式"
+                      >
+                        <option value="DEFAULT">默认权限</option>
+                        <option value="FULL_ACCESS">完全访问</option>
+                      </select>
+                      <p className="min-w-0 truncate text-[11px] text-text-3">
                       {workspaceBasename(displayedWorkspacePath) || workspaceStatusText}
                       {modelName.trim() ? ` · ${modelName.trim()}` : ""}
-                    </p>
+                      </p>
+                    </div>
                     <div className="flex shrink-0 gap-1.5">
                       {isRunning ? (
                         <button
@@ -4009,6 +4065,19 @@ function mergeMessagesById(base: ChatMessage[], incoming: ChatMessage[]) {
     map.set(message.id, existing ? { ...existing, ...message } : message);
   }
   return Array.from(map.values());
+}
+
+// 从 metadataJson 解析权限模式；缺失或非法时按默认权限处理
+function parsePermissionMode(metadataJson?: string | null): PermissionMode {
+  if (!metadataJson) {
+    return "DEFAULT";
+  }
+  try {
+    const meta = JSON.parse(metadataJson) as { permissionMode?: unknown };
+    return meta.permissionMode === "FULL_ACCESS" ? "FULL_ACCESS" : "DEFAULT";
+  } catch {
+    return "DEFAULT";
+  }
 }
 
 function normalizeSessionInfo(session: SessionInfo): SessionInfo {

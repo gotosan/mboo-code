@@ -7,6 +7,7 @@ import com.yu.mboocode.agent.dto.ToolApprovalReq;
 import com.yu.mboocode.agent.dto.ToolResultDetailResp;
 import com.yu.mboocode.llm.LLMUtil;
 import com.yu.mboocode.agent.dto.ChatReq;
+import com.yu.mboocode.agent.dto.SessionPermissionModeReq;
 import com.yu.mboocode.agent.dto.SessionUpdateReq;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.Sessions;
@@ -31,6 +32,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -128,6 +130,12 @@ public class SessionController {
         toolApprovalService.clearSession(sessionId);
         sessionService.deleteSession(sessionId);
         return R.ok();
+    }
+
+    @Operation(summary = "修改会话权限模式")
+    @PutMapping("/{sessionId}/permission-mode")
+    public R<Sessions> updatePermissionMode(@PathVariable String sessionId, @Valid @RequestBody SessionPermissionModeReq req) {
+        return R.ok(sessionService.updatePermissionMode(sessionId, req.mode()));
     }
 
     @Operation(summary = "处理工具授权")
