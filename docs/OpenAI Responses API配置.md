@@ -8,16 +8,16 @@
 
 ## 模型选项
 
-应用启动时依次请求一次 OpenCode 模型目录和一次当前供应商模型列表：
+应用启动时依次请求一次 models.dev 模型目录和一次当前供应商模型列表：
 
 ```text
-https://models.opencode.ai/api.json
+https://models.dev/api.json
 GET {base_url}/models
 ```
 
-两次请求的超时均为 10 秒，不自动重试，应用运行期间也不刷新。OpenCode 目录提供上下文窗口、输入输出限制、推理选项和其他模型能力；供应商 `/models.data[].id` 提供当前服务实际可选的模型集合。
+两次请求的超时均为 10 秒，不自动重试，应用运行期间也不刷新。models.dev 目录提供上下文窗口、输入输出限制、推理选项和其他模型能力；供应商 `/models.data[].id` 提供当前服务实际可选的模型集合。
 
-模型只按 OpenCode `model.id` 和供应商 `/models.data[].id` 进行区分大小写的精确匹配。`owned_by`、OpenCode 供应商 key 和供应商对象 ID 均不参与匹配。最终模型顺序跟随供应商 `/models.data`，未匹配模型不进入候选列表。
+模型只按 models.dev `model.id` 和供应商 `/models.data[].id` 进行区分大小写的精确匹配。`owned_by`、models.dev 供应商 key 和供应商对象 ID 均不参与匹配。最终模型顺序跟随供应商 `/models.data`，未匹配模型不进入候选列表。
 
 `api_key` 或 `base_url` 为空、任一请求超时或失败、响应无法解析、能力目录没有有效记录、供应商列表无有效 ID，或者最终没有匹配模型时，应用直接启动失败。前端不再允许手动填写模型名称，聊天接口也拒绝不在匹配缓存中的模型。
 

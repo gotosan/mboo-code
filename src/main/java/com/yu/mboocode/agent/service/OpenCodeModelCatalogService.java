@@ -25,7 +25,7 @@ import java.util.Set;
 @Service
 @Slf4j
 public class OpenCodeModelCatalogService {
-    private static final String CATALOG_URL = "https://models.opencode.ai/api.json";
+    private static final String CATALOG_URL = "https://models.dev/api.json";
     private static final int REQUEST_TIMEOUT = 10_000;
 
     private volatile Map<String, ModelInfo> catalog;
@@ -35,18 +35,18 @@ public class OpenCodeModelCatalogService {
         JSONObject root;
         try (HttpResponse response = HttpRequest.get(CATALOG_URL).header(Header.ACCEPT, "application/json").timeout(REQUEST_TIMEOUT).execute()) {
             if (!response.isOk()) {
-                log.error("OpenCode 模型目录请求失败，地址: {}，状态码: {}", CATALOG_URL, response.getStatus());
-                throw new IllegalStateException("OpenCode 模型目录请求失败");
+                log.error("models.dev 模型目录请求失败，地址: {}，状态码: {}", CATALOG_URL, response.getStatus());
+                throw new IllegalStateException("models.dev 模型目录请求失败");
             }
             String body = response.body();
-            if (StrUtil.isBlank(body)) throw new IllegalStateException("OpenCode 模型目录响应为空");
+            if (StrUtil.isBlank(body)) throw new IllegalStateException("models.dev 模型目录响应为空");
             root = JSON.parseObject(body);
-            if (root == null) throw new IllegalStateException("OpenCode 模型目录根结构不是对象");
+            if (root == null) throw new IllegalStateException("models.dev 模型目录根结构不是对象");
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
-            log.error("OpenCode 模型目录加载失败，地址: {}", CATALOG_URL, e);
-            throw new IllegalStateException("OpenCode 模型目录加载失败", e);
+            log.error("models.dev 模型目录加载失败，地址: {}", CATALOG_URL, e);
+            throw new IllegalStateException("models.dev 模型目录加载失败", e);
         }
 
         LinkedHashMap<String, ModelInfo> cleaned = new LinkedHashMap<>();
@@ -71,9 +71,9 @@ public class OpenCodeModelCatalogService {
                 if (cleaned.putIfAbsent(modelInfo.modelId(), modelInfo) != null) duplicateCount++;
             }
         }
-        if (cleaned.isEmpty()) throw new IllegalStateException("OpenCode 模型目录没有有效模型");
+        if (cleaned.isEmpty()) throw new IllegalStateException("models.dev 模型目录没有有效模型");
         catalog = Collections.unmodifiableMap(new LinkedHashMap<>(cleaned));
-        log.info("OpenCode 模型目录清洗完成，总记录数: {}，无效记录数: {}，重复 ID 数: {}，有效模型数: {}", totalCount, invalidCount, duplicateCount, catalog.size());
+        log.info("models.dev 模型目录清洗完成，总记录数: {}，无效记录数: {}，重复 ID 数: {}，有效模型数: {}", totalCount, invalidCount, duplicateCount, catalog.size());
         return catalog;
     }
 

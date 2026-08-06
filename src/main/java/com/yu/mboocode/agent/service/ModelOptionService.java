@@ -82,7 +82,7 @@ public class ModelOptionService {
                 ModelInfo modelInfo = catalog.get(name);
                 if (modelInfo != null) matched.put(name, modelInfo);
             }
-            if (matched.isEmpty()) throw new IllegalStateException("供应商模型列表与 OpenCode 目录没有匹配模型");
+            if (matched.isEmpty()) throw new IllegalStateException("供应商模型列表与 models.dev 目录没有匹配模型");
             modelNames = List.copyOf(matched.keySet());
             modelInfoMap = Collections.unmodifiableMap(new LinkedHashMap<>(matched));
             log.info("模型列表加载完成，供应商有效 ID 数: {}，最终匹配数: {}", names.size(), modelNames.size());
