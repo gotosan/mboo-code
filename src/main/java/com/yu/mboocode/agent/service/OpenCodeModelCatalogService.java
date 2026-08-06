@@ -25,7 +25,7 @@ import java.util.Set;
 @Service
 @Slf4j
 public class OpenCodeModelCatalogService {
-    private static final String CATALOG_URL = "https://models.dev/api.json";
+    private static final String CATALOG_URL = "https://models.opencode.ai/api.json"; // https://models.dev/api.json 被墙了
     private static final int REQUEST_TIMEOUT = 10_000;
 
     private volatile Map<String, ModelInfo> catalog;
