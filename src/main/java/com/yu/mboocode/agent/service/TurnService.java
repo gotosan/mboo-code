@@ -67,6 +67,8 @@ public class TurnService {
     @Resource
     private ModelOptionService modelOptionService;
     @Resource
+    private ModelContextPreferenceService modelContextPreferenceService;
+    @Resource
     private ContextManagementService contextManagementService;
     @Resource
     private ChatMemoryService chatMemoryService;
@@ -166,8 +168,10 @@ public class TurnService {
 
     public Flux<@NonNull SessionEvent> chatStream(SessionTurn sessionTurn, String userMessage, ChatRequestParameters params) {
         ActiveTurnRuntime runtime = getActiveRuntime(sessionTurn);
+        ModelInfo currentModel = modelOptionService.requireModelInfo(params.modelName());
+        long currentContextLimit = modelContextPreferenceService.getEffectiveContextLimit(currentModel);
         // 自动压缩和硬预算检查必须在写入 USER_MESSAGE 前完成；压缩失败时只推送压缩事件并正常结束
-        ContextManagementService.ChatPreparation preparation = contextManagementService.prepareChatTurn(sessionTurn, params.modelName(), userMessage);
+        ContextManagementService.ChatPreparation preparation = contextManagementService.prepareChatTurn(sessionTurn, params.modelName(), currentContextLimit, userMessage);
         Flux<@NonNull SessionEvent> preludeFlux = Flux.fromIterable(preparation.events());
         if (!preparation.proceed()) {
             return preludeFlux;
@@ -189,7 +193,7 @@ public class TurnService {
         String assistantMessageId = IdUtil.getSnowflakeNextIdStr();
         StringBuffer finalText = new StringBuffer();
         Flux<@NonNull SessionEvent> assistantMessageFlux = Flux.create(sink -> {
-            runtime.configureModelUsage(params.modelName(), assistantMessageId, usage -> emitEvent(sink, () -> SessionEvent.builder()
+            runtime.configureModelUsage(params.modelName(), currentContextLimit, assistantMessageId, usage -> emitEvent(sink, () -> SessionEvent.builder()
                     .eventId(IdUtil.getSnowflakeNextIdStr())
                     .sessionId(sessionTurn.sessionId())
                     .turnId(sessionTurn.turnId())
@@ -415,9 +419,7 @@ public class TurnService {
             if (usage == null || usage.totalTokens() == null || usage.totalTokens() <= 0) {
                 return;
             }
-            ModelInfo modelInfo = modelOptionService.getModelInfoMap().get(usage.modelId());
-            Long contextLimit = modelInfo == null || modelInfo.limit() == null ? null : modelInfo.limit().context();
-            chatMemoryService.saveLastUsage(runtime.getSessionTurn().sessionId(), usage.modelId(), JSON.toJSONString(usage), contextLimit);
+            chatMemoryService.saveLastUsage(runtime.getSessionTurn().sessionId(), usage.modelId(), JSON.toJSONString(usage), runtime.getContextLimit());
         } catch (Exception e) {
             log.error("持久化上下文用量失败 sessionId:{} turnId:{}", runtime.getSessionTurn().sessionId(), runtime.getSessionTurn().turnId(), e);
         }

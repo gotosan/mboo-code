@@ -42,6 +42,9 @@ public class ActiveTurnRuntime {
     @Schema(description = "当前 turn 使用的模型 ID", hidden = true)
     private final AtomicReference<String> modelId = new AtomicReference<>();
 
+    @Schema(description = "当前 turn 使用的生效上下文上限", hidden = true)
+    private final AtomicReference<Long> contextLimit = new AtomicReference<>();
+
     @Schema(description = "当前助手消息 ID", hidden = true)
     private final AtomicReference<String> assistantMessageId = new AtomicReference<>();
 
@@ -120,14 +123,19 @@ public class ActiveTurnRuntime {
         }
     }
 
-    public void configureModelUsage(String currentModelId, String currentAssistantMessageId, Consumer<ContextUsageSnapshot> emitter) {
+    public void configureModelUsage(String currentModelId, Long currentContextLimit, String currentAssistantMessageId, Consumer<ContextUsageSnapshot> emitter) {
         modelId.set(currentModelId);
+        contextLimit.set(currentContextLimit);
         assistantMessageId.set(currentAssistantMessageId);
         contextUsageEmitter.set(emitter);
     }
 
     public String getModelId() {
         return modelId.get();
+    }
+
+    public Long getContextLimit() {
+        return contextLimit.get();
     }
 
     public String getAssistantMessageId() {

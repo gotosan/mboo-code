@@ -33,3 +33,10 @@ CREATE TABLE IF NOT EXISTS mboo_chat_memory (
                           pending_compression_event_json TEXT, -- 已提交但未确认写入 JSONL 的压缩完成事件
                           updated_at TEXT NOT NULL -- 会话记忆最近更新时间
 );
+
+CREATE TABLE IF NOT EXISTS mboo_model_context_preference (
+                          model_id TEXT PRIMARY KEY, -- 供应商实际模型 ID，区分大小写
+                          context_limit INTEGER NOT NULL, -- 用户保存的上下文窗口上限
+                          created_at TEXT NOT NULL, -- 偏好创建时间
+                          updated_at TEXT NOT NULL -- 偏好最近更新时间
+);

@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Archive,
   ChevronDown,
@@ -12,6 +13,7 @@ import {
   Menu,
   RefreshCw,
   RotateCcw,
+  Save,
   Shrink,
   Square,
   Trash2,
@@ -24,6 +26,7 @@ import type {
   ChatReq,
   ContextCompressionState,
   ContextUsageSnapshot,
+  ModelContextLimit,
   ModelInfo,
   PermissionMode,
   SessionEvent,
@@ -187,6 +190,8 @@ export default function Home() {
   const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
   const [modelInfoState, setModelInfoState] = useState<ModelInfoState>("idle");
   const [modelInfoError, setModelInfoError] = useState("");
+  const [modelContextLimit, setModelContextLimit] = useState<ModelContextLimit | null>(null);
+  const [modelContextLimitError, setModelContextLimitError] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [contextUsage, setContextUsage] = useState<ContextUsageSnapshot | null>(null);
   const [connectionState, setConnectionState] =
@@ -261,6 +266,8 @@ export default function Home() {
       setModelInfo(null);
       setModelInfoState(nextValue ? "loading" : "idle");
       setModelInfoError("");
+      setModelContextLimit(null);
+      setModelContextLimitError("");
     }
     setContextUsage(restoredUsage?.modelId === nextValue ? restoredUsage : null);
   }, []);
@@ -330,26 +337,43 @@ export default function Home() {
   useEffect(() => {
     if (!modelName) {
       setModelInfo(null);
+      setModelContextLimit(null);
       setModelInfoState("idle");
       return;
     }
     const controller = new AbortController();
     setModelInfo(null);
+    setModelContextLimit(null);
     setModelInfoState("loading");
     setModelInfoError("");
+    setModelContextLimitError("");
     const loadModelInfo = async () => {
       try {
-        const response = await fetch(`/api/model/${encodeURIComponent(modelName)}`, { cache: "no-store", signal: controller.signal });
-        const info = await readApiData<ModelInfo>(response);
+        const encodedModelName = encodeURIComponent(modelName);
+        const [info, contextLimitResult] = await Promise.all([
+          fetch(`/api/model/${encodedModelName}`, { cache: "no-store", signal: controller.signal }).then((response) => readApiData<ModelInfo>(response)),
+          fetch(`/api/model/${encodedModelName}/context-limit`, { cache: "no-store", signal: controller.signal })
+            .then((response) => readApiData<ModelContextLimit>(response))
+            .then((data) => ({ data, error: "" }))
+            .catch((error) => ({ data: null, error: toErrorMessage(error) })),
+        ]);
         if (controller.signal.aborted) return;
         if (!info || info.modelId !== modelName) throw new Error("模型详情响应与当前模型不匹配");
         const effortValues = getReasoningEffortValues(info);
         setModelInfo(info);
+        if (contextLimitResult.data?.modelId === modelName) {
+          setModelContextLimit(contextLimitResult.data);
+          setModelContextLimitError("");
+        } else {
+          setModelContextLimit(null);
+          setModelContextLimitError(contextLimitResult.error || "上下文设置响应与当前模型不匹配");
+        }
         setModelInfoState("ready");
         setReasoningEffort((current) => !current || effortValues.includes(current) ? current : "");
       } catch (error) {
         if (controller.signal.aborted) return;
         setModelInfo(null);
+        setModelContextLimit(null);
         setModelInfoState("error");
         setModelInfoError(toErrorMessage(error));
       }
@@ -2596,8 +2620,7 @@ export default function Home() {
                       </button>
                     </div>
                   ) : null}
-                  {!isRunning ? (
-                    <div className="border-b border-line bg-panel">
+                  <div className="border-b border-line bg-panel">
                       <button
                         className="flex min-h-11 w-full items-center justify-between gap-2 px-2.5 py-2 text-left text-xs text-text-2 sm:hidden"
                         type="button"
@@ -2627,7 +2650,7 @@ export default function Home() {
                               id="model-select"
                               className="qq-input h-8 min-w-0 flex-1 px-2 text-xs text-text-1 outline-none"
                               value={modelName}
-                              disabled={isLoadingModelOptions || modelOptions.length === 0}
+                              disabled={isLoadingModelOptions || modelOptions.length === 0 || isRunning || isCompressing}
                               onChange={(event) => applyModelName(event.target.value)}
                             >
                               {modelOptions.length === 0 ? <option value="">暂无可用模型</option> : null}
@@ -2637,11 +2660,19 @@ export default function Home() {
                                 </option>
                               ))}
                             </select>
-                            <ContextUsageIndicator usage={contextUsage} contextLimit={modelInfo?.limit.context} />
+                            <ContextUsageIndicator
+                              usage={contextUsage}
+                              modelId={modelName}
+                              contextLimit={modelContextLimit}
+                              maximumContextLimit={modelInfo?.limit.context}
+                              loadError={modelContextLimitError}
+                              disabled={isRunning || isCompressing}
+                              onContextLimitChange={setModelContextLimit}
+                            />
                           </div>
                           <span
-                            className={`mt-1 block min-h-3.5 truncate text-[10px] ${modelOptionsError || modelInfoError ? "text-danger" : "text-text-3"}`}
-                            title={modelOptionsError || modelInfoError}
+                            className={`mt-1 block min-h-3.5 truncate text-[10px] ${modelOptionsError || modelInfoError || modelContextLimitError ? "text-danger" : "text-text-3"}`}
+                            title={modelOptionsError || modelInfoError || modelContextLimitError}
                           >
                             {isLoadingModelOptions
                               ? "正在加载模型候选"
@@ -2651,7 +2682,7 @@ export default function Home() {
                                   ? "暂无模型候选"
                                   : modelInfoState === "loading"
                                     ? "正在加载模型能力"
-                                    : modelInfoError || `${modelOptions.length} 个模型候选`}
+                                    : modelInfoError || modelContextLimitError || `${modelOptions.length} 个模型候选`}
                           </span>
                         </div>
                         {hasReasoningOptions ? (
@@ -2660,7 +2691,7 @@ export default function Home() {
                             <select
                               className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
                               value={reasoningEffort}
-                              disabled={!isModelReady}
+                              disabled={!isModelReady || isRunning || isCompressing}
                               onChange={(event) => setReasoningEffort(event.target.value)}
                             >
                               {reasoningOptions.map((option) => (
@@ -2676,7 +2707,7 @@ export default function Home() {
                             compact
                             displayedPath={displayedWorkspacePath}
                             statusText={workspaceStatusText}
-                            canSelect={!sessionId && !isSessionSwitching && !isArchivedView}
+                            canSelect={!sessionId && !isSessionSwitching && !isArchivedView && !isRunning && !isCompressing}
                             isSelecting={isSelectingWorkspace}
                             errorMessage={workspaceMessage}
                             onSelect={() => void selectWorkspace()}
@@ -2685,7 +2716,6 @@ export default function Home() {
                         </div>
                       </div>
                     </div>
-                  ) : null}
                   <div className="qq-composer-toolbar">
                     <div className="qq-composer-toolbar-actions">
                       <button
@@ -2837,41 +2867,245 @@ export default function Home() {
   );
 }
 
-function ContextUsageIndicator({ usage, contextLimit }: { usage: ContextUsageSnapshot | null; contextLimit?: number }) {
+function ContextUsageIndicator({
+  usage,
+  modelId,
+  contextLimit,
+  maximumContextLimit,
+  loadError,
+  disabled,
+  onContextLimitChange,
+}: {
+  usage: ContextUsageSnapshot | null;
+  modelId: string;
+  contextLimit: ModelContextLimit | null;
+  maximumContextLimit?: number;
+  loadError: string;
+  disabled: boolean;
+  onContextLimitChange: (value: ModelContextLimit) => void;
+}) {
   const [isOpen, setIsOpen] = useState(false);
-  const valid = usage && usage.totalTokens >= 0 && typeof contextLimit === "number" && contextLimit > 0;
-  const ratio = valid ? usage.totalTokens / contextLimit : 0;
+  const [draftLimit, setDraftLimit] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [panelPosition, setPanelPosition] = useState<{ left: number; top: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const effectiveContextLimit = contextLimit?.effectiveContextLimit ?? maximumContextLimit;
+  const activeContextLimit = typeof effectiveContextLimit === "number" && effectiveContextLimit > 0 ? effectiveContextLimit : 0;
+  const hasUsage = Boolean(usage && usage.totalTokens >= 0 && activeContextLimit > 0);
+  const ratio = hasUsage && usage ? usage.totalTokens / activeContextLimit : 0;
   const clampedRatio = Math.max(0, Math.min(1, ratio));
-  const label = valid
-    ? `${(ratio * 100).toFixed(1)}% · ${formatTokens(usage.totalTokens)} / ${formatTokens(contextLimit)} 上下文已使用`
-    : "暂无上下文用量数据";
-  const background = valid
+  const label = hasUsage && usage
+    ? `${(ratio * 100).toFixed(1)}% · ${formatTokens(usage.totalTokens)} / ${formatTokens(activeContextLimit)} 上下文已使用`
+    : activeContextLimit > 0
+      ? `上下文上限 ${formatTokens(activeContextLimit)}`
+      : "上下文上限尚未加载";
+  const background = hasUsage
     ? `conic-gradient(var(--accent) ${clampedRatio * 360}deg, color-mix(in srgb, var(--line) 45%, white) 0deg)`
     : "color-mix(in srgb, var(--line) 45%, white)";
+  const minimum = contextLimit?.minimumContextLimit ?? 0;
+  const maximum = contextLimit?.maximumContextLimit ?? 0;
+  const sliderMaximum = maximum > minimum ? Math.ceil((maximum - minimum) / 1000) : 0;
+  const sliderValue = contextLimit ? contextLimitToSliderValue(draftLimit, minimum, maximum) : 0;
+  const canSave = Boolean(contextLimit?.adjustable && draftLimit !== contextLimit.effectiveContextLimit && !disabled && !isSaving);
+  const canReset = Boolean(contextLimit?.configuredContextLimit != null && !disabled && !isSaving);
+
+  useEffect(() => {
+    setIsOpen(false);
+    setDraftLimit(activeContextLimit);
+    setActionError("");
+  }, [activeContextLimit, modelId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!containerRef.current?.contains(target) && !panelRef.current?.contains(target)) setIsOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsOpen(false);
+    };
+    const closePanel = () => setIsOpen(false);
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", closePanel);
+    window.addEventListener("scroll", closePanel, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", closePanel);
+      window.removeEventListener("scroll", closePanel, true);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!triggerRef.current || !panelRef.current) return;
+      const rect = triggerRef.current.getBoundingClientRect();
+      const panelRect = panelRef.current.getBoundingClientRect();
+      const left = Math.max(8, Math.min(rect.right - panelRect.width, window.innerWidth - panelRect.width - 8));
+      const below = rect.bottom + 6;
+      const top = below + panelRect.height <= window.innerHeight ? below : Math.max(8, rect.top - panelRect.height - 6);
+      setPanelPosition({ left, top });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [actionError, contextLimit?.adjustable, isOpen, loadError]);
+
+  const togglePanel = () => {
+    setActionError("");
+    setDraftLimit(activeContextLimit);
+    if (!isOpen && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      const panelWidth = 256;
+      const panelHeight = 190;
+      const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8));
+      const below = rect.bottom + 6;
+      const top = below + panelHeight <= window.innerHeight ? below : Math.max(8, rect.top - panelHeight - 6);
+      setPanelPosition({ left, top });
+    }
+    setIsOpen((current) => !current);
+  };
+
+  const saveContextLimit = async () => {
+    if (!canSave) return;
+    setIsSaving(true);
+    setActionError("");
+    try {
+      const response = await fetch(`/api/model/${encodeURIComponent(modelId)}/context-limit`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contextLimit: draftLimit }),
+      });
+      const result = await readApiData<ModelContextLimit>(response);
+      if (!result || result.modelId !== modelId) throw new Error("上下文设置响应与当前模型不匹配");
+      onContextLimitChange(result);
+      setIsOpen(false);
+    } catch (error) {
+      setActionError(toErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const resetContextLimit = async () => {
+    if (!canReset) return;
+    setIsSaving(true);
+    setActionError("");
+    try {
+      const response = await fetch(`/api/model/${encodeURIComponent(modelId)}/context-limit`, { method: "DELETE" });
+      const result = await readApiData<ModelContextLimit>(response);
+      if (!result || result.modelId !== modelId) throw new Error("上下文设置响应与当前模型不匹配");
+      onContextLimitChange(result);
+      setIsOpen(false);
+    } catch (error) {
+      setActionError(toErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
-    <button
-      className="group relative size-8 shrink-0 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)]"
-      type="button"
-      aria-label={label}
-      aria-expanded={isOpen}
-      title={label}
-      onClick={() => setIsOpen((current) => !current)}
-      onBlur={() => setIsOpen(false)}
-    >
-      <span className="absolute inset-1 rounded-full" style={{ background }} aria-hidden>
-        <span className="absolute inset-[3px] rounded-full bg-panel-elevated" />
-      </span>
+    <div ref={containerRef} className="group relative size-8 shrink-0">
+      <button
+        ref={triggerRef}
+        className="relative size-8 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)]"
+        type="button"
+        aria-label={label}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        title={label}
+        disabled={!modelId || activeContextLimit <= 0}
+        onClick={togglePanel}
+      >
+        <span className="absolute inset-1 rounded-full" style={{ background }} aria-hidden>
+          <span className="absolute inset-[3px] rounded-full bg-panel-elevated" />
+        </span>
+      </button>
       <span
-        className={`pointer-events-none absolute right-0 top-[calc(100%+0.25rem)] z-30 w-max max-w-[17rem] rounded-[3px] border border-line bg-panel-elevated px-2 py-1 text-left text-[10px] font-normal text-text-1 shadow-panel transition-opacity ${
-          isOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
-        }`}
+        className={`pointer-events-none absolute right-0 top-[calc(100%+0.25rem)] z-30 w-max max-w-[17rem] rounded-[3px] border border-line bg-panel-elevated px-2 py-1 text-left text-[10px] font-normal text-text-1 shadow-panel transition-opacity ${isOpen ? "hidden" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}
         role="tooltip"
       >
         {label}
       </span>
-    </button>
+      {isOpen && panelPosition ? createPortal(
+        <div
+          ref={panelRef}
+          className="fixed z-[100] w-64 rounded-[4px] border border-line bg-panel-elevated p-3 text-left font-normal text-text-1 shadow-panel"
+          style={{ left: panelPosition.left, top: panelPosition.top }}
+          role="dialog"
+          aria-label="上下文窗口上限"
+        >
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-[11px] text-text-3">当前上限</span>
+            <strong className="text-sm font-semibold text-text-1">{activeContextLimit > 0 ? formatTokens(activeContextLimit) : "--"}</strong>
+          </div>
+          <div className="mt-1 flex items-baseline justify-between gap-3 text-[10px] text-text-3">
+            <span>模型上限</span>
+            <span>{maximumContextLimit ? formatTokens(maximumContextLimit) : "--"}</span>
+          </div>
+          {contextLimit?.adjustable ? (
+            <div className="mt-3">
+              <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-text-3">
+                <label htmlFor="context-limit-slider">自定义上限</label>
+                <span className="font-medium text-text-1">{formatTokens(draftLimit)}</span>
+              </div>
+              <input
+                id="context-limit-slider"
+                className="h-5 w-full cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                type="range"
+                min={0}
+                max={sliderMaximum}
+                step={1}
+                value={sliderValue}
+                disabled={disabled || isSaving}
+                onChange={(event) => setDraftLimit(sliderValueToContextLimit(Number(event.target.value), minimum, maximum))}
+              />
+              <div className="flex justify-between text-[9px] text-text-3">
+                <span>{formatTokens(minimum)}</span>
+                <span>{formatTokens(maximum)}</span>
+              </div>
+            </div>
+          ) : null}
+          {loadError || actionError ? <p className="mt-2 text-[10px] leading-4 text-danger">{actionError || loadError}</p> : null}
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-2">
+            <button
+              className="qq-button inline-flex h-7 items-center gap-1 px-2 text-[10px] disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              title="恢复模型上限"
+              disabled={!canReset}
+              onClick={() => void resetContextLimit()}
+            >
+              <RotateCcw className="size-3" aria-hidden />
+              恢复默认
+            </button>
+            <button
+              className="qq-button-primary inline-flex h-7 items-center gap-1 px-2 text-[10px] disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              disabled={!canSave}
+              onClick={() => void saveContextLimit()}
+            >
+              {isSaving ? <LoaderCircle className="size-3 motion-safe:animate-spin" aria-hidden /> : <Save className="size-3" aria-hidden />}
+              保存
+            </button>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
   );
+}
+
+function contextLimitToSliderValue(contextLimit: number, minimum: number, maximum: number) {
+  if (contextLimit >= maximum) return Math.ceil((maximum - minimum) / 1000);
+  return Math.max(0, Math.round((contextLimit - minimum) / 1000));
+}
+
+function sliderValueToContextLimit(sliderValue: number, minimum: number, maximum: number) {
+  const regularValue = minimum + sliderValue * 1000;
+  return regularValue >= maximum ? maximum : regularValue;
 }
 
 const WorkspaceBar = memo(function WorkspaceBar({

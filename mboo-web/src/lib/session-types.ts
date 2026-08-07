@@ -51,6 +51,15 @@ export type ModelInfo = {
   outputModalities: string[];
 };
 
+export type ModelContextLimit = {
+  modelId: string;
+  minimumContextLimit: number;
+  maximumContextLimit: number;
+  configuredContextLimit?: number | null;
+  effectiveContextLimit: number;
+  adjustable: boolean;
+};
+
 export type ContextUsageSnapshot = {
   modelId: string;
   inputTokens?: number | null;

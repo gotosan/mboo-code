@@ -10,6 +10,7 @@ import com.yu.mboocode.agent.model.ModelInfo;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.SessionTurn;
 import com.yu.mboocode.agent.model.payload.ContextCompressionPayload;
+import com.yu.mboocode.agent.service.ModelContextPreferenceService;
 import com.yu.mboocode.agent.service.ModelOptionService;
 import com.yu.mboocode.agent.service.SessionEventStore;
 import com.yu.mboocode.common.exception.ServiceException;
@@ -94,6 +95,8 @@ public class ContextManagementService {
     @Resource
     private ModelOptionService modelOptionService;
     @Resource
+    private ModelContextPreferenceService modelContextPreferenceService;
+    @Resource
     private SessionEventStore sessionEventStore;
 
     private volatile String systemPromptText;
@@ -126,7 +129,7 @@ public class ContextManagementService {
      *
      * @return 需要先于 USER_MESSAGE 推送的压缩事件和是否继续发送用户消息
      */
-    public ChatPreparation prepareChatTurn(SessionTurn sessionTurn, String currentModelId, String newUserMessage) {
+    public ChatPreparation prepareChatTurn(SessionTurn sessionTurn, String currentModelId, long currentContextLimit, String newUserMessage) {
         restorePendingCompressionEvent(sessionTurn.sessionId(), sessionTurn.transcriptUri());
 
         ChatMemory row = chatMemoryService.getById(sessionTurn.sessionId());
@@ -138,7 +141,7 @@ public class ContextManagementService {
         ThinResult thinned = thinParsed(parsed, RETAINED_RAW_TURNS);
 
         ContextUsageSnapshot lastUsage = parseLastUsage(row);
-        if (lastUsage != null && turnsBeyondRetain(parsed) && reachTriggerRatio(lastUsage, row.getLastContextLimit(), currentModel)) {
+        if (lastUsage != null && turnsBeyondRetain(parsed) && reachTriggerRatio(lastUsage, row.getLastContextLimit(), currentContextLimit)) {
             String compressionId = IdUtil.getSnowflakeNextIdStr();
             long startNano = System.nanoTime();
             SessionEvent startedEvent = buildCompressionEvent(sessionTurn, compressionId, ContextCompressionPayload.Trigger.AUTO,
@@ -167,7 +170,7 @@ public class ContextManagementService {
             messages = thinned.messages();
         }
 
-        checkNewMessageBudget(currentModel, row == null ? null : row.getSummaryText(), messages, newUserMessage);
+        checkNewMessageBudget(currentModel, currentContextLimit, row == null ? null : row.getSummaryText(), messages, newUserMessage);
         return new ChatPreparation(events, true);
     }
 
@@ -244,7 +247,7 @@ public class ContextManagementService {
         if (summaryModel == null) {
             throw new ServiceException("没有可用的摘要模型");
         }
-        Long contextLimit = summaryModel.limit() == null ? null : summaryModel.limit().context();
+        long contextLimit = modelContextPreferenceService.getEffectiveContextLimit(summaryModel);
         String estimateModelId = summaryModel.modelId();
 
         String existingSummary = row == null ? null : row.getSummaryText();
@@ -340,11 +343,7 @@ public class ContextManagementService {
     /**
      * 新用户消息硬预算检查：不截断、不摘要、不改写用户原文，超预算直接拒绝。
      */
-    private void checkNewMessageBudget(ModelInfo currentModel, String summaryText, List<ChatMessage> historyMessages, String newUserMessage) {
-        if (currentModel.limit() == null || currentModel.limit().context() == null || currentModel.limit().context() <= 0) {
-            return;
-        }
-        long contextLimit = currentModel.limit().context();
+    private void checkNewMessageBudget(ModelInfo currentModel, long contextLimit, String summaryText, List<ChatMessage> historyMessages, String newUserMessage) {
         long outputReserve = currentModel.limit().output() == null
                 ? MAX_OUTPUT_RESERVE_TOKENS
                 : Math.min(currentModel.limit().output(), MAX_OUTPUT_RESERVE_TOKENS);
@@ -364,11 +363,8 @@ public class ContextManagementService {
     /**
      * 70% 触发判断：模型切换时取上一轮窗口和本次窗口的较大压力，对小窗口保持保守。
      */
-    private boolean reachTriggerRatio(ContextUsageSnapshot lastUsage, Long previousContextLimit, ModelInfo currentModel) {
-        if (currentModel.limit() == null || currentModel.limit().context() == null || currentModel.limit().context() <= 0) {
-            return false;
-        }
-        double currentRatio = (double) lastUsage.totalTokens() / currentModel.limit().context();
+    private boolean reachTriggerRatio(ContextUsageSnapshot lastUsage, Long previousContextLimit, long currentContextLimit) {
+        double currentRatio = (double) lastUsage.totalTokens() / currentContextLimit;
         double ratio = currentRatio;
         if (previousContextLimit != null && previousContextLimit > 0) {
             ratio = Math.max(ratio, (double) lastUsage.totalTokens() / previousContextLimit);
@@ -393,10 +389,8 @@ public class ContextManagementService {
      */
     private boolean hasOversizedTurn(ChatMemory row, String fallbackModelName, ChatMemoryTurnParser.ParsedConversation parsed) {
         ModelInfo model = selectSummaryModel(row == null ? null : row.getLastModelId(), null, fallbackModelName);
-        Long contextLimit = model == null || model.limit() == null ? null : model.limit().context();
-        if (contextLimit == null || contextLimit <= 0) {
-            return false;
-        }
+        if (model == null) return false;
+        long contextLimit = modelContextPreferenceService.getEffectiveContextLimit(model);
         for (ConversationTurn turn : parsed.turns()) {
             long estimated = ContextEstimateUtil.estimateMessagesTokens(model.modelId(), turn.messages());
             if (estimated > contextLimit * POST_COMPRESSION_TARGET_RATIO) {
