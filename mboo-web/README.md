@@ -41,6 +41,7 @@ $env:MBOO_API_BASE_URL="http://localhost:8080"
 | `POST /api/session/{sessionId}/archive` | `POST /session/{sessionId}/archive` | 归档会话 |
 | `POST /api/session/{sessionId}/unarchive` | `POST /session/{sessionId}/unarchive` | 取消归档会话 |
 | `DELETE /api/session/{sessionId}` | `DELETE /session/{sessionId}` | 删除会话 |
+| `PUT /api/session/{sessionId}/permission-mode` | `PUT /session/{sessionId}/permission-mode` | 修改已有会话权限模式（`DEFAULT` / `FULL_ACCESS`） |
 | `POST /api/session/{sessionId}/approvals/{approvalId}` | `POST /session/{sessionId}/approvals/{approvalId}` | 处理工具授权（`ALLOW_ONCE` / `ALLOW_SESSION` / `DENY`） |
 | `POST /api/session/chat` | `POST /session/chat` | 代理 SSE 会话事件流 |
 | `POST /api/workspace/select-directory` | `POST /config/selectDirectory` | 打开本机工作区目录选择窗口 |
@@ -57,7 +58,7 @@ $env:MBOO_API_BASE_URL="http://localhost:8080"
 }
 ```
 
-聊天请求字段为 `modelName`、`reasoningEffort`、`userMessage`、`workspacePath` 和 `sessionId`。`sessionId` 为空字符串时，后端会创建新会话；此时 `workspacePath` 为空会自动创建 `.mboo/workspaces/{yyyy-MM-dd}/{sessionId}`，已有会话会忽略请求中的工作区路径。
+聊天请求字段为 `modelName`、`reasoningEffort`、`userMessage`、`workspacePath`、可选 `permissionMode` 和 `sessionId`。`sessionId` 为空字符串时，后端会创建新会话；此时 `workspacePath` 为空会自动创建 `.mboo/workspaces/{yyyy-MM-dd}/{sessionId}`，`permissionMode` 会写入新会话初始权限模式。已有会话会忽略请求中的工作区路径和 `permissionMode`，权限模式改用专用接口修改。
 
 模型输入支持从候选列表选择或手动填写。打开已有会话时优先使用该会话最后一条用户消息记录的模型；新会话优先使用浏览器保存的上一次发送模型，没有保存值时使用候选列表第一项。候选列表由后端启动时查询一次，更新供应商配置或模型后需要重启后端。
 

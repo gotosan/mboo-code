@@ -21,6 +21,7 @@ import com.yu.mboocode.agent.model.ToolResultArtifact;
 import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.tool.event.ToolEventFormatterRegistry;
 import com.yu.mboocode.common.util.DateTimeUtil;
+import com.yu.mboocode.agent.tool.permission.PermissionMode;
 import com.yu.mboocode.llm.context.ContextManagementService;
 import com.yu.mboocode.llm.service.ChatMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -73,11 +74,19 @@ public class TurnService {
     private final Map<String, ActiveTurnRuntime> activeTurnRuntime = new ConcurrentHashMap<>();
 
     public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, TurnProcess turnProcess) {
-        return turn(sessionId, workspacePath, TurnOperationType.CHAT, turnProcess);
+        return turn(sessionId, workspacePath, null, TurnOperationType.CHAT, turnProcess);
+    }
+
+    public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, PermissionMode permissionMode, TurnProcess turnProcess) {
+        return turn(sessionId, workspacePath, permissionMode, TurnOperationType.CHAT, turnProcess);
     }
 
     public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, TurnOperationType operationType, TurnProcess turnProcess) {
-        ActiveTurnRuntime runtime = startTurn(sessionId, workspacePath, operationType);
+        return turn(sessionId, workspacePath, null, operationType, turnProcess);
+    }
+
+    private Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, PermissionMode permissionMode, TurnOperationType operationType, TurnProcess turnProcess) {
+        ActiveTurnRuntime runtime = startTurn(sessionId, workspacePath, permissionMode, operationType);
         SessionTurn sessionTurn = runtime.getSessionTurn();
         return Flux.defer(() -> {
             if (!runtime.markRunning()) {
@@ -121,8 +130,8 @@ public class TurnService {
         });
     }
 
-    private ActiveTurnRuntime startTurn(String sessionId, String workspacePath, TurnOperationType operationType) {
-        Sessions session = sessionService.getActiveOrCreateSession(sessionId, workspacePath);
+    private ActiveTurnRuntime startTurn(String sessionId, String workspacePath, PermissionMode permissionMode, TurnOperationType operationType) {
+        Sessions session = sessionService.getActiveOrCreateSession(sessionId, workspacePath, permissionMode);
         String turnId = IdUtil.getSnowflakeNextIdStr();
         ActiveTurnRuntime runtime = new ActiveTurnRuntime(new SessionTurn(session.getId(), session.getTranscriptUri(), turnId, System.nanoTime(), operationType));
 

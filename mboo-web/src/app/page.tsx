@@ -1080,6 +1080,7 @@ export default function Home() {
     setEditingSessionId(null);
     setTitleDraft("");
     setViewingSessionStatus(null);
+    setPermissionMode("DEFAULT");
     setPendingWorkspacePath("");
     setWorkspaceMessage("");
     setIsSelectingWorkspace(false);
@@ -1578,6 +1579,7 @@ export default function Home() {
         reasoningEffort: reasoningEffort.trim(),
         userMessage,
         workspacePath: sessionId ? "" : pendingWorkspacePath,
+        ...(sessionId ? {} : { permissionMode }),
         sessionId,
       };
 
@@ -1651,6 +1653,7 @@ export default function Home() {
       modelName,
       modelInfoError,
       pendingWorkspacePath,
+      permissionMode,
       reasoningEffort,
       refreshSessions,
       rememberSessionPreview,
@@ -1797,7 +1800,11 @@ export default function Home() {
 
   const changePermissionMode = useCallback(
     async (nextMode: PermissionMode) => {
-      if (!sessionId || nextMode === permissionMode) {
+      if (nextMode === permissionMode) {
+        return;
+      }
+      if (!sessionId) {
+        setPermissionMode(nextMode);
         return;
       }
       const previousMode = permissionMode;
@@ -2742,14 +2749,18 @@ export default function Home() {
                       <select
                         className="qq-input h-8 shrink-0 px-2 text-[11px] text-text-1 outline-none sm:h-[30px]"
                         value={permissionMode}
-                        disabled={!sessionId || isSessionSwitching}
+                        disabled={isSessionSwitching || (isRunning && !sessionId)}
                         onChange={(event) =>
                           void changePermissionMode(event.target.value as PermissionMode)
                         }
                         title={
-                          !sessionId
-                            ? "发送首条消息后可切换权限模式"
-                            : "完全访问：工具调用自动通过，不再询问"
+                          isSessionSwitching
+                            ? "正在同步会话"
+                            : !sessionId
+                              ? isRunning
+                                ? "会话创建中，使用本次选择的权限模式"
+                                : "新会话将使用所选权限模式"
+                              : "完全访问：工具调用自动通过，不再询问"
                         }
                         aria-label="权限模式"
                       >

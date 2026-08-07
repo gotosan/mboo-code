@@ -27,6 +27,7 @@ export type ChatReq = {
   reasoningEffort: string;
   userMessage: string;
   workspacePath: string;
+  permissionMode?: PermissionMode;
   sessionId: string;
 };
 

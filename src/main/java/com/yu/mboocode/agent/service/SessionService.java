@@ -41,19 +41,23 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     private ToolResultStore toolResultStore;
 
     @Transactional
-    public Sessions getActiveOrCreateSession(String sessionId, String workspacePath) {
+    public Sessions getActiveOrCreateSession(String sessionId, String workspacePath, PermissionMode permissionMode) {
         if (StrUtil.isNotBlank(sessionId)) {
             return getActiveSession(sessionId);
         }
-        return createSession(workspacePath);
+        return createSession(workspacePath, permissionMode);
     }
 
     @Transactional
-    public Sessions createSession(String workspacePath) {
+    public Sessions createSession(String workspacePath, PermissionMode permissionMode) {
         Sessions session = new Sessions();
         session.setTitle("新会话"); //todo 后续看看用大模型的回答
         session.setStatus(Sessions.StatusEnum.ACTIVE.getCode());
-        session.setMetadataJson("{}");
+        JSONObject metadata = new JSONObject();
+        if (permissionMode != null) {
+            metadata.put(PERMISSION_MODE_KEY, permissionMode.getCode());
+        }
+        session.setMetadataJson(metadata.toJSONString());
         save(session);
 
         String resolvedWorkspacePath = StrUtil.isNotBlank(workspacePath) ? normalizeWorkspacePath(workspacePath) : createDefaultWorkspace(session.getId(), LocalDate.now());

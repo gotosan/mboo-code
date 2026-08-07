@@ -163,7 +163,7 @@ public class SessionController {
         String reasoningEffort = modelOptionService.validateReasoningEffort(modelInfo, req.reasoningEffort());
         ChatRequestParameters requestParameters = LLMUtil.buildChatReq(modelInfo.modelId(), reasoningEffort);
         Sinks.One<Void> streamEnded = Sinks.one();
-        Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(req.sessionId(), req.workspacePath(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), requestParameters))
+        Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(req.sessionId(), req.workspacePath(), req.permissionMode(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), requestParameters))
                 .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build())
                 .doFinally(_ -> streamEnded.tryEmitEmpty());
         Flux<ServerSentEvent<SessionEvent>> heartbeatEvents = Flux.interval(SSE_HEARTBEAT_INTERVAL)
