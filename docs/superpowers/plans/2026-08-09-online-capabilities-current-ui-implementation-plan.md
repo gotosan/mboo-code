@@ -292,6 +292,8 @@ Expected: 模型切换不会串用旧配置；保存和恢复默认后刷新页�
 
 ## Task 5: 接入上下文用量和上下文压缩
 
+> 状态：已完成（2026-08-09）。已提交 `3f07960`；实时/历史用量归并、上下文进度展示、手动压缩 SSE、压缩系统消息和取消/失败状态已接入。
+
 **Goal:** 统一处理实时 SSE、历史 JSONL 和压缩操作，让 ContextRail 展示真实上下文状态。
 
 **Files:**
@@ -303,23 +305,23 @@ Expected: 模型切换不会串用旧配置；保存和恢复默认后刷新页�
 - Modify: `mboo-web/src/features/context-rail/context-rail.tsx`
 - Modify: `mboo-web/src/features/context-rail/context-rail.module.css`
 
-- [ ] **Step 1: 统一上下文用量归并**
+- [x] **Step 1: 统一上下文用量归并**
 
 处理 `CONTEXT_USAGE_UPDATED` 和终态消息中的 `contextUsage`：按 `sessionId + modelId` 保存当前会话用量；切换会话时从历史事件恢复最近用量；模型切换时清除不匹配的用量。
 
-- [ ] **Step 2: 展示用量且不改变主滚动槽**
+- [x] **Step 2: 展示用量且不改变主滚动槽**
 
 在 `ContextRail` 增加 token 数值、百分比和进度条；无数据时只显示“等待本轮使用量”，不伪造比例。进度条只改变宽度，不改变布局高度；高占用使用稳定颜色和文字表达，不持续闪烁。
 
-- [ ] **Step 3: 接入手动压缩状态**
+- [x] **Step 3: 接入手动压缩状态**
 
 页面层调用 `/api/session/{sessionId}/context/compress`，使用 `CONTEXT_COMPRESSION` 更新 `started/completed/failed/skipped` 状态。压缩开始后禁用发送和重复压缩，复用现有运行状态栏和停止机制；完成或失败后恢复操作状态。
 
-- [ ] **Step 4: 接入历史系统提示**
+- [x] **Step 4: 接入历史系统提示**
 
 将压缩结果转换为系统信息消息，不作为助手消息或用户消息；历史中未完成的压缩事件不能恢复为可操作的运行状态。
 
-- [ ] **Step 5: 验证实时、历史和异常路径**
+- [x] **Step 5: 验证实时、历史和异常路径**
 
 ```bash
 rtk run env -u NODE_OPTIONS npx tsc --noEmit --project mboo-web/tsconfig.json
