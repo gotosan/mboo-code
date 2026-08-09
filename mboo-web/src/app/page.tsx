@@ -17,7 +17,7 @@ import { ConversationLoadingState, ConversationStatusPanel } from "@/features/co
 import { MessageList } from "@/features/conversation/message-list";
 import { SessionListPanel } from "@/features/sessions/session-list-panel";
 import sidebarStyles from "@/features/sessions/session-sidebar.module.css";
-import type { SessionConfirmAction, SessionInfo as FeatureSessionInfo, SessionListTab as FeatureSessionListTab } from "@/features/sessions/session-types";
+import type { SessionConfirmAction, SessionInfo as FeatureSessionInfo, SessionListTab as FeatureSessionListTab, WorkspaceInfo as FeatureWorkspaceInfo } from "@/features/sessions/session-types";
 import { ToolApprovalCard } from "@/features/tools/tool-approval-card";
 import { readSessionEventStream } from "@/lib/session-stream";
 import type {
@@ -126,6 +126,7 @@ type SessionInfo = {
   status: SessionStatus;
   transcriptUri?: string | null;
   activeTurnId?: string | null;
+  workspaceId?: string | null;
   workspacePath?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -184,6 +185,11 @@ export default function Home() {
   const [confirmingAction, setConfirmingAction] = useState<{ type: "archive" | "delete"; id: string } | null>(null);
   const [viewingSessionStatus, setViewingSessionStatus] =
     useState<SessionStatus | null>(null);
+  const [workspaces, setWorkspaces] = useState<FeatureWorkspaceInfo[]>([]);
+  const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(true);
+  const [isSavingWorkspace, setIsSavingWorkspace] = useState(false);
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
+  const [workspaceError, setWorkspaceError] = useState("");
   const [pendingWorkspacePath, setPendingWorkspacePath] = useState("");
   const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [isSelectingWorkspace, setIsSelectingWorkspace] = useState(false);
@@ -1008,6 +1014,20 @@ export default function Home() {
     }
   }, [clearCurrentSession]);
 
+  const refreshWorkspaces = useCallback(async () => {
+    setIsLoadingWorkspaces(true);
+    try {
+      const response = await fetch("/api/workspace/list", { cache: "no-store" });
+      const data = await readApiData<FeatureWorkspaceInfo[]>(response);
+      setWorkspaces(data ?? []);
+      setWorkspaceError("");
+    } catch (error) {
+      setWorkspaceError(toErrorMessage(error));
+    } finally {
+      setIsLoadingWorkspaces(false);
+    }
+  }, []);
+
   const loadSessionEvents = useCallback(async (
     nextSessionId: string,
     options?: { quiet?: boolean; status?: SessionStatus },
@@ -1113,6 +1133,10 @@ export default function Home() {
   useEffect(() => {
     void refreshSessions();
   }, [refreshSessions]);
+
+  useEffect(() => {
+    void refreshWorkspaces();
+  }, [refreshWorkspaces]);
 
   useEffect(() => {
     if (!sessionId || !shouldLoadSessionRef.current || isLoadingSessions) {
@@ -1358,6 +1382,70 @@ export default function Home() {
     }
   }, [isRunning, isSelectingWorkspace]);
 
+  const selectSavedWorkspace = useCallback((workspace: FeatureWorkspaceInfo) => {
+    if (currentSessionIdRef.current || isSelectingWorkspace || isRunning) {
+      return;
+    }
+    workspaceSelectionVersionRef.current += 1;
+    setPendingWorkspacePath(workspace.path);
+    setWorkspaceMessage(`已选择工作区：${workspace.name}`);
+  }, [isRunning, isSelectingWorkspace]);
+
+  const saveWorkspace = useCallback(async () => {
+    const path = pendingWorkspacePath.trim();
+    if (!path || currentSessionIdRef.current || isSavingWorkspace) {
+      return;
+    }
+    setIsSavingWorkspace(true);
+    setWorkspaceMessage("");
+    try {
+      const response = await fetch("/api/workspace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      const saved = await readApiData<FeatureWorkspaceInfo>(response);
+      if (saved) {
+        setWorkspaces((current) => upsertWorkspace(current, saved));
+        setWorkspaceMessage(`工作区“${saved.name}”已保存`);
+      }
+    } catch (error) {
+      setWorkspaceMessage(toErrorMessage(error));
+    } finally {
+      setIsSavingWorkspace(false);
+    }
+  }, [isSavingWorkspace, pendingWorkspacePath]);
+
+  const deleteWorkspace = useCallback(async (workspace: FeatureWorkspaceInfo) => {
+    if (deletingWorkspaceId) {
+      return;
+    }
+    setDeletingWorkspaceId(workspace.id);
+    setWorkspaceMessage("");
+    try {
+      const response = await fetch(`/api/workspace/${encodeURIComponent(workspace.id)}`, {
+        method: "DELETE",
+      });
+      await readApiData<{ deletedSessionCount: number }>(response);
+      setWorkspaces((current) => current.filter((item) => item.id !== workspace.id));
+      if (pendingWorkspacePath === workspace.path) {
+        setPendingWorkspacePath("");
+      }
+      const currentSessionBelongsToWorkspace = [...sessions, ...archivedSessions].some(
+        (session) => session.id === currentSessionIdRef.current && session.workspaceId === workspace.id,
+      );
+      if (currentSessionBelongsToWorkspace) {
+        clearCurrentSession();
+      }
+      setWorkspaceMessage(`工作区“${workspace.name}”已移除，磁盘目录未删除`);
+      await refreshSessions();
+    } catch (error) {
+      setWorkspaceMessage(toErrorMessage(error));
+    } finally {
+      setDeletingWorkspaceId(null);
+    }
+  }, [archivedSessions, clearCurrentSession, deletingWorkspaceId, pendingWorkspacePath, refreshSessions, sessions]);
+
   const clearPendingWorkspace = useCallback(() => {
     if (currentSessionIdRef.current || isSelectingWorkspace) {
       return;
@@ -1601,6 +1689,16 @@ export default function Home() {
     [sessions],
   );
 
+  const workspaceSessionCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const session of [...sessions, ...archivedSessions]) {
+      if (session.workspaceId) {
+        counts[session.workspaceId] = (counts[session.workspaceId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [archivedSessions, sessions]);
+
   // 可操作授权请求：仅当前实时会话中仍带 approvalId 的项
   const pendingApprovalTools = useMemo(() => {
     const tools: ToolCallView[] = [];
@@ -1724,15 +1822,22 @@ export default function Home() {
   const renderSessionList = (options?: { onAfterSelect?: () => void }) => (
     <SessionListPanel
       visibleSessions={visibleSessions as FeatureSessionInfo[]}
+      workspaces={workspaces}
+      workspaceSessionCounts={workspaceSessionCounts}
       sessionPreviews={sessionPreviews}
       highlightedSessionId={highlightedSessionId}
       sessionListTab={sessionListTab as FeatureSessionListTab}
       sessionQuery={sessionQuery}
       isLoadingSessions={isLoadingSessions}
       sessionListError={sessionListError}
-      sessionMessage={sessionMessage}
+      sessionMessage={workspaceMessage || sessionMessage}
       isRunning={isRunning}
       isSelectingWorkspace={isSelectingWorkspace}
+      isLoadingWorkspaces={isLoadingWorkspaces}
+      isSavingWorkspace={isSavingWorkspace}
+      deletingWorkspaceId={deletingWorkspaceId}
+      workspaceError={workspaceError}
+      pendingWorkspacePath={pendingWorkspacePath}
       isSessionSwitching={isSessionSwitching}
       isCurrentSessionRunning={isRunning && sessionId === highlightedSessionId}
       editingSessionId={editingSessionId}
@@ -1740,6 +1845,10 @@ export default function Home() {
       confirmingAction={confirmingAction as SessionConfirmAction}
       onQueryChange={setSessionQuery}
       onCreateSession={startNewSession}
+      onRefreshWorkspaces={() => void refreshWorkspaces()}
+      onSelectWorkspace={selectSavedWorkspace}
+      onSaveWorkspace={() => void saveWorkspace()}
+      onDeleteWorkspace={(workspace) => void deleteWorkspace(workspace)}
       onRefresh={() => void refreshSessions()}
       onTabChange={(tab) => {
         setSessionListTab(tab);
@@ -2679,6 +2788,16 @@ function upsertSession(list: SessionInfo[], session: SessionInfo) {
     ...next[index],
     ...session,
   };
+  return next;
+}
+
+function upsertWorkspace(list: FeatureWorkspaceInfo[], workspace: FeatureWorkspaceInfo) {
+  const index = list.findIndex((item) => item.id === workspace.id);
+  if (index < 0) {
+    return [workspace, ...list];
+  }
+  const next = list.slice();
+  next[index] = workspace;
   return next;
 }
 

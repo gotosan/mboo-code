@@ -16,10 +16,13 @@ import type {
   SessionConfirmAction,
   SessionInfo,
   SessionListTab,
+  WorkspaceInfo,
 } from "@/features/sessions/session-types";
 
 type SessionListPanelProps = {
   visibleSessions: SessionInfo[];
+  workspaces: WorkspaceInfo[];
+  workspaceSessionCounts: Record<string, number>;
   sessionPreviews: Record<string, string>;
   highlightedSessionId: string;
   sessionListTab: SessionListTab;
@@ -29,6 +32,11 @@ type SessionListPanelProps = {
   sessionMessage: string;
   isRunning: boolean;
   isSelectingWorkspace: boolean;
+  isLoadingWorkspaces: boolean;
+  isSavingWorkspace: boolean;
+  deletingWorkspaceId: string | null;
+  workspaceError: string;
+  pendingWorkspacePath: string;
   isSessionSwitching: boolean;
   isCurrentSessionRunning: boolean;
   editingSessionId: string | null;
@@ -36,6 +44,10 @@ type SessionListPanelProps = {
   confirmingAction: SessionConfirmAction;
   onQueryChange: (value: string) => void;
   onCreateSession: () => void;
+  onRefreshWorkspaces: () => void;
+  onSelectWorkspace: (workspace: WorkspaceInfo) => void;
+  onSaveWorkspace: () => void;
+  onDeleteWorkspace: (workspace: WorkspaceInfo) => void;
   onRefresh: () => void;
   onTabChange: (tab: SessionListTab) => void;
   onOpenSession: (session: SessionInfo) => void;
@@ -51,6 +63,8 @@ type SessionListPanelProps = {
 
 export const SessionListPanel = memo(function SessionListPanel({
   visibleSessions,
+  workspaces,
+  workspaceSessionCounts,
   sessionPreviews,
   highlightedSessionId,
   sessionListTab,
@@ -60,6 +74,11 @@ export const SessionListPanel = memo(function SessionListPanel({
   sessionMessage,
   isRunning,
   isSelectingWorkspace,
+  isLoadingWorkspaces,
+  isSavingWorkspace,
+  deletingWorkspaceId,
+  workspaceError,
+  pendingWorkspacePath,
   isSessionSwitching,
   isCurrentSessionRunning,
   editingSessionId,
@@ -67,6 +86,10 @@ export const SessionListPanel = memo(function SessionListPanel({
   confirmingAction,
   onQueryChange,
   onCreateSession,
+  onRefreshWorkspaces,
+  onSelectWorkspace,
+  onSaveWorkspace,
+  onDeleteWorkspace,
   onRefresh,
   onTabChange,
   onOpenSession,
@@ -81,6 +104,7 @@ export const SessionListPanel = memo(function SessionListPanel({
 }: SessionListPanelProps) {
   const isArchivedView = sessionListTab === "archived";
   const actionDisabled = isSessionSwitching || isSelectingWorkspace;
+  const [confirmingWorkspaceId, setConfirmingWorkspaceId] = useState<string | null>(null);
 
   return (
     <>
@@ -115,6 +139,113 @@ export const SessionListPanel = memo(function SessionListPanel({
           <RefreshCw className={`size-3.5 ${isLoadingSessions ? "motion-safe:animate-spin" : ""}`} aria-hidden />
         </button>
       </div>
+
+      <section className={styles.workspaceSection} aria-label="保存的工作区">
+        <div className={styles.workspaceHeader}>
+          <div>
+            <p className={styles.workspaceTitle}>保存的工作区</p>
+            <p className={styles.workspaceHint}>目录可复用，删除不会影响磁盘</p>
+          </div>
+          <button
+            aria-label="刷新工作区列表"
+            className={styles.workspaceRefresh}
+            disabled={isLoadingWorkspaces}
+            type="button"
+            onClick={onRefreshWorkspaces}
+          >
+            <RefreshCw className={`size-3 ${isLoadingWorkspaces ? "motion-safe:animate-spin" : ""}`} aria-hidden />
+          </button>
+        </div>
+
+        {pendingWorkspacePath ? (
+          <div className={styles.workspaceSaveCard}>
+            <div className={styles.workspaceSaveCopy}>
+              <span className={styles.workspaceSaveLabel}>当前待用目录</span>
+              <span className={styles.workspacePath} title={pendingWorkspacePath}>{workspaceBasename(pendingWorkspacePath)}</span>
+            </div>
+            <button
+              className={styles.workspaceSaveButton}
+              disabled={isSavingWorkspace || actionDisabled}
+              type="button"
+              onClick={onSaveWorkspace}
+            >
+              {isSavingWorkspace ? "保存中" : "保存"}
+            </button>
+          </div>
+        ) : null}
+
+        {workspaceError ? (
+          <div className={styles.workspaceError} role="alert">
+            <span>{workspaceError}</span>
+            <button type="button" onClick={onRefreshWorkspaces}>重试</button>
+          </div>
+        ) : null}
+
+        {isLoadingWorkspaces ? (
+          <p className={styles.workspaceEmpty}>正在加载工作区</p>
+        ) : workspaces.length === 0 && !workspaceError ? (
+          <p className={styles.workspaceEmpty}>还没有保存的工作区</p>
+        ) : (
+          <div className={styles.workspaceList}>
+            {workspaces.map((workspace) => {
+              const confirming = confirmingWorkspaceId === workspace.id;
+              const deleting = deletingWorkspaceId === workspace.id;
+              return (
+                <div className={styles.workspaceItem} key={workspace.id}>
+                  {confirming ? (
+                    <div className={styles.workspaceConfirm}>
+                      <p className={styles.workspaceConfirmTitle}>删除“{workspace.name}”？</p>
+                      <p className={styles.workspaceConfirmText}>
+                        将移除 {workspaceSessionCounts[workspace.id] ?? 0} 个关联会话，磁盘目录不会删除。
+                      </p>
+                      <div className={styles.workspaceConfirmActions}>
+                        <button type="button" onClick={() => setConfirmingWorkspaceId(null)}>取消</button>
+                        <button
+                          className={styles.workspaceConfirmDanger}
+                          disabled={deleting}
+                          type="button"
+                          onClick={() => {
+                            setConfirmingWorkspaceId(null);
+                            onDeleteWorkspace(workspace);
+                          }}
+                        >
+                          {deleting ? "删除中" : "确认删除"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        className={styles.workspaceOpen}
+                        disabled={actionDisabled}
+                        type="button"
+                        onClick={() => onSelectWorkspace(workspace)}
+                      >
+                        <span className={`${styles.workspaceDot} ${workspace.available ? styles.workspaceDotAvailable : styles.workspaceDotMissing}`} aria-hidden />
+                        <span className={styles.workspaceCopy}>
+                          <span className={styles.workspaceName}>{workspace.name}</span>
+                          <span className={styles.workspaceMeta} title={workspace.path}>
+                            {workspaceSessionCounts[workspace.id] ?? 0} 个会话 · {workspace.available ? "可用" : "目录不可用"}
+                          </span>
+                        </span>
+                      </button>
+                      <button
+                        aria-label={`删除工作区 ${workspace.name}`}
+                        className={styles.workspaceDelete}
+                        disabled={actionDisabled || deleting}
+                        type="button"
+                        onClick={() => setConfirmingWorkspaceId(workspace.id)}
+                      >
+                        ×
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       <div className={styles.tabs} role="tablist" aria-label="会话分类">
         {(["active", "archived"] as const).map((tab) => (
