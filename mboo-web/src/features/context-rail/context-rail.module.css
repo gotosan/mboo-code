@@ -57,6 +57,78 @@
   white-space: nowrap;
 }
 
+.usageBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+.usageNumbers {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: #35352c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.usageTrack {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e6e6e1;
+}
+
+.usageBar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #8064ee;
+  transition: width 180ms ease;
+}
+
+.usageHint,
+.compressionNotice {
+  margin: 0;
+  color: #9b9b92;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.compressionNotice {
+  color: #7567d9;
+}
+
+.compressionNoticeError {
+  color: #bc4a4a;
+}
+
+.compressButton {
+  align-self: flex-start;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid #d8d3f5;
+  border-radius: 999px;
+  background: #f0edff;
+  color: #5c15e0;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.compressButton:hover:not(:disabled) {
+  border-color: #8064ee;
+  background: #e9e4ff;
+}
+
+.compressButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .sessionList {
   display: flex;
   flex-direction: column;

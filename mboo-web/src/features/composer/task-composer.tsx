@@ -25,6 +25,8 @@ export type TaskComposerProps = {
   onInputChange: (value: string) => void;
   recentInputs: string[];
   isRunning: boolean;
+  isCompressing: boolean;
+  canCompress: boolean;
   isSessionSwitching: boolean;
   isSelectingWorkspace: boolean;
   modelName: string;
@@ -56,6 +58,7 @@ export type TaskComposerProps = {
   onToggleSettings: () => void;
   onSend: () => void;
   onStop: () => void;
+  onCompress: () => void;
   onFocusModelInput: () => void;
 };
 
@@ -64,6 +67,8 @@ export const TaskComposer = memo(function TaskComposer({
   onInputChange,
   recentInputs,
   isRunning,
+  isCompressing,
+  canCompress,
   isSessionSwitching,
   isSelectingWorkspace,
   modelName,
@@ -95,12 +100,13 @@ export const TaskComposer = memo(function TaskComposer({
   onToggleSettings,
   onSend,
   onStop,
+  onCompress,
   onFocusModelInput,
 }: TaskComposerProps) {
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestIndex, setSuggestIndex] = useState(-1);
   const workspaceLabel = workspaceBasename(workspacePath) || workspaceStatusText;
-  const canSend = Boolean(input.trim() && modelName.trim() && !isRunning && !isSessionSwitching && !isSelectingWorkspace);
+  const canSend = Boolean(input.trim() && modelName.trim() && !isRunning && !isCompressing && !isSessionSwitching && !isSelectingWorkspace);
 
   const submit = () => {
     if (!canSend) return;
@@ -238,14 +244,14 @@ export const TaskComposer = memo(function TaskComposer({
       <div className={styles.composer}>
         <div className={styles.toolbar}>
           <button className={`${styles.composerButton} ${styles.toolbarButton}`} type="button" disabled={!input.trim() || isRunning} onClick={() => onInputChange("")}>清空</button>
-          <span className={styles.toolbarHint}>{isRunning ? "生成中，Esc 可停止" : "Enter 发送 · Shift+Enter 换行"}</span>
+          <span className={styles.toolbarHint}>{isRunning ? "生成中，Esc 可停止" : isCompressing ? "上下文压缩中" : "Enter 发送 · Shift+Enter 换行"}</span>
         </div>
         <label className="sr-only" htmlFor="task-input">任务输入</label>
         <div className={styles.editor}>
           <textarea
             className={styles.textarea}
             id="task-input"
-            disabled={isRunning || isSessionSwitching || isSelectingWorkspace}
+            disabled={isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace}
             placeholder="写下任务目标，或继续追问…"
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
@@ -302,9 +308,16 @@ export const TaskComposer = memo(function TaskComposer({
             {isRunning ? (
               <button className={`${styles.composerButton} ${styles.stopButton}`} type="button" onClick={onStop}><Square className={styles.icon} aria-hidden />停止</button>
             ) : (
-              <button className={`${styles.primaryButton} ${!canSend ? styles.lockedButton : ""}`} disabled={!canSend} type="submit" title={!modelName.trim() ? "请先填写模型名称" : !input.trim() ? "请先输入任务" : "发送（Enter）"}>
-                <Send className={styles.icon} aria-hidden />发送
-              </button>
+              <>
+                {canCompress ? (
+                  <button className={styles.composerButton} type="button" onClick={isCompressing ? onStop : onCompress}>
+                    {isCompressing ? "停止压缩" : "压缩上下文"}
+                  </button>
+                ) : null}
+                <button className={`${styles.primaryButton} ${!canSend ? styles.lockedButton : ""}`} disabled={!canSend} type="submit" title={!modelName.trim() ? "请先填写模型名称" : !input.trim() ? "请先输入任务" : "发送（Enter）"}>
+                  <Send className={styles.icon} aria-hidden />发送
+                </button>
+              </>
             )}
           </div>
         </div>
