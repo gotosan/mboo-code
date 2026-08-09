@@ -1,4 +1,4 @@
-package com.yu.mboocode.util;
+package com.yu.mboocode.agent.util;
 
 import cn.hutool.core.util.StrUtil;
 import com.yu.mboocode.common.exception.ServiceException;

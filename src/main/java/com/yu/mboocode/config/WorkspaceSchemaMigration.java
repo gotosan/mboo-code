@@ -2,7 +2,7 @@ package com.yu.mboocode.config;
 
 import cn.hutool.core.util.IdUtil;
 import com.yu.mboocode.common.util.DateTimeUtil;
-import com.yu.mboocode.util.WorkspacePathUtil;
+import com.yu.mboocode.agent.util.WorkspacePathUtil;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;

@@ -13,7 +13,7 @@ import com.yu.mboocode.agent.model.Sessions;
 import com.yu.mboocode.agent.model.Workspace;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
-import com.yu.mboocode.util.WorkspacePathUtil;
+import com.yu.mboocode.agent.util.WorkspacePathUtil;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
