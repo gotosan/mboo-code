@@ -221,6 +221,8 @@ rtk run git commit -m "feat:补齐线上能力前端接口契约"
 
 ## Task 3: 接入工作区持久化管理
 
+> 状态：已完成（2026-08-09）。已提交 `a825b2a`；工作区加载、保存、复用选择、关联会话计数、删除确认和磁盘目录保护已接入当前侧栏样式。
+
 **Goal:** 在当前 UI 中增加工作区列表、保存和删除，同时保留现有目录选择。
 
 **Files:**
@@ -232,19 +234,19 @@ rtk run git commit -m "feat:补齐线上能力前端接口契约"
 - Modify: `mboo-web/src/features/composer/task-composer.tsx`
 - Modify: `mboo-web/src/features/composer/task-composer.module.css`
 
-- [ ] **Step 1: 增加页面层工作区状态**
+- [x] **Step 1: 增加页面层工作区状态**
 
 在页面层维护 `workspaces`、加载状态、保存状态、删除状态和当前会话 `workspaceId`；首次加载与会话列表并行请求 `/api/workspace/list`，失败时保留当前目录选择和新建任务能力。
 
-- [ ] **Step 2: 将目录选择结果保存为工作区**
+- [x] **Step 2: 将目录选择结果保存为工作区**
 
-选择目录成功后，提供“保存为工作区”动作；提交 `{ name, path }`，成功后刷新工作区列表并以返回的工作区对象作为新会话选择项。保存失败只显示当前操作错误，不清空已选路径。
+选择目录成功后，提供“保存为工作区”动作；按远程 `WorkspaceCreateReq` 提交 `{ path }`，名称由后端从路径生成。成功后更新工作区列表并保留当前新会话选择，保存失败只显示当前操作错误，不清空已选路径。
 
-- [ ] **Step 3: 在现有会话列表样式中展示工作区**
+- [x] **Step 3: 在现有会话列表样式中展示工作区**
 
 复用当前行、菜单和确认弹层样式，不改变会话行高度；工作区删除确认必须显示工作区名称、路径和关联会话数量，并明确磁盘目录不会被删除。
 
-- [ ] **Step 4: 验证工作区行为并提交**
+- [x] **Step 4: 验证工作区行为并提交**
 
 ```bash
 rtk run env -u NODE_OPTIONS npx tsc --noEmit --project mboo-web/tsconfig.json
