@@ -64,13 +64,15 @@
 
 ## Task 0: 保存当前前端并建立远程集成基线
 
+> 状态：已完成（2026-08-09）。集成 worktree `/Users/mac/Documents/gitWork/mboo-code-integration` 基于 `origin/main@9707f48` 建立；原工作区未跟踪资产未纳入，后端与 Gradle 范围相对远程无差异。
+
 **目标：** 保护当前工作区的未提交前端和未跟踪组件，并从最新 `origin/main` 建立独立集成分支。该分支天然包含线上完整后端，避免在当前脏工作区直接 `pull`。
 
 **Files:**
 
 - 不修改业务文件；只操作 Git 工作区和独立集成分支。
 
-- [ ] **Step 1: 记录当前状态和当前前端文件清单**
+- [x] **Step 1: 记录当前状态和当前前端文件清单**
 
 ```bash
 rtk run git status --short
@@ -80,16 +82,17 @@ rtk run rg --files mboo-web/src/features mboo-web/src/styles mboo-web/src/app/pr
 
 Expected: 只确认现有前端改动，不修改任何文件。
 
-- [ ] **Step 2: 只保存需要迁移的当前前端源码**
+- [x] **Step 2: 只保存需要迁移的当前前端源码**
 
 ```bash
-rtk run git stash push -u -m "current frontend before online capabilities integration 20260809" -- mboo-web/package.json mboo-web/package-lock.json mboo-web/src/app/globals.css mboo-web/src/app/layout.tsx mboo-web/src/app/page.tsx mboo-web/src/app/preview mboo-web/src/features mboo-web/src/styles
-rtk run git stash list
+rtk run git log --oneline origin/main..HEAD
+rtk run git diff --stat origin/main -- mboo-web
+rtk run git status --short
 ```
 
-Expected: stash 只包含需要迁移的当前前端源码；根目录截图、评审资产、`.DS_Store`、`.playwright-cli` 等无关文件仍留在原工作区且不被纳入。
+Expected: 当前前端重构已由本地提交 `adb4c1e`、`daa601b` 保存；根目录截图、评审资产、`.DS_Store`、`.playwright-cli` 等无关文件保持未跟踪且不被迁移。
 
-- [ ] **Step 3: 从最新远程主分支生成集成 worktree**
+- [x] **Step 3: 从最新远程主分支生成集成 worktree**
 
 ```bash
 rtk run git worktree add -b feature/online-capabilities-current-ui ../mboo-code-integration origin/main
@@ -97,7 +100,7 @@ rtk run git worktree add -b feature/online-capabilities-current-ui ../mboo-code-
 
 Expected: 集成目录基于最新 `origin/main`；完整线上后端已进入集成分支，不需要再摘取或修改后端文件。
 
-- [ ] **Step 4: 确认集成目录干净且远程基线正确**
+- [x] **Step 4: 确认集成目录干净且远程基线正确**
 
 ```bash
 rtk run git status -sb
