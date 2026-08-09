@@ -2,6 +2,7 @@
 
 import { memo, useState } from "react";
 import { ChevronDown, FolderOpen, LoaderCircle, Send, Square, X } from "lucide-react";
+import type { ModelContextLimit, ModelInfo } from "@/lib/session-types";
 import styles from "./task-composer.module.css";
 
 export const MANUAL_MODEL_VALUE = "__manual__";
@@ -32,6 +33,17 @@ export type TaskComposerProps = {
   modelOptions: string[];
   modelOptionsError: string;
   isLoadingModelOptions: boolean;
+  modelInfo: ModelInfo | null;
+  modelInfoError: string;
+  isLoadingModelInfo: boolean;
+  modelContextLimit: ModelContextLimit | null;
+  modelContextLimitError: string;
+  contextLimitDraft: number | null;
+  isLoadingModelContextLimit: boolean;
+  isSavingContextLimit: boolean;
+  onContextLimitChange: (value: number) => void;
+  onSaveContextLimit: () => void;
+  onResetContextLimit: () => void;
   reasoningEffort: string;
   onReasoningChange: (value: string) => void;
   workspacePath: string;
@@ -60,6 +72,17 @@ export const TaskComposer = memo(function TaskComposer({
   modelOptions,
   modelOptionsError,
   isLoadingModelOptions,
+  modelInfo,
+  modelInfoError,
+  isLoadingModelInfo,
+  modelContextLimit,
+  modelContextLimitError,
+  contextLimitDraft,
+  isLoadingModelContextLimit,
+  isSavingContextLimit,
+  onContextLimitChange,
+  onSaveContextLimit,
+  onResetContextLimit,
   reasoningEffort,
   onReasoningChange,
   workspacePath,
@@ -147,6 +170,68 @@ export const TaskComposer = memo(function TaskComposer({
               ) : null}
             </div>
           </div>
+          {isComposerSettingsOpen ? (
+            <div className={styles.modelMetaPanel} aria-label="模型能力与上下文设置">
+              <div className={styles.modelMetaHeader}>
+                <div className={styles.modelMetaTitleGroup}>
+                  <span className={styles.modelMetaTitle}>模型能力</span>
+                  {isLoadingModelInfo ? <span className={styles.modelMetaHint}>读取中</span> : null}
+                  {!isLoadingModelInfo && modelInfoError ? <span className={styles.modelMetaError} title={modelInfoError}>能力未读取</span> : null}
+                  {!isLoadingModelInfo && !modelInfoError && modelInfo ? (
+                    <span className={styles.modelMetaHint}>{modelInfo.toolCall ? "支持工具" : "无工具"} · {modelInfo.reasoning ? "支持推理" : "标准响应"}</span>
+                  ) : null}
+                </div>
+                {modelContextLimit ? (
+                  <span className={styles.contextLimitValue}>
+                    {formatTokenCount(contextLimitDraft ?? modelContextLimit.effectiveContextLimit)} 上限
+                  </span>
+                ) : null}
+              </div>
+              {isLoadingModelContextLimit ? (
+                <p className={styles.modelMetaHint}>正在读取上下文窗口配置…</p>
+              ) : modelContextLimitError ? (
+                <p className={styles.modelMetaError} title={modelContextLimitError}>上下文窗口配置读取失败，保留当前模型选择。</p>
+              ) : modelContextLimit ? (
+                <div className={styles.contextLimitRow}>
+                  <input
+                    className={styles.contextLimitRange}
+                    type="range"
+                    min={modelContextLimit.minimumContextLimit}
+                    max={modelContextLimit.maximumContextLimit}
+                    step={contextLimitStep(modelContextLimit)}
+                    value={contextLimitDraft ?? modelContextLimit.effectiveContextLimit}
+                    disabled={!modelContextLimit.adjustable || isSavingContextLimit}
+                    aria-label="上下文窗口上限"
+                    onChange={(event) => onContextLimitChange(Number(event.target.value))}
+                  />
+                  <span className={styles.contextLimitRangeLabel}>{formatTokenCount(modelContextLimit.minimumContextLimit)}</span>
+                  <span className={styles.contextLimitRangeLabel}>{formatTokenCount(modelContextLimit.maximumContextLimit)}</span>
+                  {modelContextLimit.adjustable ? (
+                    <div className={styles.contextLimitActions}>
+                      <button
+                        className={styles.composerButton}
+                        disabled={isSavingContextLimit || contextLimitDraft === null || contextLimitDraft === modelContextLimit.effectiveContextLimit}
+                        type="button"
+                        onClick={onSaveContextLimit}
+                      >
+                        {isSavingContextLimit ? "保存中" : "保存上限"}
+                      </button>
+                      <button
+                        className={styles.contextResetButton}
+                        disabled={isSavingContextLimit || !modelContextLimit.configuredContextLimit}
+                        type="button"
+                        onClick={onResetContextLimit}
+                      >
+                        恢复默认
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className={styles.modelMetaHint}>当前模型暂时没有可配置的上下文窗口。</p>
+              )}
+            </div>
+          ) : null}
         </>
       ) : null}
 
@@ -227,3 +312,18 @@ export const TaskComposer = memo(function TaskComposer({
     </form>
   );
 });
+
+function contextLimitStep(limit: ModelContextLimit) {
+  const span = limit.maximumContextLimit - limit.minimumContextLimit;
+  return Math.max(1_000, Math.round(span / 100));
+}
+
+function formatTokenCount(value: number) {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}K`;
+  }
+  return String(value);
+}
