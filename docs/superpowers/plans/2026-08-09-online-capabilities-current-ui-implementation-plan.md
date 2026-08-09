@@ -4,9 +4,9 @@
 
 **Goal:** 在保留当前前端 UI 和已有功能的前提下，接入线上后端的工作区管理、完全访问、模型上下文上限、上下文用量和上下文压缩能力。
 
-**Architecture:** 后端以 `origin/main` 的接口、数据库和事件协议为准；前端保留当前 `features/*` 组件和 UI 规范，由页面层统一处理 API、SSE、JSONL 和领域状态，展示组件只通过 props 接收数据和回调。线上单体 `page.tsx` 不直接覆盖当前前端。
+**Architecture:** 集成分支直接基于最新 `origin/main` 建立，完整采用并冻结线上后端；随后只迁入和修改当前本地前端。前端保留当前 `features/*` 组件和 UI 规范，由页面层统一处理 API、SSE、JSONL 和领域状态，展示组件只通过 props 接收数据和回调。线上单体 `page.tsx` 不直接覆盖当前前端。
 
-**Tech Stack:** Spring Boot、SQLite、MyBatis、Next.js App Router、React、TypeScript、CSS Modules、SSE、JSONL。
+**Tech Stack:** Next.js App Router、React、TypeScript、CSS Modules、SSE、JSONL；Spring Boot、SQLite 和 MyBatis 仅作为远程后端契约与编译验证基线，不做二次开发。
 
 ---
 
@@ -24,69 +24,17 @@
 
 项目规则要求仅在用户主动要求后新增单元测试，因此本计划不创建单元测试文件；使用类型检查、构建、差异检查和手测清单完成验证。
 
+后端需要同步到最新 `origin/main`，但同步后不再修改。所有功能实现提交只能包含 `mboo-web/**` 和必要的前端说明文档；若后端契约存在问题，停止并报告，不通过修改 Java、数据库、Gradle、Prompt 或后端配置兜底。
+
 ## 文件边界总览
 
-### 后端同步与接口契约
+### 后端同步与冻结边界
 
-- Modify: `build.gradle`
-- Modify: `src/main/java/com/yu/mboocode/agent/controller/ConfigController.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/controller/SessionController.java`
-- Create: `src/main/java/com/yu/mboocode/agent/controller/WorkspaceController.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/dto/ActiveTurnRuntime.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/dto/ChatReq.java`
-- Create: `src/main/java/com/yu/mboocode/agent/dto/ContextCompressReq.java`
-- Create: `src/main/java/com/yu/mboocode/agent/dto/ModelContextLimitReq.java`
-- Create: `src/main/java/com/yu/mboocode/agent/dto/ModelContextLimitResp.java`
-- Create: `src/main/java/com/yu/mboocode/agent/dto/SessionPermissionModeReq.java`
-- Create: `src/main/java/com/yu/mboocode/agent/dto/WorkspaceCreateReq.java`
-- Create: `src/main/java/com/yu/mboocode/agent/dto/WorkspaceDeleteResp.java`
-- Create: `src/main/java/com/yu/mboocode/agent/dto/WorkspaceResp.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/enums/SessionEventType.java`
-- Create: `src/main/java/com/yu/mboocode/agent/enums/TurnOperationType.java`
-- Create: `src/main/java/com/yu/mboocode/agent/mapper/ModelContextPreferenceMapper.java`
-- Create: `src/main/java/com/yu/mboocode/agent/mapper/WorkspaceMapper.java`
-- Create: `src/main/java/com/yu/mboocode/agent/model/ContextUsageSnapshot.java`
-- Create: `src/main/java/com/yu/mboocode/agent/model/ModelContextPreference.java`
-- Create: `src/main/java/com/yu/mboocode/agent/model/ModelInfo.java`
-- Create: `src/main/java/com/yu/mboocode/agent/model/ModelLimit.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/model/SessionTurn.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/model/Sessions.java`
-- Create: `src/main/java/com/yu/mboocode/agent/model/Workspace.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/model/payload/AssistantMessagePayload.java`
-- Create: `src/main/java/com/yu/mboocode/agent/model/payload/ContextCompressionPayload.java`
-- Create: `src/main/java/com/yu/mboocode/agent/model/payload/ContextUsageUpdatedPayload.java`
-- Create: `src/main/java/com/yu/mboocode/agent/service/ModelContextPreferenceService.java`
-- Create: `src/main/java/com/yu/mboocode/agent/service/ModelMetadataService.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/service/ModelOptionService.java`
-- Create: `src/main/java/com/yu/mboocode/agent/service/ModelUsageTracker.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/service/SessionEventStore.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/service/SessionService.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/service/TurnService.java`
-- Create: `src/main/java/com/yu/mboocode/agent/service/WorkspaceService.java`
-- Modify: `src/main/java/com/yu/mboocode/agent/tool/ToolApprovalService.java`
-- Create: `src/main/java/com/yu/mboocode/agent/tool/permission/PermissionMode.java`
-- Create: `src/main/java/com/yu/mboocode/agent/util/WorkspacePathUtil.java`
-- Create: `src/main/java/com/yu/mboocode/config/ChatMemorySchemaMigration.java`
-- Create: `src/main/java/com/yu/mboocode/config/WorkspaceSchemaMigration.java`
-- Modify: `src/main/java/com/yu/mboocode/llm/AiCodeService.java`
-- Modify: `src/main/java/com/yu/mboocode/llm/AiCodeServiceFactory.java`
-- Create: `src/main/java/com/yu/mboocode/llm/ContextSummaryAiService.java`
-- Create: `src/main/java/com/yu/mboocode/llm/context/ChatMemoryTurnParser.java`
-- Create: `src/main/java/com/yu/mboocode/llm/context/ContextEstimateUtil.java`
-- Create: `src/main/java/com/yu/mboocode/llm/context/ContextManagementService.java`
-- Create: `src/main/java/com/yu/mboocode/llm/context/ContextSummaryService.java`
-- Create: `src/main/java/com/yu/mboocode/llm/context/ConversationTurn.java`
-- Create: `src/main/java/com/yu/mboocode/llm/context/MemoryToolConclusionFormatter.java`
-- Create: `src/main/java/com/yu/mboocode/llm/listener/ModelUsageRequestListener.java`
-- Create: `src/main/java/com/yu/mboocode/llm/listener/ModelUsageResponseListener.java`
-- Delete: `src/main/java/com/yu/mboocode/llm/listener/MyAiServiceCompletedListener.java`
-- Delete: `src/main/java/com/yu/mboocode/llm/listener/MyChatModelListener.java`
-- Modify: `src/main/java/com/yu/mboocode/llm/model/ChatMemory.java`
-- Modify: `src/main/java/com/yu/mboocode/llm/service/ChatMemoryService.java`
-- Modify: `src/main/java/com/yu/mboocode/llm/service/PersistentChatMemoryStore.java`
-- Modify: `src/main/resources/db/sqlite/schema.sql`
-- Create: `src/main/resources/prompt/context-summary-prompt.txt`
-- Rename: `src/main/resources/system-prompt.txt` to `src/main/resources/prompt/system-prompt.txt`
+- Baseline only: `build.gradle`、`settings.gradle`、Gradle Wrapper；
+- Baseline only: `src/main/java/**`；
+- Baseline only: `src/main/resources/**`。
+
+以上内容从最新 `origin/main` 完整获得，不手工摘取文件、不形成后端功能提交。集成开始后，以上路径相对 `origin/main` 必须保持零差异。
 
 ### 前端 API 与类型
 
@@ -114,9 +62,9 @@
 - Modify: `mboo-web/src/features/conversation/message-bubble.tsx`
 - Modify: `mboo-web/src/features/workbench/workbench-layout.module.css`
 
-## Task 0: 建立可恢复基线
+## Task 0: 保存当前前端并建立远程集成基线
 
-**目标：** 在任何后端同步前保护当前工作区的未提交改动和未跟踪组件。
+**目标：** 保护当前工作区的未提交前端和未跟踪组件，并从最新 `origin/main` 建立独立集成分支。该分支天然包含线上完整后端，避免在当前脏工作区直接 `pull`。
 
 **Files:**
 
@@ -132,16 +80,24 @@ rtk run rg --files mboo-web/src/features mboo-web/src/styles mboo-web/src/app/pr
 
 Expected: 只确认现有前端改动，不修改任何文件。
 
-- [ ] **Step 2: 创建临时备份引用并生成集成 worktree**
+- [ ] **Step 2: 只保存需要迁移的当前前端源码**
 
 ```bash
-rtk run git stash push -u -m "before online capabilities integration 20260809"
+rtk run git stash push -u -m "current frontend before online capabilities integration 20260809" -- mboo-web/package.json mboo-web/package-lock.json mboo-web/src/app/globals.css mboo-web/src/app/layout.tsx mboo-web/src/app/page.tsx mboo-web/src/app/preview mboo-web/src/features mboo-web/src/styles
+rtk run git stash list
+```
+
+Expected: stash 只包含需要迁移的当前前端源码；根目录截图、评审资产、`.DS_Store`、`.playwright-cli` 等无关文件仍留在原工作区且不被纳入。
+
+- [ ] **Step 3: 从最新远程主分支生成集成 worktree**
+
+```bash
 rtk run git worktree add -b feature/online-capabilities-current-ui ../mboo-code-integration origin/main
 ```
 
-Expected: 当前工作区改动进入可恢复 stash，集成目录基于 `origin/main`，当前工作区不再承载合并冲突。
+Expected: 集成目录基于最新 `origin/main`；完整线上后端已进入集成分支，不需要再摘取或修改后端文件。
 
-- [ ] **Step 3: 确认集成目录干净且远程基线正确**
+- [ ] **Step 4: 确认集成目录干净且远程基线正确**
 
 ```bash
 rtk run git status -sb
@@ -151,25 +107,35 @@ rtk run git rev-list --left-right --count HEAD...origin/main
 
 Expected: 集成分支干净，HEAD 等于当前 `origin/main`，未修改原工作区的其他资产。
 
-## Task 1: 同步后端依赖链并验证启动边界
+## Task 1: 迁入当前前端并冻结最新后端
 
-**目标：** 在集成 worktree 中采用线上后端完整依赖链，确认数据库迁移、模型服务和上下文服务可以编译。
+**目标：** 将 Task 0 保存的当前前端迁入集成 worktree；如有冲突只解决 `mboo-web/**`，后端继续保持最新 `origin/main` 原样，并确认可以编译。
 
 **Files:**
 
-- 采用 Task 0 建立的 `src/main/java`、`src/main/resources` 和 `build.gradle` 远程版本；
-- 不替换当前前端组件目录。
+- Restore: Task 0 中明确保存的 `mboo-web/**` 前端源码；
+- Baseline only: `src/main/java/**`、`src/main/resources/**`、Gradle 配置；
+- Do not restore: 根目录截图、评审资产、`.DS_Store`、`.playwright-cli` 等无关文件。
 
-- [ ] **Step 1: 核对后端差异只来自线上基线**
+- [ ] **Step 1: 在集成 worktree 迁入当前前端快照**
 
 ```bash
-rtk run git diff --name-status HEAD origin/main -- src build.gradle
-rtk run git diff --stat HEAD origin/main -- src build.gradle
+rtk run git stash list
+rtk run git stash apply stash@{0}
 ```
 
-Expected: 后端差异与已确认的线上功能依赖链一致，不出现当前用户未提交后端改动。
+Expected: 只恢复 Task 0 指定的前端文件；若出现冲突，仅在 `mboo-web/**` 内按“当前本地 UI 为准、线上新增能力为参考”解决，不使用线上单体页面覆盖当前组件化前端。
 
-- [ ] **Step 2: 验证 Gradle 编译和资源存在**
+- [ ] **Step 2: 核对并冻结后端基线**
+
+```bash
+rtk run git diff --name-status origin/main -- src build.gradle settings.gradle gradlew gradlew.bat gradle
+rtk run git diff --quiet origin/main -- src build.gradle settings.gradle gradlew gradlew.bat gradle
+```
+
+Expected: 两条检查均确认后端和 Gradle 范围相对最新 `origin/main` 零差异。如果出现差异，先撤销对应后端差异；不进入前端功能开发。
+
+- [ ] **Step 3: 验证最新后端可以编译且资源完整**
 
 ```bash
 rtk run ./gradlew compileJava
@@ -179,14 +145,15 @@ rtk run test -f src/main/resources/prompt/system-prompt.txt
 
 Expected: Java 编译成功，两个 Prompt 文件存在；不启动常驻服务。
 
-- [ ] **Step 3: 提交后端基线**
+- [ ] **Step 4: 提交当前前端迁移基线**
 
 ```bash
-rtk run git add build.gradle src/main/java src/main/resources
-rtk run git commit -m "feat:同步线上上下文与工作区后端能力"
+rtk run git add mboo-web/package.json mboo-web/package-lock.json mboo-web/src/app mboo-web/src/features mboo-web/src/styles
+rtk run git diff --cached --name-status
+rtk run git commit -m "chore:迁入当前前端重构基线"
 ```
 
-Expected: 只提交线上后端依赖链，不提交当前前端重构文件。
+Expected: 提交只包含当前前端源码；后端没有新增提交内容，且仍与 `origin/main` 完全一致。
 
 ## Task 2: 对齐前后端契约和 API 代理
 
@@ -400,9 +367,10 @@ Expected: 新会话和已有会话的权限模式都能恢复和切换，单工�
 rtk run env -u NODE_OPTIONS npx tsc --noEmit --project mboo-web/tsconfig.json
 rtk run npm run build --prefix mboo-web
 rtk run git diff --check
+rtk run git diff --quiet origin/main -- src build.gradle settings.gradle gradlew gradlew.bat gradle
 ```
 
-Expected: TypeScript、Next.js 生产构建和差异检查全部通过。
+Expected: TypeScript、Next.js 生产构建、差异检查通过，后端和 Gradle 范围相对最新 `origin/main` 零差异。
 
 - [ ] **Step 2: 执行功能手测**
 
@@ -430,7 +398,7 @@ Expected: 功能提交按任务拆分，未提交的用户前端改动和未跟�
 ## 自检
 
 - 需求覆盖：四类新增能力均有独立任务；当前已有功能列入保留范围；UI 规范列入回归验证。
-- 依赖完整：工作区、模型配置、上下文压缩和权限模式的后端 DTO、Service、Schema、事件和 API 代理均已列出。
+- 后端边界：完整后端依赖链由最新 `origin/main` 提供，基线建立后不做二次开发；前端只负责契约适配和 UI 接入。
 - 事件一致性：实时 SSE 与历史 JSONL 共用归并逻辑，未新增第二套展示链路。
 - 样式边界：新功能只进入现有 feature 组件和 CSS Module，不覆盖主题或调整主滚动架构。
 - 测试边界：未新增单元测试文件，遵循项目“仅用户主动要求后编写单元测试”的规则。
