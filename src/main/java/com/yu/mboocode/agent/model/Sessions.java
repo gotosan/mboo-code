@@ -26,6 +26,9 @@ public class Sessions {
     @Schema(description = "会话文件路径或相对 URI")
     private String transcriptUri;
 
+    @Schema(description = "保存工作区 ID；为空时属于默认工作区任务")
+    private String workspaceId;
+
     @Schema(description = "会话工作区绝对路径")
     private String workspacePath;
 

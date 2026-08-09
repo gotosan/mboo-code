@@ -11,6 +11,7 @@ import {
   FolderOpen,
   LoaderCircle,
   Menu,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
@@ -41,6 +42,7 @@ const STORAGE_KEYS = {
   modelName: "mboo-web.modelName",
   reasoningEffort: "mboo-web.reasoningEffort",
   sessionPreviews: "mboo-web.sessionPreviews",
+  collapsedSidebarGroups: "mboo-web.collapsedSidebarGroups",
 };
 
 const REASONING_LABELS: Record<string, string> = {
@@ -147,11 +149,24 @@ type SessionInfo = {
   status: SessionStatus;
   transcriptUri?: string | null;
   activeTurnId?: string | null;
+  workspaceId?: string | null;
   workspacePath?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
   archivedAt?: string | null;
   metadataJson?: string | null;
+};
+
+type WorkspaceInfo = {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  createdAt?: string | null;
+};
+
+type WorkspaceDeleteResp = {
+  deletedSessionCount: number;
 };
 
 type ApiResponse<T> = {
@@ -178,6 +193,7 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<SessionInfo[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [sessionListTab, setSessionListTab] =
     useState<SessionListTab>("active");
   const [input, setInput] = useState("");
@@ -214,6 +230,10 @@ export default function Home() {
   const [pendingWorkspacePath, setPendingWorkspacePath] = useState("");
   const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [isSelectingWorkspace, setIsSelectingWorkspace] = useState(false);
+  const [isAddingWorkspace, setIsAddingWorkspace] = useState(false);
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [sidebarGroupsHydrated, setSidebarGroupsHydrated] = useState(false);
   // 移动端会话抽屉与列表过滤（T1/T6）
   const [isSessionDrawerOpen, setIsSessionDrawerOpen] = useState(false);
   // QQ 窗体：左栏折叠与全屏状态映射到标题栏控件
@@ -221,7 +241,6 @@ export default function Home() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   // 移动端任务设置默认折叠摘要；缺模型时强制展开，避免找不到配置
   const [isComposerSettingsOpen, setIsComposerSettingsOpen] = useState(true);
-  const [sessionQuery, setSessionQuery] = useState("");
   // 错误恢复：保留最近一次失败输入以便重试（T7）
   const [lastFailedInput, setLastFailedInput] = useState("");
   // 会话列表摘要：本地缓存首条用户句，缓解多条「新会话」同质
@@ -250,6 +269,7 @@ export default function Home() {
   const sessionDrawerPanelRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const workspaceRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const lastSentModelRef = useRef("");
   const modelOptionsRef = useRef<string[]>([]);
   const modelNameRef = useRef("");
@@ -293,7 +313,13 @@ export default function Home() {
       localStorage.getItem(STORAGE_KEYS.reasoningEffort) ?? "",
     );
     setSessionPreviews(readSessionPreviewMap());
+    setCollapsedGroups(readCollapsedSidebarGroups());
+    setSidebarGroupsHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (sidebarGroupsHydrated) saveCollapsedSidebarGroups(collapsedGroups);
+  }, [collapsedGroups, sidebarGroupsHydrated]);
 
   useEffect(() => {
     currentSessionIdRef.current = sessionId;
@@ -1116,16 +1142,24 @@ export default function Home() {
   const refreshSessions = useCallback(async () => {
     setIsLoadingSessions(true);
     try {
-      const [activeResponse, archivedResponse] = await Promise.all([
+      const [activeResponse, archivedResponse, workspaceResponse] = await Promise.all([
         fetch("/api/session/list", { cache: "no-store" }),
         fetch("/api/session/list/archived", { cache: "no-store" }),
+        fetch("/api/workspace/list", { cache: "no-store" }),
       ]);
       const activeData = await readApiData<SessionInfo[]>(activeResponse);
       const archivedData = await readApiData<SessionInfo[]>(archivedResponse);
+      const workspaceData = await readApiData<WorkspaceInfo[]>(workspaceResponse);
       const nextActive = activeData ?? [];
       const nextArchived = archivedData ?? [];
+      const nextWorkspaces = workspaceData ?? [];
+      const workspaceIds = new Set(nextWorkspaces.map((workspace) => workspace.id));
+      if ([...nextActive, ...nextArchived].some((session) => session.workspaceId && !workspaceIds.has(session.workspaceId))) {
+        throw new Error("会话工作区关联数据不完整，请刷新后重试");
+      }
       setSessions(nextActive);
       setArchivedSessions(nextArchived);
+      setWorkspaces(nextWorkspaces);
       setSessionListError("");
       setSessionMessage("");
 
@@ -1499,6 +1533,90 @@ export default function Home() {
     [clearCurrentSession, refreshSessions, sessionPreviews],
   );
 
+  const toggleCollapsedGroup = useCallback((key: string) => {
+    setCollapsedGroups((current) => ({ ...current, [key]: !current[key] }));
+  }, []);
+
+  const expandSidebarGroups = useCallback((...keys: string[]) => {
+    setCollapsedGroups((current) => {
+      const next = { ...current };
+      for (const key of keys) next[key] = false;
+      return next;
+    });
+  }, []);
+
+  const scrollWorkspaceIntoView = useCallback((workspaceId: string) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => workspaceRowRefs.current[workspaceId]?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+    });
+  }, []);
+
+  const addWorkspace = useCallback(async () => {
+    if (isAddingWorkspace || isSelectingWorkspace || isRunning) return;
+    setIsAddingWorkspace(true);
+    setSessionMessage("");
+    try {
+      const selectResponse = await fetch("/api/workspace/select-directory", { method: "POST", cache: "no-store" });
+      const selected = await readApiData<WorkspaceSelectResp>(selectResponse);
+      if (!selected?.workspacePath) return;
+      const saveResponse = await fetch("/api/workspace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: selected.workspacePath }),
+      });
+      const workspace = await readApiData<WorkspaceInfo>(saveResponse);
+      if (!workspace) throw new Error("保存工作区失败");
+      setSessionListTab("active");
+      expandSidebarGroups("workspaces", `workspace:${workspace.id}`);
+      await refreshSessions();
+      scrollWorkspaceIntoView(workspace.id);
+    } catch (error) {
+      setSessionMessage(toErrorMessage(error));
+    } finally {
+      setIsAddingWorkspace(false);
+    }
+  }, [expandSidebarGroups, isAddingWorkspace, isRunning, isSelectingWorkspace, refreshSessions, scrollWorkspaceIntoView]);
+
+  const deleteWorkspace = useCallback(async (workspace: WorkspaceInfo) => {
+    if (deletingWorkspaceId) return;
+    const linkedSessions = [...sessions, ...archivedSessions].filter((session) => session.workspaceId === workspace.id);
+    const confirmed = window.confirm(
+      `确认删除工作区“${workspace.name}”？\n路径：${workspace.path}\n将同时永久删除 ${linkedSessions.length} 个下属会话，此操作不可恢复。\n磁盘中的工作区目录和文件不会被删除。`,
+    );
+    if (!confirmed) return;
+
+    setDeletingWorkspaceId(workspace.id);
+    setSessionMessage("");
+    try {
+      const response = await fetch(`/api/workspace/${encodeURIComponent(workspace.id)}`, { method: "DELETE" });
+      await readApiData<WorkspaceDeleteResp>(response);
+      const deletedSessionIds = new Set(linkedSessions.map((session) => session.id));
+      if (deletedSessionIds.has(currentSessionIdRef.current)) clearCurrentSession();
+      for (const sessionId of deletedSessionIds) {
+        delete messagesBySessionRef.current[sessionId];
+        delete contextUsageBySessionRef.current[sessionId];
+      }
+      setSessionPreviews((current) => {
+        const next = { ...current };
+        for (const sessionId of deletedSessionIds) delete next[sessionId];
+        saveSessionPreviewMap(next);
+        return next;
+      });
+      setCollapsedGroups((current) => {
+        const next = { ...current };
+        delete next[`workspace:${workspace.id}`];
+        return next;
+      });
+      await refreshSessions();
+      setSessionMessage("");
+    } catch (error) {
+      await refreshSessions();
+      setSessionMessage(toErrorMessage(error));
+    } finally {
+      setDeletingWorkspaceId(null);
+    }
+  }, [archivedSessions, clearCurrentSession, deletingWorkspaceId, refreshSessions, sessions]);
+
   const selectWorkspace = useCallback(async () => {
     if (currentSessionIdRef.current || isSelectingWorkspace || isRunning) {
       return;
@@ -1767,13 +1885,17 @@ export default function Home() {
     setActiveTurnId(null);
   }, []);
 
-  const startNewSession = useCallback(() => {
+  const startNewSession = useCallback((workspace?: WorkspaceInfo) => {
     clearCurrentSession();
+    if (workspace) {
+      setPendingWorkspacePath(workspace.path);
+      expandSidebarGroups("workspaces", `workspace:${workspace.id}`);
+    }
     setSessionMessage("");
     setSessionListTab("active");
     setIsSessionDrawerOpen(false);
     void refreshSessions();
-  }, [clearCurrentSession, refreshSessions]);
+  }, [clearCurrentSession, expandSidebarGroups, refreshSessions]);
 
   // 快捷键：Esc 关抽屉或停止；⌘/Ctrl+Enter 发送（T6）
   useEffect(() => {
@@ -1815,6 +1937,16 @@ export default function Home() {
       null
     );
   }, [archivedSessions, sessionId, sessions]);
+
+  useEffect(() => {
+    if (!currentSession) return;
+    if (currentSession.workspaceId) {
+      expandSidebarGroups("workspaces", `workspace:${currentSession.workspaceId}`);
+      scrollWorkspaceIntoView(currentSession.workspaceId);
+    } else {
+      expandSidebarGroups("tasks");
+    }
+  }, [currentSession, expandSidebarGroups, scrollWorkspaceIntoView]);
   const persistedWorkspacePath = currentSession?.workspacePath ?? "";
   const displayedWorkspacePath = persistedWorkspacePath || pendingWorkspacePath;
   const workspaceStatusText = displayedWorkspacePath || (sessionId ? (currentSession ? "未设置工作区" : "工作区加载中") : "使用默认工作区");
@@ -1921,45 +2053,25 @@ export default function Home() {
     });
   }, []);
 
-  // 列表：最近活跃优先；当前选中置顶；搜索含标题/摘要/路径/ID
-  const visibleSessions = useMemo(() => {
-    const source =
-      sessionListTab === "active" ? sessions : archivedSessions;
-    const query = sessionQuery.trim().toLowerCase();
-    const filtered = source.filter((session) => {
-      if (!query) {
-        return true;
-      }
-      const title = sessionListTitle(session, sessionPreviews[session.id]).toLowerCase();
-      const preview = (sessionPreviews[session.id] || "").toLowerCase();
-      const path = (session.workspacePath || "").toLowerCase();
-      return (
-        title.includes(query) ||
-        preview.includes(query) ||
-        path.includes(query) ||
-        session.id.toLowerCase().includes(query)
-      );
+  const groupedSessions = useMemo(() => {
+    const source = sessionListTab === "active" ? sessions : archivedSessions;
+    const tasks = source
+      .filter((session) => !session.workspaceId)
+      .sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left));
+    const sortedWorkspaces = [...workspaces].sort((left, right) => {
+      const nameOrder = left.name.localeCompare(right.name, "zh-CN", { sensitivity: "base" });
+      return nameOrder || left.path.localeCompare(right.path, "zh-CN", { sensitivity: "base" });
     });
-
-    filtered.sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left));
-
-    if (sessionId) {
-      const selectedIndex = filtered.findIndex((session) => session.id === sessionId);
-      if (selectedIndex > 0) {
-        const [selected] = filtered.splice(selectedIndex, 1);
-        filtered.unshift(selected);
-      }
-    }
-
-    return filtered;
-  }, [
-    archivedSessions,
-    sessionId,
-    sessionListTab,
-    sessionPreviews,
-    sessionQuery,
-    sessions,
-  ]);
+    const workspaceGroups = sortedWorkspaces
+      .map((workspace) => ({
+        workspace,
+        sessions: source
+          .filter((session) => session.workspaceId === workspace.id)
+          .sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left)),
+      }))
+      .filter((group) => sessionListTab === "active" || group.sessions.length > 0);
+    return { tasks, workspaceGroups };
+  }, [archivedSessions, sessionListTab, sessions, workspaces]);
 
   // 运行中最近工具（T3）
   const activeTool = useMemo(() => {
@@ -1995,25 +2107,103 @@ export default function Home() {
     setConnectionState("idle");
   }, [lastFailedInput]);
 
-  const renderSessionList = (options?: { onAfterSelect?: () => void }) => (
-    <>
-      <label className="qq-search-field mt-1">
-        <span className="qq-icon qq-icon-search" aria-hidden />
-        <span className="sr-only">过滤会话</span>
-        <input
-          className="min-w-0 flex-1 bg-transparent text-xs text-text-1 outline-none placeholder:text-text-3"
-          placeholder="搜索会话"
-          value={sessionQuery}
-          onChange={(event) => setSessionQuery(event.target.value)}
-        />
-      </label>
+  const renderSessionItem = (session: SessionInfo, isArchivedItem: boolean, onAfterSelect?: () => void) => {
+    const selected = session.id === highlightedSessionId;
+    const editing = editingSessionId === session.id;
+    return (
+      <div
+        key={session.id}
+        className={`session-item group min-h-[40px] rounded-[var(--radius-sm)] px-1.5 py-1.5 ${selected ? "qq-selected-row" : "qq-session-row"}`}
+      >
+        {editing && !isArchivedItem ? (
+          <div className="space-y-1.5">
+            <label className="block">
+              <span className="sr-only">会话标题</span>
+              <input
+                className="qq-input h-10 w-full px-2 text-sm text-text-1 outline-none min-[900px]:h-8"
+                maxLength={80}
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+              />
+            </label>
+            <div className="flex gap-1">
+              <button className="qq-button-primary h-10 flex-1 text-xs min-[900px]:h-7" type="button" onClick={() => void submitRenameSession()}>
+                保存
+              </button>
+              <button
+                className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
+                type="button"
+                onClick={() => {
+                  setEditingSessionId(null);
+                  setTitleDraft("");
+                }}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <button
+              className="flex min-h-7 w-full min-w-0 items-center gap-2 text-left focus-visible:outline-none"
+              disabled={isSessionSwitching || isSelectingWorkspace}
+              type="button"
+              onClick={() => {
+                void openSession(session.id, isArchivedItem ? "archived" : "active");
+                onAfterSelect?.();
+              }}
+            >
+              {session.activeTurnId ? <LoaderCircle className="size-3.5 shrink-0 motion-safe:animate-spin text-info" aria-label="运行中" /> : <span className="size-1.5 shrink-0 rounded-full bg-text-3/55" aria-hidden />}
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-1">
+                {sessionListTitle(session, sessionPreviews[session.id])}
+              </span>
+              <span className="shrink-0 text-[11px] text-text-3">
+                {formatSessionTime(isArchivedItem ? session.archivedAt || session.updatedAt : session.updatedAt)}
+              </span>
+            </button>
+            <div
+              className={`session-row-actions mt-1 flex gap-1 ${selected ? "" : "min-[900px]:hidden min-[900px]:group-hover:flex min-[900px]:group-focus-within:flex"}`}
+            >
+              {isArchivedItem ? (
+                <>
+                  <button className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7" disabled={isSessionSwitching || isSelectingWorkspace} type="button" onClick={() => void unarchiveSession(session)}>
+                    取消归档
+                  </button>
+                  <button className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-danger min-[900px]:h-7" disabled={isSessionSwitching || isSelectingWorkspace} type="button" onClick={() => void deleteSession(session)}>
+                    <Trash2 className="size-3.5 min-[900px]:size-3" aria-hidden />
+                    删除
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7" disabled={isSessionSwitching || isSelectingWorkspace} type="button" onClick={() => beginRenameSession(session)}>
+                    重命名
+                  </button>
+                  <button className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-text-2 min-[900px]:h-7" disabled={isSessionSwitching || isSelectingWorkspace || (selected && isRunning)} type="button" onClick={() => void archiveSession(session)}>
+                    <Archive className="size-3.5 min-[900px]:size-3" aria-hidden />
+                    归档
+                  </button>
+                </>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
 
-      <div className="mt-2 flex items-center gap-1">
+  const renderSessionList = (options?: { onAfterSelect?: () => void }) => {
+    const tasksCollapsed = Boolean(collapsedGroups.tasks);
+    const workspacesCollapsed = Boolean(collapsedGroups.workspaces);
+    const isArchivedTab = sessionListTab === "archived";
+    return (
+    <>
+      <div className="mt-1 flex items-center gap-1">
         <button
           className="qq-button-primary inline-flex h-11 flex-1 items-center justify-center gap-1 px-2 text-xs min-[900px]:h-8"
           disabled={isRunning || isSelectingWorkspace}
           type="button"
-          onClick={startNewSession}
+          onClick={() => startNewSession()}
         >
           <span className="qq-icon qq-icon-new-task" aria-hidden />
           新会话
@@ -2080,7 +2270,7 @@ export default function Home() {
               className="qq-button-primary inline-flex h-7 items-center gap-1 px-2 text-[11px]"
               type="button"
               disabled={isRunning || isSelectingWorkspace}
-              onClick={startNewSession}
+              onClick={() => startNewSession()}
             >
               新建任务
             </button>
@@ -2094,18 +2284,7 @@ export default function Home() {
         </p>
       ) : null}
 
-      <div className="qq-group-header mt-3 flex items-center gap-1 px-1 py-1">
-        {sessionListTab === "active" ? (
-          <ChevronDown className="size-3.5" aria-hidden />
-        ) : (
-          <ChevronRight className="size-3.5" aria-hidden />
-        )}
-        <span>
-          {sessionListTab === "active" ? "正在进行" : "已归档"}（{visibleSessions.length}）
-        </span>
-      </div>
-
-      <div className="qq-scrollbar console-scroll mt-1 min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-0.5">
+      <div className="qq-scrollbar console-scroll mt-2 min-h-0 flex-1 overflow-y-auto pr-0.5">
         {isLoadingSessions ? (
           <div className="rounded-[var(--radius-sm)] border border-dashed border-line px-3 py-8 text-center text-sm text-text-3">
             正在加载会话
@@ -2115,159 +2294,127 @@ export default function Home() {
           <div className="rounded-[var(--radius-sm)] border border-dashed border-line px-3 py-6 text-center text-xs text-text-3">
             列表暂时为空。可先新建任务，或使用上方重试。
           </div>
-        ) : visibleSessions.length === 0 ? (
-          <div className="rounded-[var(--radius-sm)] border border-dashed border-line px-3 py-8 text-center">
-            <p className="text-sm text-text-2">
-              {sessionQuery.trim()
-                ? "没有匹配的会话"
-                : sessionListTab === "active"
-                  ? "暂无活跃会话"
-                  : "暂无归档会话"}
-            </p>
-            <p className="mt-1 text-xs text-text-3">
-              {sessionQuery.trim() ? "试试其他关键词" : "从新会话开始一次任务"}
-            </p>
-          </div>
         ) : (
-          visibleSessions.map((session) => {
-            const selected = session.id === highlightedSessionId;
-            const editing = editingSessionId === session.id;
-            const isArchivedItem = sessionListTab === "archived";
-
-            return (
-              <div
-                key={session.id}
-                className={`session-item group min-h-[46px] rounded-[var(--radius-sm)] px-1.5 py-1.5 ${
-                  selected ? "qq-selected-row" : "qq-session-row"
-                }`}
+          <>
+            <section aria-label="任务">
+              <button
+                className="qq-group-header flex w-full items-center gap-1 px-1 py-1.5 text-left"
+                type="button"
+                aria-expanded={!tasksCollapsed}
+                onClick={() => toggleCollapsedGroup("tasks")}
               >
-                {editing && !isArchivedItem ? (
-                  <div className="space-y-1.5">
-                    <label className="block">
-                      <span className="sr-only">会话标题</span>
-                      <input
-                        className="qq-input h-10 w-full px-2 text-sm text-text-1 outline-none min-[900px]:h-8"
-                        maxLength={80}
-                        value={titleDraft}
-                        onChange={(event) => setTitleDraft(event.target.value)}
-                      />
-                    </label>
-                    <div className="flex gap-1">
-                      <button
-                        className="qq-button-primary h-10 flex-1 text-xs min-[900px]:h-7"
-                        type="button"
-                        onClick={() => void submitRenameSession()}
-                      >
-                        保存
-                      </button>
-                      <button
-                        className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
-                        type="button"
-                        onClick={() => {
-                          setEditingSessionId(null);
-                          setTitleDraft("");
-                        }}
-                      >
-                        取消
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <button
-                      className="flex w-full min-w-0 items-start gap-2 text-left focus-visible:outline-none"
-                      disabled={isSessionSwitching || isSelectingWorkspace}
-                      type="button"
-                      onClick={() => {
-                        void openSession(session.id, isArchivedItem ? "archived" : "active");
-                        options?.onAfterSelect?.();
-                      }}
-                    >
-                      <span className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-[3px] border border-line bg-panel-elevated">
-                        <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={28} height={28} decoding="async" loading="lazy" className="size-7 object-cover" />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-text-1">
-                          {sessionListTitle(session, sessionPreviews[session.id])}
-                        </span>
-                        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-text-3">
-                          <span className="shrink-0">
-                            {formatSessionTime(
-                              isArchivedItem
-                                ? session.archivedAt || session.updatedAt
-                                : session.updatedAt,
-                            )}
-                          </span>
-                          {session.workspacePath ? (
-                            <>
-                              <span aria-hidden>·</span>
-                              <span className="truncate font-mono" title={session.workspacePath}>
-                                {workspaceBasename(session.workspacePath)}
-                              </span>
-                            </>
-                          ) : null}
-                        </span>
-                      </span>
-                    </button>
-                    {/* 设计决策：<900 与无 hover 设备常显；宽屏精细指针才 hover 显，避免触控找不到操作 */}
-                    <div
-                      className={`session-row-actions mt-1 flex gap-1 ${
-                        selected
-                          ? ""
-                          : "min-[900px]:hidden min-[900px]:group-hover:flex min-[900px]:group-focus-within:flex"
-                      }`}
-                    >
-                      {isArchivedItem ? (
-                        <>
-                          <button
-                            className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
-                            disabled={isSessionSwitching || isSelectingWorkspace}
-                            type="button"
-                            onClick={() => void unarchiveSession(session)}
-                          >
-                            取消归档
-                          </button>
-                          <button
-                            className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-danger min-[900px]:h-7"
-                            disabled={isSessionSwitching || isSelectingWorkspace}
-                            type="button"
-                            onClick={() => void deleteSession(session)}
-                          >
-                            <Trash2 className="size-3.5 min-[900px]:size-3" aria-hidden />
-                            删除
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
-                            disabled={isSessionSwitching || isSelectingWorkspace}
-                            type="button"
-                            onClick={() => beginRenameSession(session)}
-                          >
-                            重命名
-                          </button>
-                          <button
-                            className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-text-2 min-[900px]:h-7"
-                            disabled={isSessionSwitching || isSelectingWorkspace || (selected && isRunning)}
-                            type="button"
-                            onClick={() => void archiveSession(session)}
-                          >
-                            <Archive className="size-3.5 min-[900px]:size-3" aria-hidden />
-                            归档
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </>
-                )}
+                {tasksCollapsed ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
+                <span>任务（{groupedSessions.tasks.length}）</span>
+              </button>
+              {!tasksCollapsed ? (
+                <div className="space-y-0.5 pb-2">
+                  {groupedSessions.tasks.length > 0
+                    ? groupedSessions.tasks.map((session) => renderSessionItem(session, isArchivedTab, options?.onAfterSelect))
+                    : <p className="px-6 py-2 text-xs text-text-3">{isArchivedTab ? "暂无归档任务" : "暂无任务"}</p>}
+                </div>
+              ) : null}
+            </section>
+
+            <section aria-label="工作区" className="mt-1 border-t border-line/70 pt-1">
+              <div className="flex items-center gap-1">
+                <button
+                  className="qq-group-header flex min-w-0 flex-1 items-center gap-1 px-1 py-1.5 text-left"
+                  type="button"
+                  aria-expanded={!workspacesCollapsed}
+                  onClick={() => toggleCollapsedGroup("workspaces")}
+                >
+                  {workspacesCollapsed ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
+                  <span>工作区（{groupedSessions.workspaceGroups.length}）</span>
+                </button>
+                {!isArchivedTab ? (
+                  <button
+                    className="qq-button inline-flex size-10 shrink-0 items-center justify-center text-text-2 min-[900px]:size-8"
+                    type="button"
+                    aria-label="新增工作区"
+                    title="新增工作区"
+                    disabled={isAddingWorkspace || isSelectingWorkspace || isRunning}
+                    onClick={() => void addWorkspace()}
+                  >
+                    {isAddingWorkspace ? <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden /> : <Plus className="size-3.5" aria-hidden />}
+                  </button>
+                ) : null}
               </div>
-            );
-          })
+              {!workspacesCollapsed ? (
+                <div className="space-y-0.5 pb-2">
+                  {groupedSessions.workspaceGroups.length === 0 ? <p className="px-6 py-2 text-xs text-text-3">{isArchivedTab ? "暂无归档工作区" : "暂无工作区"}</p> : null}
+                  {groupedSessions.workspaceGroups.map(({ workspace, sessions: workspaceSessions }) => {
+                    const workspaceKey = `workspace:${workspace.id}`;
+                    const collapsed = Boolean(collapsedGroups[workspaceKey]);
+                    const hasRunningSession = sessions.some((session) => session.workspaceId === workspace.id && Boolean(session.activeTurnId));
+                    return (
+                      <div
+                        key={workspace.id}
+                        ref={(element) => { workspaceRowRefs.current[workspace.id] = element; }}
+                        className="group/workspace"
+                      >
+                        <div className="flex min-h-10 items-center gap-1">
+                          <button
+                            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--radius-sm)] px-1 py-1 text-left hover:bg-panel-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand"
+                            type="button"
+                            aria-expanded={!collapsed}
+                            onClick={() => toggleCollapsedGroup(workspaceKey)}
+                          >
+                            {collapsed ? <ChevronRight className="size-3.5 shrink-0 text-text-3" aria-hidden /> : <ChevronDown className="size-3.5 shrink-0 text-text-3" aria-hidden />}
+                            <FolderOpen className={`size-4 shrink-0 ${workspace.available ? "text-warning" : "text-text-3"}`} aria-hidden />
+                            <span className="min-w-0 flex-1">
+                              <span className="flex min-w-0 items-center gap-1 text-sm font-medium text-text-1">
+                                <span className="truncate">{workspace.name}</span>
+                                <span className="shrink-0 text-xs font-normal text-text-3">（{workspaceSessions.length}）</span>
+                              </span>
+                              <span className="block truncate font-mono text-[10px] text-text-3" title={workspace.path}>
+                                {workspace.available ? workspaceParentPath(workspace.path) : "路径不可用"}
+                              </span>
+                            </span>
+                          </button>
+                          {!isArchivedTab ? (
+                            <div className="flex shrink-0 items-center gap-0.5">
+                              <button
+                                className="qq-button inline-flex size-10 items-center justify-center text-text-2 min-[900px]:size-8"
+                                type="button"
+                                aria-label={`在 ${workspace.name} 中新建会话`}
+                                title={workspace.available ? "在此工作区新建会话" : "工作区路径不可用"}
+                                disabled={!workspace.available || isRunning || isSelectingWorkspace}
+                                onClick={() => startNewSession(workspace)}
+                              >
+                                <Plus className="size-3.5" aria-hidden />
+                              </button>
+                              <button
+                                className="qq-button inline-flex size-10 items-center justify-center text-danger min-[900px]:size-8"
+                                type="button"
+                                aria-label={`删除工作区 ${workspace.name}`}
+                                title={hasRunningSession ? "请先停止工作区内正在运行的会话" : "删除工作区及下属会话"}
+                                disabled={Boolean(deletingWorkspaceId) || hasRunningSession}
+                                onClick={() => void deleteWorkspace(workspace)}
+                              >
+                                {deletingWorkspaceId === workspace.id ? <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden /> : <Trash2 className="size-3.5" aria-hidden />}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        {!collapsed ? (
+                          <div className="ml-3 space-y-0.5 border-l border-line/80 pl-2">
+                            {workspaceSessions.length > 0
+                              ? workspaceSessions.map((session) => renderSessionItem(session, isArchivedTab, options?.onAfterSelect))
+                              : <p className="px-3 py-2 text-xs text-text-3">暂无会话</p>}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
+          </>
         )}
       </div>
     </>
-  );
+    );
+  };
 
   const desktopSidebarVisible = !isSidebarCollapsed;
 
@@ -2707,7 +2854,7 @@ export default function Home() {
                             compact
                             displayedPath={displayedWorkspacePath}
                             statusText={workspaceStatusText}
-                            canSelect={!sessionId && !isSessionSwitching && !isArchivedView && !isRunning && !isCompressing}
+                            canSelect={!sessionId && !isSessionSwitching && !isArchivedView && !isRunning && !isCompressing && !isAddingWorkspace}
                             isSelecting={isSelectingWorkspace}
                             errorMessage={workspaceMessage}
                             onSelect={() => void selectWorkspace()}
@@ -4819,6 +4966,31 @@ function saveSessionPreviewMap(map: Record<string, string>) {
   }
 }
 
+function readCollapsedSidebarGroups(): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.collapsedSidebarGroups);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const next: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "boolean") next[key] = value;
+    }
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+function saveCollapsedSidebarGroups(groups: Record<string, boolean>) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.collapsedSidebarGroups, JSON.stringify(groups));
+  } catch {
+    // 忽略配额等本地存储失败
+  }
+}
+
 function compactPreviewText(raw: string) {
   const normalized = raw.trim().replace(/\s+/g, " ");
   if (!normalized) {
@@ -4866,6 +5038,16 @@ function workspaceBasename(path?: string | null) {
   const normalized = path.replace(/\\/g, "/");
   const parts = normalized.split("/").filter(Boolean);
   return parts[parts.length - 1] || path;
+}
+
+function workspaceParentPath(path: string) {
+  const usesBackslash = path.includes("\\");
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const separatorIndex = normalized.lastIndexOf("/");
+  if (separatorIndex < 0) return path;
+  let parent = normalized.slice(0, separatorIndex) || "/";
+  if (/^[A-Za-z]:$/.test(parent)) parent += "/";
+  return usesBackslash ? parent.replace(/\//g, "\\") : parent;
 }
 
 function formatSessionTime(value?: string | null) {

@@ -3,6 +3,7 @@ package com.yu.mboocode.agent.service;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.thread.lock.LockUtil;
 import cn.hutool.core.thread.lock.SegmentLock;
+import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
@@ -10,6 +11,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yu.mboocode.agent.mapper.SessionsMapper;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.Sessions;
+import com.yu.mboocode.agent.model.Workspace;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.common.util.CommonUtil;
 import com.yu.mboocode.common.util.DateTimeUtil;
@@ -39,6 +41,8 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     private PersistentChatMemoryStore persistentChatMemoryStore;
     @Resource
     private ToolResultStore toolResultStore;
+    @Resource
+    private WorkspaceService workspaceService;
 
     @Transactional
     public Sessions getActiveOrCreateSession(String sessionId, String workspacePath, PermissionMode permissionMode) {
@@ -51,6 +55,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     @Transactional
     public Sessions createSession(String workspacePath, PermissionMode permissionMode) {
         Sessions session = new Sessions();
+        session.setId(IdUtil.getSnowflakeNextIdStr());
         session.setTitle("新会话"); //todo 后续看看用大模型的回答
         session.setStatus(Sessions.StatusEnum.ACTIVE.getCode());
         JSONObject metadata = new JSONObject();
@@ -58,12 +63,15 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
             metadata.put(PERMISSION_MODE_KEY, permissionMode.getCode());
         }
         session.setMetadataJson(metadata.toJSONString());
-        save(session);
-
-        String resolvedWorkspacePath = StrUtil.isNotBlank(workspacePath) ? normalizeWorkspacePath(workspacePath) : createDefaultWorkspace(session.getId(), LocalDate.now());
-        session.setWorkspacePath(resolvedWorkspacePath);
+        if (StrUtil.isNotBlank(workspacePath)) {
+            Workspace workspace = workspaceService.getOrCreate(workspacePath);
+            session.setWorkspaceId(workspace.getId());
+            session.setWorkspacePath(workspace.getPath());
+        } else {
+            session.setWorkspacePath(createDefaultWorkspace(session.getId(), LocalDate.now()));
+        }
         session.setTranscriptUri(sessionEventStore.newTranscriptUri(session.getId()));
-        updateById(session);
+        save(session);
         return session;
     }
 
@@ -409,20 +417,4 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         }
     }
 
-    private String normalizeWorkspacePath(String workspacePath) {
-        try {
-            Path path = Path.of(workspacePath).toAbsolutePath().normalize();
-            if (!Files.exists(path)) {
-                throw new ServiceException("工作区路径不存在");
-            }
-            if (!Files.isDirectory(path)) {
-                throw new ServiceException("工作区路径不是目录");
-            }
-            return path.toRealPath().toString();
-        } catch (InvalidPathException e) {
-            throw new ServiceException("工作区路径格式错误");
-        } catch (IOException e) {
-            throw new ServiceException("无法解析工作区真实路径");
-        }
-    }
 }

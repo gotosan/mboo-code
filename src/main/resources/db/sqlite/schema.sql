@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS mboo_sessions (
                           status TEXT NOT NULL DEFAULT 'active' -- 会话状态：`active` 活跃、`archived` 已归档
                               CHECK (status IN ('active', 'archived')),
                           transcript_uri TEXT, -- 会话文件路径或相对 URI
+                          workspace_id TEXT, -- 保存工作区 ID；为空时属于默认工作区任务
                           workspace_path TEXT, -- 会话工作区绝对路径
                           active_turn_id TEXT, -- 当前运行中的 turn ID
                           created_at TEXT, -- 会话创建时间
@@ -20,6 +21,16 @@ CREATE INDEX IF NOT EXISTS idx_sessions_list
 CREATE INDEX IF NOT EXISTS idx_sessions_active_turn
     ON mboo_sessions(active_turn_id)
     WHERE active_turn_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS mboo_workspaces (
+                          id TEXT PRIMARY KEY, -- 保存工作区 ID
+                          path TEXT NOT NULL, -- 规范化后的真实绝对路径
+                          path_key TEXT NOT NULL, -- 按当前平台路径语义生成的唯一比较键
+                          created_at TEXT NOT NULL -- 工作区首次保存时间
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_path_key
+    ON mboo_workspaces(path_key);
 
 CREATE TABLE IF NOT EXISTS mboo_chat_memory (
                           memory_id TEXT PRIMARY KEY, -- 会话 ID

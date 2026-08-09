@@ -72,6 +72,8 @@ public class TurnService {
     private ContextManagementService contextManagementService;
     @Resource
     private ChatMemoryService chatMemoryService;
+    @Resource
+    private WorkspaceService workspaceService;
 
     private final Map<String, ActiveTurnRuntime> activeTurnRuntime = new ConcurrentHashMap<>();
 
@@ -134,6 +136,10 @@ public class TurnService {
 
     private ActiveTurnRuntime startTurn(String sessionId, String workspacePath, PermissionMode permissionMode, TurnOperationType operationType) {
         Sessions session = sessionService.getActiveOrCreateSession(sessionId, workspacePath, permissionMode);
+        return workspaceService.withOperationLock(session.getWorkspaceId(), () -> startTurn(session, operationType));
+    }
+
+    private ActiveTurnRuntime startTurn(Sessions session, TurnOperationType operationType) {
         String turnId = IdUtil.getSnowflakeNextIdStr();
         ActiveTurnRuntime runtime = new ActiveTurnRuntime(new SessionTurn(session.getId(), session.getTranscriptUri(), turnId, System.nanoTime(), operationType));
 
