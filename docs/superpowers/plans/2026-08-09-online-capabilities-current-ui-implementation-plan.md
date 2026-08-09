@@ -334,6 +334,8 @@ Expected: 实时和历史显示一致；压缩失败不会丢失原会话消息�
 
 ## Task 6: 接入会话级完全访问
 
+> 状态：已完成（2026-08-09）。已提交 `cd7445b`；新会话权限随聊天请求提交，已有会话可切换并从元数据恢复，后端授权卡仍保持事件驱动。
+
 **Goal:** 在当前任务设置区域增加会话级权限模式，并保持工具审批卡的后端事件驱动。
 
 **Files:**
@@ -342,19 +344,19 @@ Expected: 实时和历史显示一致；压缩失败不会丢失原会话消息�
 - Modify: `mboo-web/src/features/composer/task-composer.tsx`
 - Modify: `mboo-web/src/features/composer/task-composer.module.css`
 
-- [ ] **Step 1: 新会话提交权限模式**
+- [x] **Step 1: 新会话提交权限模式**
 
 创建新会话时在 `ChatReq` 中仅对新会话附加 `permissionMode`；已有会话不重复发送创建参数。
 
-- [ ] **Step 2: 已有会话更新权限模式**
+- [x] **Step 2: 已有会话更新权限模式**
 
 切换已有会话时调用 `PUT /api/session/{sessionId}/permission-mode`，提交 `{ permissionMode }`；请求失败恢复旧值并显示非阻塞错误。
 
-- [ ] **Step 3: 从元数据恢复并验证权限优先级**
+- [x] **Step 3: 从元数据恢复并验证权限优先级**
 
 打开会话时解析权限模式；工具审批事件仍然由 `ToolApprovalCard` 展示，前端不因为 `FULL_ACCESS` 自行隐藏后端发送的授权卡。
 
-- [ ] **Step 4: 验证并提交**
+- [x] **Step 4: 验证并提交**
 
 ```bash
 rtk run env -u NODE_OPTIONS npx tsc --noEmit --project mboo-web/tsconfig.json
