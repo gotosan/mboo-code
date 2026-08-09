@@ -369,6 +369,8 @@ Expected: 新会话和已有会话的权限模式都能恢复和切换，单工�
 
 ## Task 7: 整体验证与 UI 回归
 
+> 状态：进行中（2026-08-09）。TypeScript、Next.js 生产构建、前端临时服务连通性、差异检查和后端冻结门禁已通过。真实后端联调待 JDK 25：本机仅有 JDK 23/11，运行中的旧后端无法提供最新工作区与模型上下文接口，未以修改后端或 Gradle 配置绕过。
+
 **Goal:** 验证新增功能没有破坏当前视觉规范、滚动、授权和长会话能力。
 
 **Files:**
@@ -376,7 +378,7 @@ Expected: 新会话和已有会话的权限模式都能恢复和切换，单工�
 - Modify if needed: `docs/mboo-web-handtest-checklist.md`
 - Do not modify: current theme assets, screenshots, unrelated untracked files.
 
-- [ ] **Step 1: 执行静态验证**
+- [x] **Step 1: 执行静态验证**
 
 ```bash
 rtk run env -u NODE_OPTIONS npx tsc --noEmit --project mboo-web/tsconfig.json
