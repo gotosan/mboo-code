@@ -14,6 +14,9 @@ public record SessionTurn(
         @Schema(description = "会话 JSONL 文件路径或相对 URI")
         String transcriptUri,
 
+        @Schema(description = "会话工作区绝对路径")
+        String workspacePath,
+
         @Schema(description = "本轮执行 turn ID")
         String turnId,
 
@@ -24,6 +27,6 @@ public record SessionTurn(
         TurnOperationType operationType
 ) {
     public SessionTurn(String sessionId, String transcriptUri, String turnId, Long startNano) {
-        this(sessionId, transcriptUri, turnId, startNano, TurnOperationType.CHAT);
+        this(sessionId, transcriptUri, null, turnId, startNano, TurnOperationType.CHAT);
     }
 }
