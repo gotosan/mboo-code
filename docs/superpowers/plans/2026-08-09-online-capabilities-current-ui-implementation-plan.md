@@ -162,6 +162,8 @@ Expected: 提交只包含当前前端源码；后端没有新增提交内容，�
 
 ## Task 2: 对齐前后端契约和 API 代理
 
+> 状态：已完成（2026-08-09）。远程基线已包含本任务所需的前端类型与 API Route；已核对工作区、模型详情、上下文上限、权限模式和压缩接口，未重复创建实现。
+
 **目标：** 让当前前端可以表达线上新增请求、响应和事件，不改变页面布局。
 
 **Files:**
@@ -176,7 +178,7 @@ Expected: 提交只包含当前前端源码；后端没有新增提交内容，�
 - Create: `mboo-web/src/app/api/session/[sessionId]/permission-mode/route.ts`
 - Create: `mboo-web/src/app/api/session/[sessionId]/context/compress/route.ts`
 
-- [ ] **Step 1: 增加事件和领域类型**
+- [x] **Step 1: 增加事件和领域类型**
 
 在 `session-types.ts` 增加并保持与远程字段一致：
 
@@ -198,19 +200,19 @@ rtk run env -u NODE_OPTIONS npx tsc --noEmit --project mboo-web/tsconfig.json
 
 Expected: 类型定义自身无错误；调用方错误可以在后续任务逐步消除。
 
-- [ ] **Step 2: 添加 API 代理**
+- [x] **Step 2: 添加 API 代理**
 
 每个代理只负责读取请求、编码动态路径并调用 `proxyBackendJson`：
 
 - 工作区：`GET /workspace/list`、`POST /workspace`、`DELETE /workspace/{workspaceId}`；
-- 模型详情：`GET /config/model?modelId={modelId}`；
+- 模型详情：`GET /config/modelInfo?modelId={modelId}`；
 - 上下文上限：`GET/PUT/DELETE /config/modelContextLimit?modelId={modelId}`；
 - 权限模式：`PUT /session/{sessionId}/permission-mode`；
 - 上下文压缩：`POST /session/{sessionId}/context/compress`。
 
-Expected: API route 不包含业务状态，不在组件内直接拼接后端地址。
+Expected: API route 不包含业务状态，不在组件内直接拼接后端地址；该约束已由现有实现满足。
 
-- [ ] **Step 3: 提交契约层**
+- [x] **Step 3: 提交契约层**
 
 ```bash
 rtk run git add mboo-web/src/lib mboo-web/src/app/api
