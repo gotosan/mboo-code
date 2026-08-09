@@ -2,7 +2,7 @@
 
 import { memo, useState } from "react";
 import { ChevronDown, FolderOpen, LoaderCircle, Send, Square, X } from "lucide-react";
-import type { ModelContextLimit, ModelInfo } from "@/lib/session-types";
+import type { ModelContextLimit, ModelInfo, PermissionMode } from "@/lib/session-types";
 import styles from "./task-composer.module.css";
 
 export const MANUAL_MODEL_VALUE = "__manual__";
@@ -31,6 +31,8 @@ export type TaskComposerProps = {
   isSelectingWorkspace: boolean;
   modelName: string;
   isManualModel: boolean;
+  permissionMode: PermissionMode;
+  onPermissionModeChange: (value: PermissionMode) => void;
   onModelChange: (value: string, manual?: boolean) => void;
   modelOptions: string[];
   modelOptionsError: string;
@@ -73,6 +75,8 @@ export const TaskComposer = memo(function TaskComposer({
   isSelectingWorkspace,
   modelName,
   isManualModel,
+  permissionMode,
+  onPermissionModeChange,
   onModelChange,
   modelOptions,
   modelOptionsError,
@@ -187,6 +191,18 @@ export const TaskComposer = memo(function TaskComposer({
                     <span className={styles.modelMetaHint}>{modelInfo.toolCall ? "支持工具" : "无工具"} · {modelInfo.reasoning ? "支持推理" : "标准响应"}</span>
                   ) : null}
                 </div>
+                <label className={styles.permissionControl}>
+                  <span>权限</span>
+                  <select
+                    className={styles.permissionSelect}
+                    aria-label="会话权限模式"
+                    value={permissionMode}
+                    onChange={(event) => onPermissionModeChange(event.target.value as PermissionMode)}
+                  >
+                    <option value="DEFAULT">默认审批</option>
+                    <option value="FULL_ACCESS">完全访问</option>
+                  </select>
+                </label>
                 {modelContextLimit ? (
                   <span className={styles.contextLimitValue}>
                     {formatTokenCount(contextLimitDraft ?? modelContextLimit.effectiveContextLimit)} 上限

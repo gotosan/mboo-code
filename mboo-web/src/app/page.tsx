@@ -28,6 +28,7 @@ import type {
   ContextCompressionPayload,
   ContextCompressionState,
   ContextUsageSnapshot,
+  PermissionMode,
   SessionEvent,
   ToolApprovalDecision,
   ToolCallStatus,
@@ -172,6 +173,7 @@ export default function Home() {
   const [modelOptionsError, setModelOptionsError] = useState("");
   const [isLoadingModelOptions, setIsLoadingModelOptions] = useState(true);
   const [isManualModel, setIsManualModel] = useState(true);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
   const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
   const [modelInfoError, setModelInfoError] = useState("");
   const [isLoadingModelInfo, setIsLoadingModelInfo] = useState(false);
@@ -438,6 +440,30 @@ export default function Home() {
       setIsSavingContextLimit(false);
     }
   }, [isSavingContextLimit, modelContextLimit, modelName]);
+
+  const changePermissionMode = useCallback(async (nextMode: PermissionMode) => {
+    const previousMode = permissionMode;
+    setPermissionMode(nextMode);
+    const targetSessionId = currentSessionIdRef.current;
+    if (!targetSessionId) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/session/${encodeURIComponent(targetSessionId)}/permission-mode`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: nextMode }),
+      });
+      const updated = await readApiData<SessionInfo>(response);
+      if (updated) {
+        setSessions((current) => upsertSession(current, updated));
+      }
+      setSessionMessage(nextMode === "FULL_ACCESS" ? "当前会话已切换为完全访问" : "当前会话已恢复默认权限");
+    } catch (error) {
+      setPermissionMode(previousMode);
+      setSessionMessage(`权限模式切换失败：${toErrorMessage(error)}`);
+    }
+  }, [permissionMode]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1120,6 +1146,7 @@ export default function Home() {
     setEditingSessionId(null);
     setTitleDraft("");
     setViewingSessionStatus(null);
+    setPermissionMode("DEFAULT");
     setContextUsage(null);
     setCompressionState(null);
     setCompressionMessage("");
@@ -1238,6 +1265,7 @@ export default function Home() {
       let nextStatus = options?.status;
       if (detail) {
         const normalized = normalizeSessionInfo(detail);
+        setPermissionMode(parsePermissionMode(normalized.metadataJson));
         nextStatus = nextStatus ?? normalized.status;
         if (normalized.status === "active") {
           setSessions((current) => upsertSession(current, normalized));
@@ -1715,6 +1743,7 @@ export default function Home() {
         reasoningEffort: reasoningEffort.trim(),
         userMessage,
         workspacePath: sessionId ? "" : pendingWorkspacePath,
+        permissionMode: sessionId ? undefined : permissionMode,
         sessionId,
       };
 
@@ -1786,6 +1815,7 @@ export default function Home() {
       maybeAutoTitleSession,
       modelName,
       pendingWorkspacePath,
+      permissionMode,
       reasoningEffort,
       refreshSessions,
       rememberSessionPreview,
@@ -2364,6 +2394,8 @@ export default function Home() {
                   isSelectingWorkspace={isSelectingWorkspace}
                   modelName={modelName}
                   isManualModel={isManualModel}
+                  permissionMode={permissionMode}
+                  onPermissionModeChange={(value) => void changePermissionMode(value)}
                   onModelChange={applyModelName}
                   modelOptions={modelOptions}
                   modelOptionsError={modelOptionsError}
@@ -3078,6 +3110,18 @@ function normalizeSessionInfo(session: SessionInfo): SessionInfo {
     ...session,
     status,
   };
+}
+
+function parsePermissionMode(metadataJson?: string | null): PermissionMode {
+  if (!metadataJson?.trim()) {
+    return "DEFAULT";
+  }
+  try {
+    const metadata = JSON.parse(metadataJson) as { permissionMode?: unknown };
+    return metadata.permissionMode === "FULL_ACCESS" ? "FULL_ACCESS" : "DEFAULT";
+  } catch {
+    return "DEFAULT";
+  }
 }
 
 function upsertSession(list: SessionInfo[], session: SessionInfo) {
