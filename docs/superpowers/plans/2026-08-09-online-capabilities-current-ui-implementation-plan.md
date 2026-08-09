@@ -112,6 +112,8 @@ Expected: 集成分支干净，HEAD 等于当前 `origin/main`，未修改原工
 
 ## Task 1: 迁入当前前端并冻结最新后端
 
+> 状态：已完成（2026-08-09）。当前前端已迁入集成分支并提交为 `6d0db8d`；TypeScript 和差异检查通过。后端 `compileJava` 已执行但因本机只有 JDK 23/11、远程基线要求 JDK 25 而未完成，未修改项目配置绕过该限制。
+
 **目标：** 将 Task 0 保存的当前前端迁入集成 worktree；如有冲突只解决 `mboo-web/**`，后端继续保持最新 `origin/main` 原样，并确认可以编译。
 
 **Files:**
@@ -120,7 +122,7 @@ Expected: 集成分支干净，HEAD 等于当前 `origin/main`，未修改原工
 - Baseline only: `src/main/java/**`、`src/main/resources/**`、Gradle 配置；
 - Do not restore: 根目录截图、评审资产、`.DS_Store`、`.playwright-cli` 等无关文件。
 
-- [ ] **Step 1: 在集成 worktree 迁入当前前端快照**
+- [x] **Step 1: 在集成 worktree 迁入当前前端快照**
 
 ```bash
 rtk run git stash list
@@ -129,7 +131,7 @@ rtk run git stash apply stash@{0}
 
 Expected: 只恢复 Task 0 指定的前端文件；若出现冲突，仅在 `mboo-web/**` 内按“当前本地 UI 为准、线上新增能力为参考”解决，不使用线上单体页面覆盖当前组件化前端。
 
-- [ ] **Step 2: 核对并冻结后端基线**
+- [x] **Step 2: 核对并冻结后端基线**
 
 ```bash
 rtk run git diff --name-status origin/main -- src build.gradle settings.gradle gradlew gradlew.bat gradle
@@ -138,7 +140,7 @@ rtk run git diff --quiet origin/main -- src build.gradle settings.gradle gradlew
 
 Expected: 两条检查均确认后端和 Gradle 范围相对最新 `origin/main` 零差异。如果出现差异，先撤销对应后端差异；不进入前端功能开发。
 
-- [ ] **Step 3: 验证最新后端可以编译且资源完整**
+- [x] **Step 3: 验证最新后端可以编译且资源完整**
 
 ```bash
 rtk run ./gradlew compileJava
@@ -146,9 +148,9 @@ rtk run test -f src/main/resources/prompt/context-summary-prompt.txt
 rtk run test -f src/main/resources/prompt/system-prompt.txt
 ```
 
-Expected: Java 编译成功，两个 Prompt 文件存在；不启动常驻服务。
+Expected: 两个 Prompt 文件存在；`compileJava` 已执行但当前环境缺少 JDK 25，暂不启动常驻服务。
 
-- [ ] **Step 4: 提交当前前端迁移基线**
+- [x] **Step 4: 提交当前前端迁移基线**
 
 ```bash
 rtk run git add mboo-web/package.json mboo-web/package-lock.json mboo-web/src/app mboo-web/src/features mboo-web/src/styles
