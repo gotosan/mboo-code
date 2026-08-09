@@ -259,6 +259,8 @@ Expected: 可新增、选择、切换和删除工作区；磁盘目录不受影�
 
 ## Task 4: 接入模型能力和上下文上限
 
+> 状态：已完成（2026-08-09）。已提交 `1dfb235`；模型能力与上下文上限在当前任务设置区加载、竞态丢弃、保存和恢复默认均已接入，保留手动模型输入。
+
 **Goal:** 在当前模型配置体验中增加模型能力加载和上下文上限配置，保留手动输入兜底。
 
 **Files:**
@@ -269,15 +271,15 @@ Expected: 可新增、选择、切换和删除工作区；磁盘目录不受影�
 - Modify: `mboo-web/src/features/context-rail/context-rail.tsx`
 - Modify: `mboo-web/src/features/context-rail/context-rail.module.css`
 
-- [ ] **Step 1: 增加模型详情和上下文配置状态**
+- [x] **Step 1: 增加模型详情和上下文配置状态**
 
 模型名称变化时并行加载模型详情与上下文上限；响应的 `modelId` 与当前模型不一致时丢弃，避免快速切换模型造成旧请求覆盖新状态。模型详情失败时保留候选/手动输入，但禁止在能力未知时发送需要能力校验的任务。
 
-- [ ] **Step 2: 以当前主题实现上下文上限控件**
+- [x] **Step 2: 以当前主题实现上下文上限控件**
 
 在当前设置区或 `ContextRail` 增加紧凑信息块：显示有效上限、最大上限和是否可调；可调模型显示滑块、保存和恢复默认按钮。控件使用当前 CSS Module 的语义颜色和尺寸，不新增全局主题变量。
 
-- [ ] **Step 3: 验证模型切换和配置持久化**
+- [x] **Step 3: 验证模型切换和配置持久化**
 
 ```bash
 rtk run env -u NODE_OPTIONS npx tsc --noEmit --project mboo-web/tsconfig.json
