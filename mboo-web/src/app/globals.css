@@ -37,9 +37,6 @@
   --qq-shadow: rgba(22, 89, 139, 0.2);
   --qq-titlebar-height: 46px;
   --qq-profile-height: 52px;
-  --qq-composer-toolbar-height: 30px;
-  --qq-composer-editor-min-height: 92px;
-  --qq-composer-status-height: 38px;
   --panel-shadow: 0 1px 0 rgb(255 255 255 / 0.75), 0 2px 6px rgb(18 79 137 / 0.14);
   --dock-shadow: 0 2px 8px rgb(18 79 137 / 0.16);
   --radius-sm: 3px;
@@ -59,8 +56,6 @@
       #00479e 97%,
       #75aae5 100%
     );
-  --qq-button: linear-gradient(180deg, #f8fcff 0%, #dff2ff 48%, #c7e7fb 100%);
-  --qq-button-primary: linear-gradient(180deg, #59c0f7 0%, #2397e4 48%, #0f78c8 100%);
   --qq-window: linear-gradient(180deg, #71bdff 0%, #2b91f2 48%, #0866cc 52%, #0b56b2 100%);
   --qq-window-close: linear-gradient(180deg, #ff9675 0%, #f15e38 46%, #d63618 52%, #aa210e 100%);
   --qq-selected: linear-gradient(180deg, #f5fbff 0%, #ccecff 43%, #9fd3f3 100%);
@@ -219,25 +214,6 @@
   background-size: 30px 30px;
 }
 
-.qq-titlebar-status {
-  border-color: rgb(255 255 255 / 0.35) !important;
-  background: rgb(8 48 104 / 0.28) !important;
-  color: #f4fbff !important;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22);
-}
-
-.qq-titlebar-status[data-running="true"] {
-  border-color: rgb(255 196 120 / 0.55) !important;
-  background: rgb(214 107 19 / 0.28) !important;
-  color: #ffe7c2 !important;
-}
-
-.qq-titlebar-status[data-error="true"] {
-  border-color: rgb(255 160 140 / 0.55) !important;
-  background: rgb(201 50 32 / 0.3) !important;
-  color: #ffd7cf !important;
-}
-
 textarea {
   font-size: 16px;
 }
@@ -248,32 +224,10 @@ textarea {
   }
 }
 
-/* 整窗外壳 */
+/* 整窗外壳：宽度与原型画板由 workbench-layout.module.css 统一控制 */
 .qq-shell {
-  border: 1px solid var(--line-strong);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.35), var(--dock-shadow);
-  background: #eff9ff;
-}
-
-/* 标题栏：46px + 顶暗边 + 底浅边 + 像素窗口按钮 */
-.qq-titlebar {
-  height: var(--qq-titlebar-height);
-  min-height: var(--qq-titlebar-height);
-  border-top: 1px solid #002f7d;
-  border-bottom: 1px solid #83b5ea;
-  background: var(--qq-titlebar);
-  box-shadow:
-    inset 0 2px 3px rgb(0 26 82 / 0.82),
-    inset 0 -1px rgb(197 226 255 / 0.72);
-  color: #f4fbff;
-}
-
-.qq-titlebar-title {
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.1px;
-  text-shadow: 1px 1px 2px rgba(0, 28, 92, 0.82);
+  border: 0;
+  background: #fff;
 }
 
 /* 设计决策：顶栏时代感保留，但非功能项必须“看起来也不能点” */
@@ -290,40 +244,6 @@ textarea {
 .qq-chrome-deco-label {
   letter-spacing: 0.02em;
 }
-
-/* 真实窗体动作：保留 QQ 立体按钮，但用短文案说清语义 */
-.qq-window-action {
-  position: relative;
-  min-width: 40px;
-  height: 24px;
-  padding: 0 6px;
-  border: 1px solid rgba(0, 47, 125, 0.55);
-  border-radius: 3px;
-  background: linear-gradient(180deg, #71bdff 0%, #2b91f2 48%, #0866cc 52%, #0b56b2 100%);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.55),
-    0 1px 0 rgb(0 40 90 / 0.2);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  text-shadow: 0 1px 1px rgba(0, 35, 105, 0.75);
-}
-
-.qq-window-action:hover {
-  filter: brightness(1.06);
-}
-
-.qq-window-action:active {
-  transform: translateY(1px);
-}
-
-.qq-window-action-danger {
-  border-color: rgba(169, 58, 24, 0.75);
-  background: linear-gradient(180deg, #ff9675 0%, #f15e38 46%, #d63618 52%, #aa210e 100%);
-}
-
-
 
 /* 像素窗口按钮：不用 Lucide 线性图标 */
 .qq-window-button,
@@ -414,78 +334,6 @@ textarea {
 .qq-window-close:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
-}
-
-.qq-button {
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--qq-button);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.9),
-    0 1px 0 rgb(18 79 137 / 0.08);
-  color: var(--text-1);
-  transition: filter 100ms ease-out, transform 100ms ease-out;
-}
-
-.qq-button:hover:not(:disabled) {
-  filter: brightness(1.03);
-}
-
-.qq-button:active:not(:disabled) {
-  transform: translateY(1px);
-  filter: brightness(0.98);
-}
-
-.qq-button:disabled {
-  /* 设计决策：禁用态用降饱和表面，而不是把文字透明度压到难读 */
-  border-color: color-mix(in oklab, var(--line) 80%, white);
-  background: linear-gradient(180deg, #f7fbff 0%, #e8f3fb 100%);
-  color: #5c7892;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.7);
-  opacity: 1;
-  cursor: not-allowed;
-  transform: none;
-  filter: none;
-}
-
-.qq-button:focus-visible,
-.qq-button-primary:focus-visible,
-.qq-window-action:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.qq-button-primary {
-  border: 1px solid #0b6eb8;
-  border-radius: var(--radius-sm);
-  background: var(--qq-button-primary);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.55),
-    0 1px 0 rgb(18 79 137 / 0.12);
-  color: #fff;
-  font-weight: 600;
-  transition: filter 100ms ease-out, transform 100ms ease-out;
-}
-
-.qq-button-primary:hover:not(:disabled) {
-  filter: brightness(1.04);
-}
-
-.qq-button-primary:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-.qq-button-primary:disabled,
-.qq-button-locked {
-  border-color: #8eb6d4 !important;
-  background: linear-gradient(180deg, #d7ebf8 0%, #b7d7ef 52%, #9fc8e5 100%) !important;
-  color: #f7fbff !important;
-  text-shadow: 0 1px 0 rgb(18 79 137 / 0.18);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.35) !important;
-  opacity: 1 !important;
-  filter: none !important;
-  cursor: not-allowed !important;
-  transform: none;
 }
 
 /* 左栏 */
@@ -626,200 +474,13 @@ textarea {
   background: color-mix(in oklab, var(--panel-muted) 70%, white);
 }
 
-/* 主区 */
-.qq-main-surface {
-  contain: layout paint style;
-  background: linear-gradient(180deg, #f7fcff 0 38px, #fff 38px 100%);
-  border-left: 1px solid transparent;
-  box-shadow: inset 0 0 0 1px #eaf6ff;
-}
+/* 输入器基础结构已迁移至 mboo-office-light.css，此处不再保留同名旧 QQ 规则 */
 
-/* 底色只画在非滚动宿主上；避免画在 scroller 上随滚动重绘 */
-.qq-thread {
-  background: transparent;
-  color: var(--text-1);
-}
-
-.qq-thread p,
-.qq-thread li {
-  font-size: 14px;
-  line-height: 1.65;
-}
-
-/* 输入器：30 / 92 / 38 */
-.qq-composer {
-  position: relative;
-  contain: layout paint style;
-  overflow: hidden;
-  border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  background: #fff;
-  box-shadow: inset 0 1px #fff, 0 1px 2px rgba(22, 89, 139, 0.18);
-  min-height: calc(
-    var(--qq-composer-toolbar-height) +
-      var(--qq-composer-editor-min-height) +
-      var(--qq-composer-status-height) +
-      2px
-  );
-}
-
-.qq-composer-toolbar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: var(--qq-composer-toolbar-height);
-  height: var(--qq-composer-toolbar-height);
-  padding: 0 0.5rem;
-  border-bottom: 1px solid #82b9dd;
-  background: linear-gradient(180deg, #fafdff 0%, #dff2ff 58%, #c7e8fb 100%);
-  box-shadow: inset 0 1px #fff, inset 0 -1px rgba(255, 255, 255, 0.55);
-}
-
-/* 设计决策：sprite 只做时代纹理，禁止像可点工具 */
-.qq-composer-toolbar::before {
-  content: "";
-  position: absolute;
-  top: 4px;
-  left: 8px;
-  width: 132px;
-  height: 18px;
-  background: url("/qq2007/composer-toolbar-icons.png") 0 0 / 132px 18px no-repeat;
-  opacity: 0.28;
-  filter: grayscale(0.15);
-  pointer-events: none;
-  user-select: none;
-}
-
-.qq-composer-toolbar-actions {
-  position: relative;
-  z-index: 1;
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.qq-composer-editor {
-  min-height: var(--qq-composer-editor-min-height);
-  border-bottom: 1px solid #9cc8e5;
-  background: #fff;
-  box-shadow: inset 0 1px 2px rgba(31, 91, 133, 0.08);
-}
-
-.qq-composer-editor textarea {
-  min-height: var(--qq-composer-editor-min-height);
-  width: 100%;
-  resize: none;
-  border: 0;
-  background: transparent;
-  padding: 10px 12px 8px;
-  color: var(--text-1);
-  caret-color: var(--qq-blue-700);
-  font: 13px / 20px var(--font-sans);
-  outline: none;
-}
-
-.qq-composer-editor textarea:focus-visible {
-  /* 设计决策：输入器外框已有边线，焦点只在编辑区给橙黄描边，避免双层边框打架 */
-  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--focus) 70%, transparent);
-}
-
-.qq-composer-statusbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-height: var(--qq-composer-status-height);
-  height: var(--qq-composer-status-height);
-  padding: 0 0.5rem;
-  background: linear-gradient(180deg, #edf8ff, #d9effd);
-}
-
-.qq-input {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: #fff;
-  box-shadow: inset 0 1px 2px rgb(18 79 137 / 0.08);
-}
-
-.qq-input:focus,
-.qq-input:focus-within,
 .qq-search-field:focus-within {
   border-color: var(--focus);
   box-shadow:
     inset 0 1px 2px rgb(18 79 137 / 0.08),
     0 0 0 1px color-mix(in oklab, var(--focus) 55%, transparent);
-}
-
-/* 虚拟列表滚动容器：减少整页连带回弹 */
-.qq-thread {
-  overscroll-behavior: contain;
-}
-
-/* 会话主列宿主：稳定底色 + 稳定滚动槽，避免 scroller 挂载/量高时闪屏 */
-.qq-thread-host {
-  background: linear-gradient(180deg, #fbfdff, #fff 22%, #f8fcff 100%);
-  color: var(--text-1);
-}
-
-.qq-thread-scroller {
-  background: transparent !important;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-/* 右栏：QQ Show + 标签皮肤 */
-.qq-right-rail {
-  position: relative;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.12)) 0 0 / 100% 22px no-repeat,
-    linear-gradient(180deg, #f9fdff 0%, #edf8ff 100%);
-  border-left: 1px solid #5fa7da;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.84);
-}
-
-.qq-right-show {
-  margin: 0.35rem auto 0.15rem;
-  width: 70px;
-  height: 96px;
-  min-height: 96px;
-  flex: 0 0 96px;
-  border: 1px solid #78b8e3;
-  border-radius: 2px;
-  background:
-    url("/qq2007/right-qqshow.png") center top / 70px 140px no-repeat,
-    linear-gradient(180deg, #e5f5ff, #cceaff);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.75);
-  opacity: 0.92;
-  contain: strict;
-  content-visibility: auto;
-  contain-intrinsic-size: 70px 96px;
-}
-
-.qq-right-label-fallback {
-  display: flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 0.5rem;
-  border-top: 1px solid #78b8e3;
-  border-bottom: 1px solid #78b8e3;
-  background: linear-gradient(180deg, #d8efff, #a9d9f8);
-  color: var(--text-1);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.qq-jump-bottom {
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: linear-gradient(180deg, #ffffff 0%, #e7f5ff 100%);
-  box-shadow: var(--panel-shadow);
-  color: var(--text-2);
-}
-
-.qq-jump-bottom:hover {
-  color: var(--text-1);
 }
 
 /* 经典 15px 滚动条 */
@@ -895,17 +556,7 @@ textarea {
 }
 
 /* 响应式断点对齐主题包 720 / 900 / 1180（内容驱动，而非设备名） */
-@media (max-width: 1179px) {
-  .qq-right-rail-desktop {
-    display: none !important;
-  }
-}
-
 @media (max-width: 900px) {
-  .qq-titlebar-title {
-    max-width: 9rem;
-  }
-
   /* 平板/窄桌面：侧栏未常驻前，会话行操作保持可点，不依赖 hover */
   .session-row-actions {
     display: flex !important;
@@ -923,61 +574,6 @@ textarea {
     padding-bottom: env(safe-area-inset-bottom);
   }
 
-  .qq-titlebar {
-    height: auto;
-    min-height: 44px;
-    gap: 0.35rem;
-    padding-top: 0.25rem;
-    padding-bottom: 0.25rem;
-  }
-
-  .qq-titlebar-title {
-    max-width: 6.5rem;
-    font-size: 12px;
-  }
-
-  .qq-titlebar-status {
-    max-width: 5.5rem;
-  }
-
-  .qq-titlebar-status .qq-titlebar-status-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .qq-window-action {
-    min-width: 44px;
-    min-height: 36px;
-    height: 36px;
-    padding: 0 8px;
-    font-size: 12px;
-  }
-
-  .qq-composer-toolbar {
-    min-height: 36px;
-    height: 36px;
-  }
-
-  .qq-composer-toolbar::before {
-    opacity: 0.16;
-    left: 6px;
-    top: 8px;
-  }
-
-  .qq-composer-editor textarea {
-    min-height: 88px;
-    font-size: 16px; /* 避免 iOS 聚焦自动放大 */
-    line-height: 1.5;
-  }
-
-  .qq-composer-statusbar {
-    min-height: 44px;
-    height: auto;
-    padding-top: 0.35rem;
-    padding-bottom: 0.35rem;
-  }
-
   .qq-profile {
     min-height: 56px;
     padding: 0.55rem 0.65rem;
@@ -992,16 +588,6 @@ textarea {
     min-height: 40px;
   }
 
-  .qq-thread {
-    /* 给底部输入器更多呼吸，减少贴边压迫 */
-    padding-bottom: 0.25rem;
-  }
-
-  /* 窄屏表单控件统一 16px，避免 iOS 缩放打断任务流 */
-  .qq-composer .qq-input,
-  .qq-composer select.qq-input {
-    font-size: 16px;
-  }
 }
 
 /* 触控主设备：不依赖 hover 的会话操作与更稳的按下反馈 */
@@ -1010,40 +596,14 @@ textarea {
     display: flex !important;
   }
 
-  .qq-button:hover:not(:disabled),
-  .qq-button-primary:hover:not(:disabled),
-  .qq-session-row:hover,
-  .qq-window-action:hover {
+  .qq-session-row:hover {
     filter: none;
   }
 }
 
 /* 矮视口（手机横屏/分屏）：压缩装饰与输入器，把高度留给消息阅读 */
 @media (max-height: 520px) {
-  .qq-titlebar {
-    min-height: 40px;
-    height: auto;
-    padding-top: 0.15rem;
-    padding-bottom: 0.15rem;
-  }
-
-  .qq-composer-toolbar {
-    display: none;
-  }
-
-  .qq-composer-editor,
-  .qq-composer-editor textarea {
-    min-height: 56px !important;
-  }
-
-  .qq-composer-statusbar {
-    min-height: 36px;
-    height: auto;
-  }
-
-  .qq-composer {
-    min-height: 0;
-  }
+  /* 输入器矮视口规则已迁移至 mboo-office-light.css */
 }
 
 @media (max-height: 520px) and (orientation: landscape) {
@@ -1066,20 +626,14 @@ textarea {
     animation: none !important;
   }
 
-  .qq-button,
-  .qq-button-primary,
   .qq-window-button,
   .qq-window-close,
-  .qq-window-action,
   .qq-session-row {
     transition: none;
   }
 
-  .qq-button:active,
-  .qq-button-primary:active,
   .qq-window-button:active,
-  .qq-window-close:active,
-  .qq-window-action:active {
+  .qq-window-close:active {
     transform: none;
   }
 }
@@ -1343,7 +897,7 @@ textarea {
   appearance: none;
   border: 1px solid var(--line);
   border-radius: 2px;
-  background: var(--qq-button);
+  background: #ffffff;
   color: var(--text-2);
   font-size: 0.72rem;
   line-height: 1;
@@ -1517,10 +1071,8 @@ textarea {
   }
 }
 
-/* polish: 占位符保持可读，避免过浅灰 */
-.qq-input::placeholder,
-.qq-search-field input::placeholder,
-.qq-composer-editor textarea::placeholder {
+/* polish: 搜索占位符保持可读，避免过浅灰 */
+.qq-search-field input::placeholder {
   color: #6a849c;
   opacity: 1;
 }

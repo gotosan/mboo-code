@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "dev": "next dev -H 0.0.0.0 -p 3001",
     "build": "next build",
     "start": "next start"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.9",
     "lucide-react": "^1.25.0",
     "markstream-react": "^0.0.55",
     "next": "16.2.10",
