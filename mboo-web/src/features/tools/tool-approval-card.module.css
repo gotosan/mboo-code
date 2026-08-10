@@ -1,0 +1,333 @@
+.card {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  width: 100%;
+  max-block-size: min(320px, 36svh);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid rgb(153 106 241 / 30%);
+  border-radius: 12px;
+  background: rgb(153 106 241 / 10%);
+  color: #080807;
+  transform-origin: bottom center;
+  animation: approval-card-arrive 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.decisionImpact {
+  animation: approval-decision-impact 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 从授权卡中心扩散一层确认光晕，保持真实卡片内容和尺寸不变。 */
+.decisionBurst {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 2px solid rgb(92 21 224 / 30%);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: approval-decision-burst 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.headerCopy {
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  color: #5c15e0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 0;
+  color: #8b8b84;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.metaText,
+.metaPath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metaPath {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.waitingDot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+  animation: approval-waiting-pulse 1.6s ease-in-out infinite;
+}
+
+.statusWaiting,
+.statusSubmitting,
+.statusStarted {
+  border: 1px solid rgb(242 152 74 / 30%);
+  background: #fff;
+  color: #f2984a;
+}
+
+.statusCompleted {
+  background: rgb(87 219 180 / 16%);
+  color: #1e9e7c;
+}
+
+.statusFailed {
+  background: rgb(235 86 86 / 10%);
+  color: #eb5656;
+}
+
+.details {
+  display: flex;
+  min-block-size: 0;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: #d2d2d2 transparent;
+}
+
+.details::-webkit-scrollbar {
+  width: 8px;
+}
+
+.details::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #d2d2d2;
+  background-clip: padding-box;
+}
+
+.description,
+.stage,
+.error,
+.commandNote {
+  margin: 0;
+}
+
+.description {
+  color: #575547;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: pre-wrap;
+}
+
+.stage,
+.commandNote {
+  max-block-size: 32px;
+  overflow: hidden;
+  color: #8b8b86;
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+
+.valueBox {
+  max-block-size: 156px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid #e6e6e6;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.valueText {
+  margin: 0;
+  color: #35352c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pathNote {
+  margin: 4px 0 0;
+  color: #8b8b86;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.error {
+  color: #bc4a4a;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+  background: rgb(153 106 241 / 10%);
+}
+
+.action {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border: 1px solid #e6e6e6;
+  border-radius: 999px;
+  background: #fff;
+  color: #575547;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.action:hover:not(:disabled) {
+  background: #f4f4f5;
+}
+
+.action:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.action:focus-visible {
+  outline: 2px solid #5c15e0;
+  outline-offset: 2px;
+}
+
+.action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.allowOnce {
+  border-color: #5c15e0;
+  background: #5c15e0;
+  color: #fff;
+}
+
+.allowOnce:hover:not(:disabled) {
+  background: #4b10bd;
+}
+
+.allowSession {
+  color: #1e9e7c;
+}
+
+.allowSession:hover:not(:disabled) {
+  background: rgb(87 219 180 / 16%);
+}
+
+.deny {
+  color: #eb5656;
+}
+
+.deny:hover:not(:disabled) {
+  background: rgb(235 86 86 / 10%);
+}
+
+@keyframes approval-decision-impact {
+  0% {
+    box-shadow: 0 0 0 0 rgb(92 21 224 / 0%);
+    transform: scale(1);
+  }
+
+  26% {
+    box-shadow: 0 0 0 4px rgb(92 21 224 / 18%);
+    transform: scale(0.995);
+  }
+
+  100% {
+    box-shadow: 0 0 0 10px rgb(92 21 224 / 0%);
+    transform: scale(1);
+  }
+}
+
+@keyframes approval-decision-burst {
+  0% {
+    opacity: 0.65;
+    transform: scale(0.98);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+}
+
+@keyframes approval-card-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes approval-waiting-pulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .decisionImpact,
+  .decisionBurst,
+  .waitingDot {
+    animation: none;
+  }
+
+  .waitingDot {
+    opacity: 0.8;
+    transform: none;
+  }
+
+  .action:active:not(:disabled) {
+    transform: none;
+  }
+}

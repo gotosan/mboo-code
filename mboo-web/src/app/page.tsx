@@ -2,33 +2,31 @@
 
 import type { FormEvent } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
-  Archive,
   ChevronDown,
   ChevronRight,
-  Copy,
   FolderOpen,
   LoaderCircle,
-  Menu,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  Save,
-  Shrink,
-  Square,
-  Trash2,
   X,
 } from "lucide-react";
-import AssistantMarkdown from "@/components/assistant-markdown";
+import { TaskComposer } from "@/features/composer/task-composer";
+import { ContextRail } from "@/features/context-rail/context-rail";
+import { WorkbenchHeader } from "@/features/workbench/workbench-header";
+import layoutStyles from "@/features/workbench/workbench-layout.module.css";
+import { ConversationLoadingState, ConversationStatusPanel } from "@/features/conversation/conversation-status-panel";
+import { MessageList } from "@/features/conversation/message-list";
+import { SessionListPanel } from "@/features/sessions/session-list-panel";
+import sidebarStyles from "@/features/sessions/session-sidebar.module.css";
+import type { SessionConfirmAction, SessionInfo as FeatureSessionInfo, SessionListTab as FeatureSessionListTab, WorkspaceInfo as FeatureWorkspaceInfo } from "@/features/sessions/session-types";
+import { ToolApprovalCard } from "@/features/tools/tool-approval-card";
 import { readSessionEventStream } from "@/lib/session-stream";
 import type {
   AssistantMessageState,
   ChatReq,
+  ModelContextLimit,
+  ContextCompressionPayload,
   ContextCompressionState,
   ContextUsageSnapshot,
-  ModelContextLimit,
-  ModelInfo,
   PermissionMode,
   SessionEvent,
   ToolApprovalDecision,
@@ -42,19 +40,10 @@ const STORAGE_KEYS = {
   modelName: "mboo-web.modelName",
   reasoningEffort: "mboo-web.reasoningEffort",
   sessionPreviews: "mboo-web.sessionPreviews",
-  collapsedSidebarGroups: "mboo-web.collapsedSidebarGroups",
+  recentInputs: "mboo-web.recentInputs",
 };
 
-const REASONING_LABELS: Record<string, string> = {
-  default: "默认",
-  none: "关闭",
-  minimal: "最低",
-  low: "低",
-  medium: "中",
-  high: "高",
-  xhigh: "极高",
-  max: "最高",
-};
+const RECENT_INPUT_LIMIT = 5;
 
 const TOOL_LABELS: Record<string, string> = {
   glob_files: "查找文件",
@@ -76,13 +65,9 @@ const FILE_TOOL_NAMES = new Set([
 /** 新建会话在拿到后端 sessionId 前，消息暂存用的本地键 */
 const PENDING_SESSION_KEY = "__pending__";
 
-/** 距底部小于该值视为贴底，用于流式跟随与“回到底部”按钮 */
-const NEAR_BOTTOM_PX = 120;
-
 type MessageRole = "user" | "assistant" | "system";
 type MessageState = AssistantMessageState | "streaming" | "info";
 type ConnectionState = "idle" | "running" | "error";
-type ModelInfoState = "idle" | "loading" | "ready" | "error";
 
 type ToolCallView = {
   id: string;
@@ -108,8 +93,6 @@ type ToolCallView = {
   approvalCount?: number;
 };
 
-type ToolResultLoader = (resultId: string, force?: boolean) => Promise<ToolResultDetail>;
-
 // 助手消息按事件序交错：text / tool，避免工具永远沉底
 type AssistantTextPart = {
   type: "text";
@@ -133,7 +116,6 @@ type ChatMessage = {
   turnId?: string | null;
   createdAt?: string;
   modelName?: string;
-  contextUsage?: ContextUsageSnapshot | null;
   /** 助手时间线；有值时渲染以 parts 为准 */
   parts?: AssistantPart[];
   /** 由 parts 派生，供授权统计等复用 */
@@ -155,18 +137,6 @@ type SessionInfo = {
   updatedAt?: string | null;
   archivedAt?: string | null;
   metadataJson?: string | null;
-};
-
-type WorkspaceInfo = {
-  id: string;
-  name: string;
-  path: string;
-  available: boolean;
-  createdAt?: string | null;
-};
-
-type WorkspaceDeleteResp = {
-  deletedSessionCount: number;
 };
 
 type ApiResponse<T> = {
@@ -193,23 +163,22 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<SessionInfo[]>([]);
-  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [sessionListTab, setSessionListTab] =
     useState<SessionListTab>("active");
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState("");
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
   const [modelName, setModelName] = useState("");
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelOptionsError, setModelOptionsError] = useState("");
   const [isLoadingModelOptions, setIsLoadingModelOptions] = useState(true);
-  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
-  const [modelInfoState, setModelInfoState] = useState<ModelInfoState>("idle");
-  const [modelInfoError, setModelInfoError] = useState("");
+  const [isManualModel, setIsManualModel] = useState(true);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
   const [modelContextLimit, setModelContextLimit] = useState<ModelContextLimit | null>(null);
-  const [modelContextLimitError, setModelContextLimitError] = useState("");
-  const [reasoningEffort, setReasoningEffort] = useState("");
   const [contextUsage, setContextUsage] = useState<ContextUsageSnapshot | null>(null);
+  const [compressionState, setCompressionState] = useState<ContextCompressionState | null>(null);
+  const [compressionMessage, setCompressionMessage] = useState("");
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [reasoningEffort, setReasoningEffort] = useState("");
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -219,21 +188,22 @@ export default function Home() {
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  // 主动上下文压缩运行状态：运行期间禁用发送和重复压缩
-  const [isCompressing, setIsCompressing] = useState(false);
   // 正在打开的目标会话：拉取完成前不切换主线程，只做侧栏高亮与轻量进度
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
+  // 内联两步确认：归档/删除会话（T9，替代原生 window.confirm）
+  const [confirmingAction, setConfirmingAction] = useState<{ type: "archive" | "delete"; id: string } | null>(null);
   const [viewingSessionStatus, setViewingSessionStatus] =
     useState<SessionStatus | null>(null);
+  const [workspaces, setWorkspaces] = useState<FeatureWorkspaceInfo[]>([]);
+  const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(true);
+  const [isSavingWorkspace, setIsSavingWorkspace] = useState(false);
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
+  const [workspaceError, setWorkspaceError] = useState("");
   const [pendingWorkspacePath, setPendingWorkspacePath] = useState("");
   const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [isSelectingWorkspace, setIsSelectingWorkspace] = useState(false);
-  const [isAddingWorkspace, setIsAddingWorkspace] = useState(false);
-  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  const [sidebarGroupsHydrated, setSidebarGroupsHydrated] = useState(false);
   // 移动端会话抽屉与列表过滤（T1/T6）
   const [isSessionDrawerOpen, setIsSessionDrawerOpen] = useState(false);
   // QQ 窗体：左栏折叠与全屏状态映射到标题栏控件
@@ -241,6 +211,21 @@ export default function Home() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   // 移动端任务设置默认折叠摘要；缺模型时强制展开，避免找不到配置
   const [isComposerSettingsOpen, setIsComposerSettingsOpen] = useState(true);
+  const [sessionQuery, setSessionQuery] = useState("");
+  // 最近发送的用户消息：供「重新生成」回填（T8）
+  const lastUserMessageRef = useRef("");
+  // 最近输入历史：供输入框 ↑↓ 浏览（T8 交互增强）
+  const recentInputsRef = useRef<string[]>(
+    (() => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.recentInputs);
+        const parsed: unknown = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+      } catch {
+        return [];
+      }
+    })(),
+  );
   // 错误恢复：保留最近一次失败输入以便重试（T7）
   const [lastFailedInput, setLastFailedInput] = useState("");
   // 会话列表摘要：本地缓存首条用户句，缓解多条「新会话」同质
@@ -251,15 +236,12 @@ export default function Home() {
   const autoTitleAttemptedRef = useRef<Set<string>>(new Set());
 
   const abortControllerRef = useRef<AbortController | null>(null);
-  const compressionAbortRef = useRef<AbortController | null>(null);
-  const isCompressingRef = useRef(false);
   const currentSessionIdRef = useRef("");
   const shouldLoadSessionRef = useRef(false);
   const connectionStateRef = useRef<ConnectionState>("idle");
   const workspaceSelectionVersionRef = useRef(0);
   // 按会话缓存消息，避免串会话 / 切换后丢失流式结果
   const messagesBySessionRef = useRef<Record<string, ChatMessage[]>>({});
-  const contextUsageBySessionRef = useRef<Record<string, ContextUsageSnapshot | null>>({});
   // 当前 SSE 归属的会话键（新建时先为 pending）
   const streamSessionKeyRef = useRef<string>(PENDING_SESSION_KEY);
   const pendingLocalUserIdRef = useRef<string | null>(null);
@@ -269,27 +251,20 @@ export default function Home() {
   const sessionDrawerPanelRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const workspaceRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const lastSentModelRef = useRef("");
   const modelOptionsRef = useRef<string[]>([]);
   const modelNameRef = useRef("");
+  const contextUsageBySessionRef = useRef<Record<string, ContextUsageSnapshot | null>>({});
+  const compressionAbortControllerRef = useRef<AbortController | null>(null);
   const isRunning = connectionState === "running";
   const highlightedSessionId = openingSessionId || sessionId;
   const isSessionSwitching = Boolean(openingSessionId) || isLoadingHistory;
 
-  const applyModelName = useCallback((value: string, restoredUsage: ContextUsageSnapshot | null = null) => {
+  const applyModelName = useCallback((value: string, manual?: boolean) => {
     const nextValue = value.trim();
-    const changed = modelNameRef.current !== nextValue;
     modelNameRef.current = nextValue;
     setModelName(nextValue);
-    if (changed || !nextValue) {
-      setModelInfo(null);
-      setModelInfoState(nextValue ? "loading" : "idle");
-      setModelInfoError("");
-      setModelContextLimit(null);
-      setModelContextLimitError("");
-    }
-    setContextUsage(restoredUsage?.modelId === nextValue ? restoredUsage : null);
+    setIsManualModel(manual ?? !modelOptionsRef.current.includes(nextValue));
   }, []);
 
 
@@ -309,17 +284,12 @@ export default function Home() {
     }
     const storedModelName = localStorage.getItem(STORAGE_KEYS.modelName) ?? "";
     lastSentModelRef.current = storedModelName;
+    applyModelName(storedModelName);
     setReasoningEffort(
       localStorage.getItem(STORAGE_KEYS.reasoningEffort) ?? "",
     );
     setSessionPreviews(readSessionPreviewMap());
-    setCollapsedGroups(readCollapsedSidebarGroups());
-    setSidebarGroupsHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (sidebarGroupsHydrated) saveCollapsedSidebarGroups(collapsedGroups);
-  }, [collapsedGroups, sidebarGroupsHydrated]);
+  }, [applyModelName]);
 
   useEffect(() => {
     currentSessionIdRef.current = sessionId;
@@ -340,15 +310,12 @@ export default function Home() {
         modelOptionsRef.current = options;
         setModelOptions(options);
         setModelOptionsError("");
-        const storedModelName = lastSentModelRef.current;
-        const nextModelName = options.includes(storedModelName) ? storedModelName : options[0] || "";
-        applyModelName(nextModelName);
+        const nextModelName = modelNameRef.current || lastSentModelRef.current || options[0] || "";
+        applyModelName(nextModelName, !nextModelName || !options.includes(nextModelName));
       } catch (error) {
         if (!cancelled) {
           setModelOptionsError(toErrorMessage(error));
-          modelOptionsRef.current = [];
-          setModelOptions([]);
-          applyModelName("");
+          setIsManualModel(true);
         }
       } finally {
         if (!cancelled) setIsLoadingModelOptions(false);
@@ -361,60 +328,60 @@ export default function Home() {
   }, [applyModelName]);
 
   useEffect(() => {
-    if (!modelName) {
-      setModelInfo(null);
+    const targetModel = modelName.trim();
+    if (!targetModel) {
       setModelContextLimit(null);
-      setModelInfoState("idle");
+      setContextUsage(null);
       return;
     }
-    const controller = new AbortController();
-    setModelInfo(null);
+
+    let cancelled = false;
     setModelContextLimit(null);
-    setModelInfoState("loading");
-    setModelInfoError("");
-    setModelContextLimitError("");
-    const loadModelInfo = async () => {
+    setContextUsage((current) => current?.modelId === targetModel ? current : null);
+
+    const loadContextLimit = async () => {
       try {
-        const encodedModelName = encodeURIComponent(modelName);
-        const [info, contextLimitResult] = await Promise.all([
-          fetch(`/api/model/${encodedModelName}`, { cache: "no-store", signal: controller.signal }).then((response) => readApiData<ModelInfo>(response)),
-          fetch(`/api/model/${encodedModelName}/context-limit`, { cache: "no-store", signal: controller.signal })
-            .then((response) => readApiData<ModelContextLimit>(response))
-            .then((data) => ({ data, error: "" }))
-            .catch((error) => ({ data: null, error: toErrorMessage(error) })),
-        ]);
-        if (controller.signal.aborted) return;
-        if (!info || info.modelId !== modelName) throw new Error("模型详情响应与当前模型不匹配");
-        const effortValues = getReasoningEffortValues(info);
-        setModelInfo(info);
-        if (contextLimitResult.data?.modelId === modelName) {
-          setModelContextLimit(contextLimitResult.data);
-          setModelContextLimitError("");
-        } else {
-          setModelContextLimit(null);
-          setModelContextLimitError(contextLimitResult.error || "上下文设置响应与当前模型不匹配");
+        const contextLimit = await fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, { cache: "no-store" })
+          .then((response) => readApiData<ModelContextLimit>(response));
+        if (!cancelled && contextLimit?.modelId === targetModel) {
+          setModelContextLimit(contextLimit);
         }
-        setModelInfoState("ready");
-        setReasoningEffort((current) => !current || effortValues.includes(current) ? current : "");
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setModelInfo(null);
-        setModelContextLimit(null);
-        setModelInfoState("error");
-        setModelInfoError(toErrorMessage(error));
+      } catch {
+        if (!cancelled) {
+          setModelContextLimit(null);
+        }
       }
     };
-    void loadModelInfo();
-    return () => controller.abort();
+
+    void loadContextLimit();
+    return () => {
+      cancelled = true;
+    };
   }, [modelName]);
 
-  const reasoningOptions = useMemo(() => {
-    const values = modelInfo ? getReasoningEffortValues(modelInfo) : [];
-    return [{ value: "", label: "供应商默认" }, ...values.map((value) => ({ value, label: REASONING_LABELS[value] ?? value }))];
-  }, [modelInfo]);
-  const hasReasoningOptions = reasoningOptions.length > 1;
-  const isReasoningEffortValid = !reasoningEffort || reasoningOptions.some((option) => option.value === reasoningEffort);
-  const isModelReady = modelInfoState === "ready" && modelInfo?.modelId === modelName;
+  const changePermissionMode = useCallback(async (nextMode: PermissionMode) => {
+    const previousMode = permissionMode;
+    setPermissionMode(nextMode);
+    const targetSessionId = currentSessionIdRef.current;
+    if (!targetSessionId) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/session/${encodeURIComponent(targetSessionId)}/permission-mode`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: nextMode }),
+      });
+      const updated = await readApiData<SessionInfo>(response);
+      if (updated) {
+        setSessions((current) => upsertSession(current, updated));
+      }
+      setSessionMessage(nextMode === "FULL_ACCESS" ? "当前会话已切换为完全访问" : "当前会话已恢复默认权限");
+    } catch (error) {
+      setPermissionMode(previousMode);
+      setSessionMessage(`权限模式切换失败：${toErrorMessage(error)}`);
+    }
+  }, [permissionMode]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -877,12 +844,37 @@ export default function Home() {
     if (sessionMessages) {
       for (let index = sessionMessages.length - 1; index >= 0; index -= 1) {
         const message = sessionMessages[index];
-        const candidate = message.role === "user" ? message.modelName?.trim() : "";
-        if (candidate && modelOptionsRef.current.includes(candidate)) return candidate;
+        if (message.role === "user" && message.modelName?.trim()) return message.modelName.trim();
       }
     }
-    return modelOptionsRef.current.includes(lastSentModelRef.current) ? lastSentModelRef.current : modelOptionsRef.current[0] || "";
+    return lastSentModelRef.current || modelOptionsRef.current[0] || "";
   }, []);
+
+  const rememberContextUsage = useCallback((sessionKey: string, usage: ContextUsageSnapshot | null | undefined) => {
+    contextUsageBySessionRef.current[sessionKey] = usage ?? null;
+    if (isViewingSessionKey(sessionKey)) {
+      setContextUsage(usage ?? null);
+    }
+  }, [isViewingSessionKey]);
+
+  const handleCompressionEvent = useCallback((
+    sessionKey: string,
+    event: Extract<SessionEvent, { type: "CONTEXT_COMPRESSION" }>,
+  ) => {
+    const payload = event.payload;
+    if (isViewingSessionKey(sessionKey)) {
+      setCompressionState(payload.state);
+      setCompressionMessage(compressionSystemText(payload));
+    }
+    commitSessionMessages(sessionKey, (current) => upsertMessageSnapshot(current, {
+      id: `compression_${payload.compressionId}_${payload.state}`,
+      role: "system",
+      text: compressionSystemText(payload),
+      state: payload.state === "failed" ? "error" : "info",
+      turnId: event.turnId,
+      createdAt: event.createdAt,
+    }));
+  }, [commitSessionMessages, isViewingSessionKey]);
 
   const handleSessionEvent = useCallback(
     (event: SessionEvent) => {
@@ -905,6 +897,16 @@ export default function Home() {
 
       if (event.type !== "ERROR" && isViewingSessionKey(targetKey)) {
         setErrorMessage("");
+      }
+
+      if (event.type === "CONTEXT_USAGE_UPDATED") {
+        rememberContextUsage(targetKey, event.payload);
+        return;
+      }
+
+      if (event.type === "CONTEXT_COMPRESSION") {
+        handleCompressionEvent(targetKey, event);
+        return;
       }
 
       if (event.type === "USER_MESSAGE") {
@@ -937,17 +939,6 @@ export default function Home() {
         return;
       }
 
-      if (event.type === "CONTEXT_USAGE_UPDATED") {
-        const usage = normalizeContextUsage(event.payload);
-        if (!usage) return;
-        contextUsageBySessionRef.current[targetKey] = usage;
-        commitSessionMessages(targetKey, (current) => current.map((message) =>
-          message.id === event.payload.messageId ? { ...message, contextUsage: usage } : message,
-        ));
-        if (isViewingSessionKey(targetKey) && modelNameRef.current === usage.modelId) setContextUsage(usage);
-        return;
-      }
-
       if (event.type === "ASSISTANT_MESSAGE_DELTA") {
         const messageId = event.payload.messageId || event.eventId;
         appendAssistantDelta(targetKey, messageId, event.payload.text || "", event);
@@ -961,15 +952,13 @@ export default function Home() {
       }
 
       if (event.type === "ASSISTANT_MESSAGE") {
+        if (event.payload.contextUsage) {
+          rememberContextUsage(targetKey, event.payload.contextUsage);
+        }
         // 完整消息以服务端文本为准；保留已按事件序排好的 tool parts
         const messageId = event.payload.messageId || event.eventId;
         dropPendingAssistantDelta(targetKey, messageId);
         flushPendingAssistantDeltas();
-        const terminalUsage = normalizeContextUsage(event.payload.contextUsage);
-        if (terminalUsage) {
-          contextUsageBySessionRef.current[targetKey] = terminalUsage;
-          if (isViewingSessionKey(targetKey) && modelNameRef.current === terminalUsage.modelId) setContextUsage(terminalUsage);
-        }
         commitSessionMessages(targetKey, (current) => {
           const index = current.findIndex((item) => item.id === messageId);
           const finalText = event.payload.text || "";
@@ -983,7 +972,6 @@ export default function Home() {
                 state: event.payload.state,
                 turnId: event.turnId,
                 createdAt: event.createdAt,
-                contextUsage: terminalUsage,
                 parts: applyFinalAssistantText(undefined, finalText, messageId),
               }),
             ];
@@ -995,7 +983,6 @@ export default function Home() {
             state: event.payload.state,
             turnId: existing.turnId || event.turnId,
             createdAt: existing.createdAt || event.createdAt,
-            contextUsage: terminalUsage ?? existing.contextUsage,
             parts: applyFinalAssistantText(existing.parts, finalText, messageId),
           });
           return next;
@@ -1013,63 +1000,6 @@ export default function Home() {
           setConnectionState("error");
           setErrorMessage(event.payload.errorMessage || "本轮会话执行失败");
           setActiveTurnId(null);
-        }
-        return;
-      }
-
-      if (event.type === "CONTEXT_COMPRESSION") {
-        const payload = event.payload;
-        const compressionId = payload.compressionId || event.eventId;
-        const view = describeCompressionState(payload.state, payload.errorMessage, false);
-        commitSessionMessages(targetKey, (current) => {
-          const id = `compression_${compressionId}`;
-          const message: ChatMessage = {
-            id,
-            role: "system",
-            text: view.text,
-            state: view.state,
-            turnId: event.turnId,
-            createdAt: event.createdAt,
-          };
-          const index = current.findIndex((item) => item.id === id);
-          if (index < 0) {
-            return [...current, message];
-          }
-          const next = [...current];
-          next[index] = { ...next[index], ...message, createdAt: next[index].createdAt || event.createdAt };
-          return next;
-        });
-        if (payload.state === "completed") {
-          // 压缩成功后旧 usage 失效，等待本轮主模型产生的新 usage
-          contextUsageBySessionRef.current[targetKey] = null;
-          if (isViewingSessionKey(targetKey)) {
-            setContextUsage(null);
-          }
-        }
-        if (payload.state === "failed" && payload.trigger === "auto") {
-          // 自动压缩失败：本次用户消息未进入正式会话，移除乐观消息并恢复输入
-          const localUserId = pendingLocalUserIdRef.current;
-          pendingLocalUserIdRef.current = null;
-          let restoredText = "";
-          if (localUserId) {
-            commitSessionMessages(targetKey, (current) => {
-              const index = current.findIndex((item) => item.id === localUserId);
-              if (index < 0) {
-                return current;
-              }
-              restoredText = current[index].text;
-              return current.filter((item) => item.id !== localUserId);
-            });
-          }
-          if (isViewingSessionKey(targetKey)) {
-            setConnectionState("error");
-            setErrorMessage(view.text);
-            setActiveTurnId(null);
-            if (restoredText) {
-              setLastFailedInput(restoredText);
-              setInput((current) => current || restoredText);
-            }
-          }
         }
         return;
       }
@@ -1103,6 +1033,8 @@ export default function Home() {
       commitSessionMessages,
       isViewingSessionKey,
       markStreamingMessagesCancelled,
+      handleCompressionEvent,
+      rememberContextUsage,
       rememberSessionPreview,
       upsertMessage,
       upsertToolCall,
@@ -1113,6 +1045,8 @@ export default function Home() {
     pendingAutoTitleRef.current = null;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    compressionAbortControllerRef.current?.abort();
+    compressionAbortControllerRef.current = null;
     workspaceSelectionVersionRef.current += 1;
     historyLoadVersionRef.current += 1;
     shouldLoadSessionRef.current = false;
@@ -1131,6 +1065,10 @@ export default function Home() {
     setTitleDraft("");
     setViewingSessionStatus(null);
     setPermissionMode("DEFAULT");
+    setContextUsage(null);
+    setCompressionState(null);
+    setCompressionMessage("");
+    setIsCompressing(false);
     setPendingWorkspacePath("");
     setWorkspaceMessage("");
     setIsSelectingWorkspace(false);
@@ -1142,24 +1080,16 @@ export default function Home() {
   const refreshSessions = useCallback(async () => {
     setIsLoadingSessions(true);
     try {
-      const [activeResponse, archivedResponse, workspaceResponse] = await Promise.all([
+      const [activeResponse, archivedResponse] = await Promise.all([
         fetch("/api/session/list", { cache: "no-store" }),
         fetch("/api/session/list/archived", { cache: "no-store" }),
-        fetch("/api/workspace/list", { cache: "no-store" }),
       ]);
       const activeData = await readApiData<SessionInfo[]>(activeResponse);
       const archivedData = await readApiData<SessionInfo[]>(archivedResponse);
-      const workspaceData = await readApiData<WorkspaceInfo[]>(workspaceResponse);
       const nextActive = activeData ?? [];
       const nextArchived = archivedData ?? [];
-      const nextWorkspaces = workspaceData ?? [];
-      const workspaceIds = new Set(nextWorkspaces.map((workspace) => workspace.id));
-      if ([...nextActive, ...nextArchived].some((session) => session.workspaceId && !workspaceIds.has(session.workspaceId))) {
-        throw new Error("会话工作区关联数据不完整，请刷新后重试");
-      }
       setSessions(nextActive);
       setArchivedSessions(nextArchived);
-      setWorkspaces(nextWorkspaces);
       setSessionListError("");
       setSessionMessage("");
 
@@ -1201,6 +1131,20 @@ export default function Home() {
     }
   }, [clearCurrentSession]);
 
+  const refreshWorkspaces = useCallback(async () => {
+    setIsLoadingWorkspaces(true);
+    try {
+      const response = await fetch("/api/workspace/list", { cache: "no-store" });
+      const data = await readApiData<FeatureWorkspaceInfo[]>(response);
+      setWorkspaces(data ?? []);
+      setWorkspaceError("");
+    } catch (error) {
+      setWorkspaceError(toErrorMessage(error));
+    } finally {
+      setIsLoadingWorkspaces(false);
+    }
+  }, []);
+
   const loadSessionEvents = useCallback(async (
     nextSessionId: string,
     options?: { quiet?: boolean; status?: SessionStatus },
@@ -1239,6 +1183,7 @@ export default function Home() {
       let nextStatus = options?.status;
       if (detail) {
         const normalized = normalizeSessionInfo(detail);
+        setPermissionMode(parsePermissionMode(normalized.metadataJson));
         nextStatus = nextStatus ?? normalized.status;
         if (normalized.status === "active") {
           setSessions((current) => upsertSession(current, normalized));
@@ -1253,17 +1198,22 @@ export default function Home() {
         }
       }
 
-      setPermissionMode(parsePermissionMode(detail?.metadataJson));
-
       const streamingThisSession =
         connectionStateRef.current === "running" &&
         streamSessionKeyRef.current === nextSessionId;
       const historyMessages = reduceSessionEventsToMessages(events ?? []);
-      const historyModelName = preferredModelName(historyMessages);
-      const historyUsage = findLastContextUsage(events ?? [], historyModelName);
+      const historyUsage = findLastContextUsage(events ?? []);
       contextUsageBySessionRef.current[nextSessionId] = historyUsage;
+      setContextUsage(historyUsage);
+      const historyCompression = findLastCompression(events ?? []);
+      setCompressionState(historyCompression && historyCompression.state !== "started" ? historyCompression.state : null);
+      setCompressionMessage(historyCompression
+        ? historyCompression.state === "started"
+          ? "上次上下文压缩未完成，可重新发起"
+          : compressionSystemText(historyCompression)
+        : "");
 
-      // 一次提交视图状态：避免“清空 → loading 壳 → 内容”多次挂载 qq-thread
+      // 一次提交视图状态：避免“清空 → 加载态 → 内容”多次重置消息滚动槽。
       currentSessionIdRef.current = nextSessionId;
       if (!streamingThisSession) {
         streamSessionKeyRef.current = nextSessionId;
@@ -1272,11 +1222,7 @@ export default function Home() {
       } else if (!quiet) {
         setMessages(messagesBySessionRef.current[nextSessionId] ?? historyMessages);
       }
-      if (!quiet) {
-        applyModelName(historyModelName, historyUsage);
-      } else if (modelNameRef.current === historyModelName) {
-        setContextUsage(historyUsage);
-      }
+      if (!quiet) applyModelName(preferredModelName(historyMessages));
       setSessionId(nextSessionId);
       if (nextStatus) {
         setViewingSessionStatus(nextStatus);
@@ -1315,6 +1261,10 @@ export default function Home() {
   useEffect(() => {
     void refreshSessions();
   }, [refreshSessions]);
+
+  useEffect(() => {
+    void refreshWorkspaces();
+  }, [refreshWorkspaces]);
 
   useEffect(() => {
     if (!sessionId || !shouldLoadSessionRef.current || isLoadingSessions) {
@@ -1360,6 +1310,9 @@ export default function Home() {
       setPendingWorkspacePath("");
       setWorkspaceMessage("");
       setIsSelectingWorkspace(false);
+      setContextUsage(null);
+      setCompressionState(null);
+      setCompressionMessage("");
       setIsSessionDrawerOpen(false);
       setSessionMessage("");
       setEditingSessionId(null);
@@ -1374,7 +1327,7 @@ export default function Home() {
         setSessionId(nextSessionId);
         const streamingMessages = messagesBySessionRef.current[nextSessionId] ?? [];
         setMessages(streamingMessages);
-        applyModelName(preferredModelName(streamingMessages), contextUsageBySessionRef.current[nextSessionId] ?? null);
+        applyModelName(preferredModelName(streamingMessages));
         if (status) {
           setViewingSessionStatus(status);
         }
@@ -1392,7 +1345,7 @@ export default function Home() {
         streamSessionKeyRef.current = nextSessionId;
         setSessionId(nextSessionId);
         setMessages(cached);
-        applyModelName(preferredModelName(cached), contextUsageBySessionRef.current[nextSessionId] ?? null);
+        applyModelName(preferredModelName(cached));
         if (status) {
           setViewingSessionStatus(status);
         }
@@ -1455,9 +1408,6 @@ export default function Home() {
 
   const archiveSession = useCallback(
     async (target: SessionInfo) => {
-      if (!window.confirm(`确认归档「${target.title || "新会话"}」？归档后仅可回看。`)) {
-        return;
-      }
       try {
         const response = await fetch(
           `/api/session/${encodeURIComponent(target.id)}/archive`,
@@ -1500,9 +1450,6 @@ export default function Home() {
   const deleteSession = useCallback(
     async (target: SessionInfo) => {
       const title = sessionListTitle(target, sessionPreviews[target.id]);
-      if (!window.confirm(`删除「${title}」后不可恢复，确认删除？`)) {
-        return;
-      }
 
       try {
         const response = await fetch(
@@ -1532,90 +1479,6 @@ export default function Home() {
     },
     [clearCurrentSession, refreshSessions, sessionPreviews],
   );
-
-  const toggleCollapsedGroup = useCallback((key: string) => {
-    setCollapsedGroups((current) => ({ ...current, [key]: !current[key] }));
-  }, []);
-
-  const expandSidebarGroups = useCallback((...keys: string[]) => {
-    setCollapsedGroups((current) => {
-      const next = { ...current };
-      for (const key of keys) next[key] = false;
-      return next;
-    });
-  }, []);
-
-  const scrollWorkspaceIntoView = useCallback((workspaceId: string) => {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => workspaceRowRefs.current[workspaceId]?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
-    });
-  }, []);
-
-  const addWorkspace = useCallback(async () => {
-    if (isAddingWorkspace || isSelectingWorkspace || isRunning) return;
-    setIsAddingWorkspace(true);
-    setSessionMessage("");
-    try {
-      const selectResponse = await fetch("/api/workspace/select-directory", { method: "POST", cache: "no-store" });
-      const selected = await readApiData<WorkspaceSelectResp>(selectResponse);
-      if (!selected?.workspacePath) return;
-      const saveResponse = await fetch("/api/workspace", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: selected.workspacePath }),
-      });
-      const workspace = await readApiData<WorkspaceInfo>(saveResponse);
-      if (!workspace) throw new Error("保存工作区失败");
-      setSessionListTab("active");
-      expandSidebarGroups("workspaces", `workspace:${workspace.id}`);
-      await refreshSessions();
-      scrollWorkspaceIntoView(workspace.id);
-    } catch (error) {
-      setSessionMessage(toErrorMessage(error));
-    } finally {
-      setIsAddingWorkspace(false);
-    }
-  }, [expandSidebarGroups, isAddingWorkspace, isRunning, isSelectingWorkspace, refreshSessions, scrollWorkspaceIntoView]);
-
-  const deleteWorkspace = useCallback(async (workspace: WorkspaceInfo) => {
-    if (deletingWorkspaceId) return;
-    const linkedSessions = [...sessions, ...archivedSessions].filter((session) => session.workspaceId === workspace.id);
-    const confirmed = window.confirm(
-      `确认删除工作区“${workspace.name}”？\n路径：${workspace.path}\n将同时永久删除 ${linkedSessions.length} 个下属会话，此操作不可恢复。\n磁盘中的工作区目录和文件不会被删除。`,
-    );
-    if (!confirmed) return;
-
-    setDeletingWorkspaceId(workspace.id);
-    setSessionMessage("");
-    try {
-      const response = await fetch(`/api/workspace/${encodeURIComponent(workspace.id)}`, { method: "DELETE" });
-      await readApiData<WorkspaceDeleteResp>(response);
-      const deletedSessionIds = new Set(linkedSessions.map((session) => session.id));
-      if (deletedSessionIds.has(currentSessionIdRef.current)) clearCurrentSession();
-      for (const sessionId of deletedSessionIds) {
-        delete messagesBySessionRef.current[sessionId];
-        delete contextUsageBySessionRef.current[sessionId];
-      }
-      setSessionPreviews((current) => {
-        const next = { ...current };
-        for (const sessionId of deletedSessionIds) delete next[sessionId];
-        saveSessionPreviewMap(next);
-        return next;
-      });
-      setCollapsedGroups((current) => {
-        const next = { ...current };
-        delete next[`workspace:${workspace.id}`];
-        return next;
-      });
-      await refreshSessions();
-      setSessionMessage("");
-    } catch (error) {
-      await refreshSessions();
-      setSessionMessage(toErrorMessage(error));
-    } finally {
-      setDeletingWorkspaceId(null);
-    }
-  }, [archivedSessions, clearCurrentSession, deletingWorkspaceId, refreshSessions, sessions]);
 
   const selectWorkspace = useCallback(async () => {
     if (currentSessionIdRef.current || isSelectingWorkspace || isRunning) {
@@ -1650,6 +1513,70 @@ export default function Home() {
     }
   }, [isRunning, isSelectingWorkspace]);
 
+  const selectSavedWorkspace = useCallback((workspace: FeatureWorkspaceInfo) => {
+    if (currentSessionIdRef.current || isSelectingWorkspace || isRunning) {
+      return;
+    }
+    workspaceSelectionVersionRef.current += 1;
+    setPendingWorkspacePath(workspace.path);
+    setWorkspaceMessage(`已选择工作区：${workspace.name}`);
+  }, [isRunning, isSelectingWorkspace]);
+
+  const saveWorkspace = useCallback(async () => {
+    const path = pendingWorkspacePath.trim();
+    if (!path || currentSessionIdRef.current || isSavingWorkspace) {
+      return;
+    }
+    setIsSavingWorkspace(true);
+    setWorkspaceMessage("");
+    try {
+      const response = await fetch("/api/workspace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      const saved = await readApiData<FeatureWorkspaceInfo>(response);
+      if (saved) {
+        setWorkspaces((current) => upsertWorkspace(current, saved));
+        setWorkspaceMessage(`工作区“${saved.name}”已保存`);
+      }
+    } catch (error) {
+      setWorkspaceMessage(toErrorMessage(error));
+    } finally {
+      setIsSavingWorkspace(false);
+    }
+  }, [isSavingWorkspace, pendingWorkspacePath]);
+
+  const deleteWorkspace = useCallback(async (workspace: FeatureWorkspaceInfo) => {
+    if (deletingWorkspaceId) {
+      return;
+    }
+    setDeletingWorkspaceId(workspace.id);
+    setWorkspaceMessage("");
+    try {
+      const response = await fetch(`/api/workspace/${encodeURIComponent(workspace.id)}`, {
+        method: "DELETE",
+      });
+      await readApiData<{ deletedSessionCount: number }>(response);
+      setWorkspaces((current) => current.filter((item) => item.id !== workspace.id));
+      if (pendingWorkspacePath === workspace.path) {
+        setPendingWorkspacePath("");
+      }
+      const currentSessionBelongsToWorkspace = [...sessions, ...archivedSessions].some(
+        (session) => session.id === currentSessionIdRef.current && session.workspaceId === workspace.id,
+      );
+      if (currentSessionBelongsToWorkspace) {
+        clearCurrentSession();
+      }
+      setWorkspaceMessage(`工作区“${workspace.name}”已移除，磁盘目录未删除`);
+      await refreshSessions();
+    } catch (error) {
+      setWorkspaceMessage(toErrorMessage(error));
+    } finally {
+      setDeletingWorkspaceId(null);
+    }
+  }, [archivedSessions, clearCurrentSession, deletingWorkspaceId, pendingWorkspacePath, refreshSessions, sessions]);
+
   const clearPendingWorkspace = useCallback(() => {
     if (currentSessionIdRef.current || isSelectingWorkspace) {
       return;
@@ -1670,12 +1597,12 @@ export default function Home() {
         return;
       }
 
-      if (!selectedModelName || !isModelReady || !isReasoningEffortValid) {
-        const message = modelInfoError || (!selectedModelName ? "当前没有可用模型" : "模型能力信息尚未加载完成");
+      if (!selectedModelName) {
+        const message = "请先填写模型名称";
         setConnectionState("error");
         setErrorMessage(message);
         window.requestAnimationFrame(() => {
-          document.getElementById("model-select")?.focus();
+          document.getElementById("model-input")?.focus();
         });
         return;
       }
@@ -1683,11 +1610,24 @@ export default function Home() {
       const controller = new AbortController();
       lastSentModelRef.current = selectedModelName;
       saveLocalValue(STORAGE_KEYS.modelName, selectedModelName);
+      applyModelName(selectedModelName);
       abortControllerRef.current = controller;
       setConnectionState("running");
       setErrorMessage("");
       setLastFailedInput("");
       setInput("");
+      // 记录最近发送的用户消息：供「重新生成」操作回填（T8）
+      lastUserMessageRef.current = userMessage;
+      // 记录最近输入历史（供输入框 ↑↓ 浏览），最新在前、去重、限 5 条
+      recentInputsRef.current = [
+        userMessage,
+        ...recentInputsRef.current.filter((item) => item !== userMessage),
+      ].slice(0, RECENT_INPUT_LIMIT);
+      try {
+        localStorage.setItem(STORAGE_KEYS.recentInputs, JSON.stringify(recentInputsRef.current));
+      } catch {
+        // 忽略本地存储失败，不影响发送
+      }
       const streamKey = sessionId || PENDING_SESSION_KEY;
       streamSessionKeyRef.current = streamKey;
       // 列表扫视：有 session 直接记；新建会话先挂 pending，等事件回写 id
@@ -1721,7 +1661,7 @@ export default function Home() {
         reasoningEffort: reasoningEffort.trim(),
         userMessage,
         workspacePath: sessionId ? "" : pendingWorkspacePath,
-        ...(sessionId ? {} : { permissionMode }),
+        permissionMode: sessionId ? undefined : permissionMode,
         sessionId,
       };
 
@@ -1781,19 +1721,17 @@ export default function Home() {
     },
     [
       addSystemMessage,
+      applyModelName,
       archivedSessions,
       commitSessionMessages,
       handleSessionEvent,
       input,
-      isCompressing,
       isLoadingHistory,
-      isModelReady,
-      isReasoningEffortValid,
+      isCompressing,
       isRunning,
       isSelectingWorkspace,
       maybeAutoTitleSession,
       modelName,
-      modelInfoError,
       pendingWorkspacePath,
       permissionMode,
       reasoningEffort,
@@ -1804,7 +1742,57 @@ export default function Home() {
     ],
   );
 
+  const compressContext = useCallback(async () => {
+    const targetSessionId = currentSessionIdRef.current;
+    if (!targetSessionId || isRunning || isCompressing || viewingSessionStatus === "archived") {
+      return;
+    }
+    const controller = new AbortController();
+    compressionAbortControllerRef.current = controller;
+    setIsCompressing(true);
+    setCompressionMessage("正在请求上下文压缩…");
+    try {
+      const response = await fetch(`/api/session/${encodeURIComponent(targetSessionId)}/context/compress`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(modelName.trim() ? { modelName: modelName.trim() } : {}),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await readSessionEventStream(response, handleSessionEvent, { signal: controller.signal });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        if (currentSessionIdRef.current === targetSessionId) {
+          setCompressionState("failed");
+          setCompressionMessage("上下文压缩已取消");
+        }
+        addSystemMessage("上下文压缩已取消", "info", targetSessionId);
+      } else {
+        const message = toErrorMessage(error);
+        setCompressionState("failed");
+        setCompressionMessage(message);
+        addSystemMessage(`上下文压缩失败：${message}`, "error", targetSessionId);
+      }
+    } finally {
+      if (compressionAbortControllerRef.current === controller) {
+        compressionAbortControllerRef.current = null;
+      }
+      setIsCompressing(false);
+    }
+  }, [addSystemMessage, handleSessionEvent, isCompressing, isRunning, modelName, viewingSessionStatus]);
+
   const stopCurrentRun = useCallback(() => {
+    if (compressionAbortControllerRef.current) {
+      compressionAbortControllerRef.current.abort();
+      compressionAbortControllerRef.current = null;
+      setIsCompressing(false);
+      setCompressionState("failed");
+      setCompressionMessage("上下文压缩已取消");
+      addSystemMessage("上下文压缩已取消", "info", currentSessionIdRef.current);
+      return;
+    }
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     const sessionKey =
@@ -1820,82 +1808,15 @@ export default function Home() {
       meta: { local: true },
     });
     void refreshSessions();
-  }, [activeTurnId, handleSessionEvent, refreshSessions]);
+  }, [activeTurnId, addSystemMessage, handleSessionEvent, refreshSessions]);
 
-  // 主动压缩上下文：SSE 事件复用 handleSessionEvent 归并展示
-  const compressContext = useCallback(async () => {
-    const targetSessionId = currentSessionIdRef.current;
-    if (
-      !targetSessionId ||
-      connectionStateRef.current === "running" ||
-      isCompressingRef.current ||
-      viewingSessionStatus !== "active"
-    ) {
-      return;
-    }
-    const controller = new AbortController();
-    compressionAbortRef.current = controller;
-    isCompressingRef.current = true;
-    setIsCompressing(true);
-    try {
-      const response = await fetch(
-        `/api/session/${encodeURIComponent(targetSessionId)}/context/compress`,
-        {
-          method: "POST",
-          headers: {
-            Accept: "text/event-stream",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ modelName: modelNameRef.current }),
-          signal: controller.signal,
-        },
-      );
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-      await readSessionEventStream(
-        response,
-        (sessionEvent) => {
-          if (compressionAbortRef.current !== controller || controller.signal.aborted) {
-            return;
-          }
-          handleSessionEvent(sessionEvent);
-        },
-        { signal: controller.signal },
-      );
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        addSystemMessage(toErrorMessage(error), "error");
-      }
-    } finally {
-      if (compressionAbortRef.current === controller) {
-        compressionAbortRef.current = null;
-        isCompressingRef.current = false;
-        setIsCompressing(false);
-        setActiveTurnId(null);
-      }
-    }
-  }, [addSystemMessage, handleSessionEvent, viewingSessionStatus]);
-
-  const stopCompression = useCallback(() => {
-    compressionAbortRef.current?.abort();
-    compressionAbortRef.current = null;
-    isCompressingRef.current = false;
-    setIsCompressing(false);
-    setActiveTurnId(null);
-  }, []);
-
-  const startNewSession = useCallback((workspace?: WorkspaceInfo) => {
+  const startNewSession = useCallback(() => {
     clearCurrentSession();
-    if (workspace) {
-      setPendingWorkspacePath(workspace.path);
-      expandSidebarGroups("workspaces", `workspace:${workspace.id}`);
-    }
     setSessionMessage("");
     setSessionListTab("active");
     setIsSessionDrawerOpen(false);
     void refreshSessions();
-  }, [clearCurrentSession, expandSidebarGroups, refreshSessions]);
+  }, [clearCurrentSession, refreshSessions]);
 
   // 快捷键：Esc 关抽屉或停止；⌘/Ctrl+Enter 发送（T6）
   useEffect(() => {
@@ -1937,59 +1858,12 @@ export default function Home() {
       null
     );
   }, [archivedSessions, sessionId, sessions]);
-
-  useEffect(() => {
-    if (!currentSession) return;
-    if (currentSession.workspaceId) {
-      expandSidebarGroups("workspaces", `workspace:${currentSession.workspaceId}`);
-      scrollWorkspaceIntoView(currentSession.workspaceId);
-    } else {
-      expandSidebarGroups("tasks");
-    }
-  }, [currentSession, expandSidebarGroups, scrollWorkspaceIntoView]);
   const persistedWorkspacePath = currentSession?.workspacePath ?? "";
   const displayedWorkspacePath = persistedWorkspacePath || pendingWorkspacePath;
   const workspaceStatusText = displayedWorkspacePath || (sessionId ? (currentSession ? "未设置工作区" : "工作区加载中") : "使用默认工作区");
   const isArchivedView =
     viewingSessionStatus === "archived" ||
     currentSession?.status === "archived";
-
-  const changePermissionMode = useCallback(
-    async (nextMode: PermissionMode) => {
-      if (nextMode === permissionMode) {
-        return;
-      }
-      if (!sessionId) {
-        setPermissionMode(nextMode);
-        return;
-      }
-      const previousMode = permissionMode;
-      setPermissionMode(nextMode);
-      try {
-        const response = await fetch(
-          `/api/session/${encodeURIComponent(sessionId)}/permission-mode`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode: nextMode }),
-          },
-        );
-        const updated = await readApiData<SessionInfo>(response);
-        if (updated) {
-          const normalized = normalizeSessionInfo(updated);
-          if (normalized.status === "active") {
-            setSessions((current) => upsertSession(current, normalized));
-          } else {
-            setArchivedSessions((current) => upsertSession(current, normalized));
-          }
-        }
-      } catch (error) {
-        setPermissionMode(previousMode);
-        setErrorMessage(toErrorMessage(error));
-      }
-    },
-    [permissionMode, sessionId],
-  );
 
   const recentSessions = useMemo(
     () =>
@@ -1998,6 +1872,16 @@ export default function Home() {
         .slice(0, 3),
     [sessions],
   );
+
+  const workspaceSessionCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const session of [...sessions, ...archivedSessions]) {
+      if (session.workspaceId) {
+        counts[session.workspaceId] = (counts[session.workspaceId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [archivedSessions, sessions]);
 
   // 可操作授权请求：仅当前实时会话中仍带 approvalId 的项
   const pendingApprovalTools = useMemo(() => {
@@ -2041,37 +1925,52 @@ export default function Home() {
     setIsSessionDrawerOpen(false);
   }, []);
 
-  const focusModelSelect = useCallback(() => {
+  const focusModelInput = useCallback(() => {
     setIsComposerSettingsOpen(true);
     requestAnimationFrame(() => {
-      const select = document.getElementById("model-select");
-      if (!(select instanceof HTMLSelectElement)) {
+      const input = document.getElementById("model-input");
+      if (!(input instanceof HTMLInputElement)) {
         return;
       }
-      select.focus();
-      select.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      input.focus();
+      input.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
   }, []);
 
-  const groupedSessions = useMemo(() => {
-    const source = sessionListTab === "active" ? sessions : archivedSessions;
-    const tasks = source
-      .filter((session) => !session.workspaceId)
-      .sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left));
-    const sortedWorkspaces = [...workspaces].sort((left, right) => {
-      const nameOrder = left.name.localeCompare(right.name, "zh-CN", { sensitivity: "base" });
-      return nameOrder || left.path.localeCompare(right.path, "zh-CN", { sensitivity: "base" });
+  // 列表：最近活跃优先，选中会话仅高亮不置顶；搜索含标题/摘要/路径/ID
+  const visibleSessions = useMemo(() => {
+    const source =
+      sessionListTab === "active" ? sessions : archivedSessions;
+    const query = sessionQuery.trim().toLowerCase();
+    const filtered = source.filter((session) => {
+      if (!query) {
+        return true;
+      }
+      const title = sessionListTitle(session, sessionPreviews[session.id]).toLowerCase();
+      const preview = (sessionPreviews[session.id] || "").toLowerCase();
+      const path = (session.workspacePath || "").toLowerCase();
+      const workspaceName = workspaces.find((workspace) => workspace.id === session.workspaceId)?.name.toLowerCase() || "";
+      return (
+        title.includes(query) ||
+        preview.includes(query) ||
+        path.includes(query) ||
+        workspaceName.includes(query) ||
+        session.id.toLowerCase().includes(query)
+      );
     });
-    const workspaceGroups = sortedWorkspaces
-      .map((workspace) => ({
-        workspace,
-        sessions: source
-          .filter((session) => session.workspaceId === workspace.id)
-          .sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left)),
-      }))
-      .filter((group) => sessionListTab === "active" || group.sessions.length > 0);
-    return { tasks, workspaceGroups };
-  }, [archivedSessions, sessionListTab, sessions, workspaces]);
+
+    filtered.sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left));
+
+    return filtered;
+  }, [
+    archivedSessions,
+    sessionId,
+    sessionListTab,
+    sessionPreviews,
+    sessionQuery,
+    sessions,
+    workspaces,
+  ]);
 
   // 运行中最近工具（T3）
   const activeTool = useMemo(() => {
@@ -2107,392 +2006,91 @@ export default function Home() {
     setConnectionState("idle");
   }, [lastFailedInput]);
 
-  const renderSessionItem = (session: SessionInfo, isArchivedItem: boolean, onAfterSelect?: () => void) => {
-    const selected = session.id === highlightedSessionId;
-    const editing = editingSessionId === session.id;
-    return (
-      <div
-        key={session.id}
-        className={`session-item group min-h-[40px] rounded-[var(--radius-sm)] px-1.5 py-1.5 ${selected ? "qq-selected-row" : "qq-session-row"}`}
-      >
-        {editing && !isArchivedItem ? (
-          <div className="space-y-1.5">
-            <label className="block">
-              <span className="sr-only">会话标题</span>
-              <input
-                className="qq-input h-10 w-full px-2 text-sm text-text-1 outline-none min-[900px]:h-8"
-                maxLength={80}
-                value={titleDraft}
-                onChange={(event) => setTitleDraft(event.target.value)}
-              />
-            </label>
-            <div className="flex gap-1">
-              <button className="qq-button-primary h-10 flex-1 text-xs min-[900px]:h-7" type="button" onClick={() => void submitRenameSession()}>
-                保存
-              </button>
-              <button
-                className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7"
-                type="button"
-                onClick={() => {
-                  setEditingSessionId(null);
-                  setTitleDraft("");
-                }}
-              >
-                取消
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <button
-              className="flex min-h-7 w-full min-w-0 items-center gap-2 text-left focus-visible:outline-none"
-              disabled={isSessionSwitching || isSelectingWorkspace}
-              type="button"
-              onClick={() => {
-                void openSession(session.id, isArchivedItem ? "archived" : "active");
-                onAfterSelect?.();
-              }}
-            >
-              {session.activeTurnId ? <LoaderCircle className="size-3.5 shrink-0 motion-safe:animate-spin text-info" aria-label="运行中" /> : <span className="size-1.5 shrink-0 rounded-full bg-text-3/55" aria-hidden />}
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-1">
-                {sessionListTitle(session, sessionPreviews[session.id])}
-              </span>
-              <span className="shrink-0 text-[11px] text-text-3">
-                {formatSessionTime(isArchivedItem ? session.archivedAt || session.updatedAt : session.updatedAt)}
-              </span>
-            </button>
-            <div
-              className={`session-row-actions mt-1 flex gap-1 ${selected ? "" : "min-[900px]:hidden min-[900px]:group-hover:flex min-[900px]:group-focus-within:flex"}`}
-            >
-              {isArchivedItem ? (
-                <>
-                  <button className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7" disabled={isSessionSwitching || isSelectingWorkspace} type="button" onClick={() => void unarchiveSession(session)}>
-                    取消归档
-                  </button>
-                  <button className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-danger min-[900px]:h-7" disabled={isSessionSwitching || isSelectingWorkspace} type="button" onClick={() => void deleteSession(session)}>
-                    <Trash2 className="size-3.5 min-[900px]:size-3" aria-hidden />
-                    删除
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button className="qq-button h-10 flex-1 text-xs text-text-2 min-[900px]:h-7" disabled={isSessionSwitching || isSelectingWorkspace} type="button" onClick={() => beginRenameSession(session)}>
-                    重命名
-                  </button>
-                  <button className="qq-button inline-flex h-10 flex-1 items-center justify-center gap-1 text-xs text-text-2 min-[900px]:h-7" disabled={isSessionSwitching || isSelectingWorkspace || (selected && isRunning)} type="button" onClick={() => void archiveSession(session)}>
-                    <Archive className="size-3.5 min-[900px]:size-3" aria-hidden />
-                    归档
-                  </button>
-                </>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-    );
-  };
-
-  const renderSessionList = (options?: { onAfterSelect?: () => void }) => {
-    const tasksCollapsed = Boolean(collapsedGroups.tasks);
-    const workspacesCollapsed = Boolean(collapsedGroups.workspaces);
-    const isArchivedTab = sessionListTab === "archived";
-    return (
-    <>
-      <div className="mt-1 flex items-center gap-1">
-        <button
-          className="qq-button-primary inline-flex h-11 flex-1 items-center justify-center gap-1 px-2 text-xs min-[900px]:h-8"
-          disabled={isRunning || isSelectingWorkspace}
-          type="button"
-          onClick={() => startNewSession()}
-        >
-          <span className="qq-icon qq-icon-new-task" aria-hidden />
-          新会话
-        </button>
-        <button
-          aria-label="刷新会话列表"
-          className="qq-button inline-flex size-11 items-center justify-center text-text-2 min-[900px]:size-8"
-          disabled={isLoadingSessions}
-          type="button"
-          onClick={() => void refreshSessions()}
-        >
-          <RefreshCw className={`size-3.5 ${isLoadingSessions ? "motion-safe:animate-spin" : ""}`} />
-        </button>
-      </div>
-
-      <div className="mt-2 grid grid-cols-2 gap-1 rounded-[var(--radius-sm)] border border-line bg-panel-muted p-0.5" role="tablist" aria-label="会话分类">
-        <button
-          role="tab"
-          aria-selected={sessionListTab === "active"}
-          className={`h-9 rounded-[2px] text-xs font-medium min-[900px]:h-7 ${
-            sessionListTab === "active" ? "qq-selected-row text-text-1" : "text-text-3 hover:text-text-1"
-          }`}
-          type="button"
-          onClick={() => {
-            setSessionListTab("active");
-            setEditingSessionId(null);
-            setTitleDraft("");
-          }}
-        >
-          活跃
-        </button>
-        <button
-          role="tab"
-          aria-selected={sessionListTab === "archived"}
-          className={`h-9 rounded-[2px] text-xs font-medium min-[900px]:h-7 ${
-            sessionListTab === "archived" ? "qq-selected-row text-text-1" : "text-text-3 hover:text-text-1"
-          }`}
-          type="button"
-          onClick={() => {
-            setSessionListTab("archived");
-            setEditingSessionId(null);
-            setTitleDraft("");
-          }}
-        >
-          归档
-        </button>
-      </div>
-
-      {sessionListError ? (
-        <div className="mt-2 rounded-[var(--radius-sm)] border border-danger/35 bg-danger-soft px-2.5 py-2" role="alert">
-          <p className="text-xs font-medium leading-5 text-danger">{sessionListError}</p>
-          <p className="mt-1 text-[11px] leading-5 text-text-3">仍可新建任务；历史会话恢复后会自动可用。</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            <button
-              className="qq-button inline-flex h-7 items-center gap-1 px-2 text-[11px] text-danger"
-              type="button"
-              disabled={isLoadingSessions}
-              onClick={() => void refreshSessions()}
-            >
-              <RefreshCw className={`size-3 ${isLoadingSessions ? "motion-safe:animate-spin" : ""}`} aria-hidden />
-              重试
-            </button>
-            <button
-              className="qq-button-primary inline-flex h-7 items-center gap-1 px-2 text-[11px]"
-              type="button"
-              disabled={isRunning || isSelectingWorkspace}
-              onClick={() => startNewSession()}
-            >
-              新建任务
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {sessionMessage ? (
-        <p className="mt-2 rounded-[var(--radius-sm)] border border-danger/30 bg-danger-soft px-2.5 py-2 text-xs leading-5 text-danger" role="status">
-          {sessionMessage}
-        </p>
-      ) : null}
-
-      <div className="qq-scrollbar console-scroll mt-2 min-h-0 flex-1 overflow-y-auto pr-0.5">
-        {isLoadingSessions ? (
-          <div className="rounded-[var(--radius-sm)] border border-dashed border-line px-3 py-8 text-center text-sm text-text-3">
-            正在加载会话
-          </div>
-        ) : sessionListError ? (
-          // 设计决策：失败原因只在上方 alert 讲一次，列表区不再双写警报
-          <div className="rounded-[var(--radius-sm)] border border-dashed border-line px-3 py-6 text-center text-xs text-text-3">
-            列表暂时为空。可先新建任务，或使用上方重试。
-          </div>
-        ) : (
-          <>
-            <section aria-label="任务">
-              <button
-                className="qq-group-header flex w-full items-center gap-1 px-1 py-1.5 text-left"
-                type="button"
-                aria-expanded={!tasksCollapsed}
-                onClick={() => toggleCollapsedGroup("tasks")}
-              >
-                {tasksCollapsed ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
-                <span>任务（{groupedSessions.tasks.length}）</span>
-              </button>
-              {!tasksCollapsed ? (
-                <div className="space-y-0.5 pb-2">
-                  {groupedSessions.tasks.length > 0
-                    ? groupedSessions.tasks.map((session) => renderSessionItem(session, isArchivedTab, options?.onAfterSelect))
-                    : <p className="px-6 py-2 text-xs text-text-3">{isArchivedTab ? "暂无归档任务" : "暂无任务"}</p>}
-                </div>
-              ) : null}
-            </section>
-
-            <section aria-label="工作区" className="mt-1 border-t border-line/70 pt-1">
-              <div className="flex items-center gap-1">
-                <button
-                  className="qq-group-header flex min-w-0 flex-1 items-center gap-1 px-1 py-1.5 text-left"
-                  type="button"
-                  aria-expanded={!workspacesCollapsed}
-                  onClick={() => toggleCollapsedGroup("workspaces")}
-                >
-                  {workspacesCollapsed ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
-                  <span>工作区（{groupedSessions.workspaceGroups.length}）</span>
-                </button>
-                {!isArchivedTab ? (
-                  <button
-                    className="qq-button inline-flex size-10 shrink-0 items-center justify-center text-text-2 min-[900px]:size-8"
-                    type="button"
-                    aria-label="新增工作区"
-                    title="新增工作区"
-                    disabled={isAddingWorkspace || isSelectingWorkspace || isRunning}
-                    onClick={() => void addWorkspace()}
-                  >
-                    {isAddingWorkspace ? <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden /> : <Plus className="size-3.5" aria-hidden />}
-                  </button>
-                ) : null}
-              </div>
-              {!workspacesCollapsed ? (
-                <div className="space-y-0.5 pb-2">
-                  {groupedSessions.workspaceGroups.length === 0 ? <p className="px-6 py-2 text-xs text-text-3">{isArchivedTab ? "暂无归档工作区" : "暂无工作区"}</p> : null}
-                  {groupedSessions.workspaceGroups.map(({ workspace, sessions: workspaceSessions }) => {
-                    const workspaceKey = `workspace:${workspace.id}`;
-                    const collapsed = Boolean(collapsedGroups[workspaceKey]);
-                    const hasRunningSession = sessions.some((session) => session.workspaceId === workspace.id && Boolean(session.activeTurnId));
-                    return (
-                      <div
-                        key={workspace.id}
-                        ref={(element) => { workspaceRowRefs.current[workspace.id] = element; }}
-                        className="group/workspace"
-                      >
-                        <div className="flex min-h-10 items-center gap-1">
-                          <button
-                            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--radius-sm)] px-1 py-1 text-left hover:bg-panel-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand"
-                            type="button"
-                            aria-expanded={!collapsed}
-                            onClick={() => toggleCollapsedGroup(workspaceKey)}
-                          >
-                            {collapsed ? <ChevronRight className="size-3.5 shrink-0 text-text-3" aria-hidden /> : <ChevronDown className="size-3.5 shrink-0 text-text-3" aria-hidden />}
-                            <FolderOpen className={`size-4 shrink-0 ${workspace.available ? "text-warning" : "text-text-3"}`} aria-hidden />
-                            <span className="min-w-0 flex-1">
-                              <span className="flex min-w-0 items-center gap-1 text-sm font-medium text-text-1">
-                                <span className="truncate">{workspace.name}</span>
-                                <span className="shrink-0 text-xs font-normal text-text-3">（{workspaceSessions.length}）</span>
-                              </span>
-                              <span className="block truncate font-mono text-[10px] text-text-3" title={workspace.path}>
-                                {workspace.available ? workspaceParentPath(workspace.path) : "路径不可用"}
-                              </span>
-                            </span>
-                          </button>
-                          {!isArchivedTab ? (
-                            <div className="flex shrink-0 items-center gap-0.5">
-                              <button
-                                className="qq-button inline-flex size-10 items-center justify-center text-text-2 min-[900px]:size-8"
-                                type="button"
-                                aria-label={`在 ${workspace.name} 中新建会话`}
-                                title={workspace.available ? "在此工作区新建会话" : "工作区路径不可用"}
-                                disabled={!workspace.available || isRunning || isSelectingWorkspace}
-                                onClick={() => startNewSession(workspace)}
-                              >
-                                <Plus className="size-3.5" aria-hidden />
-                              </button>
-                              <button
-                                className="qq-button inline-flex size-10 items-center justify-center text-danger min-[900px]:size-8"
-                                type="button"
-                                aria-label={`删除工作区 ${workspace.name}`}
-                                title={hasRunningSession ? "请先停止工作区内正在运行的会话" : "删除工作区及下属会话"}
-                                disabled={Boolean(deletingWorkspaceId) || hasRunningSession}
-                                onClick={() => void deleteWorkspace(workspace)}
-                              >
-                                {deletingWorkspaceId === workspace.id ? <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden /> : <Trash2 className="size-3.5" aria-hidden />}
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
-                        {!collapsed ? (
-                          <div className="ml-3 space-y-0.5 border-l border-line/80 pl-2">
-                            {workspaceSessions.length > 0
-                              ? workspaceSessions.map((session) => renderSessionItem(session, isArchivedTab, options?.onAfterSelect))
-                              : <p className="px-3 py-2 text-xs text-text-3">暂无会话</p>}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </section>
-          </>
-        )}
-      </div>
-    </>
-    );
-  };
+  const renderSessionList = (options?: { onAfterSelect?: () => void }) => (
+    <SessionListPanel
+      visibleSessions={visibleSessions as FeatureSessionInfo[]}
+      workspaces={workspaces}
+      workspaceSessionCounts={workspaceSessionCounts}
+      sessionPreviews={sessionPreviews}
+      highlightedSessionId={highlightedSessionId}
+      sessionListTab={sessionListTab as FeatureSessionListTab}
+      sessionQuery={sessionQuery}
+      isLoadingSessions={isLoadingSessions}
+      sessionListError={sessionListError}
+      sessionMessage={workspaceMessage || sessionMessage}
+      isRunning={isRunning}
+      isSelectingWorkspace={isSelectingWorkspace}
+      isLoadingWorkspaces={isLoadingWorkspaces}
+      isSavingWorkspace={isSavingWorkspace}
+      deletingWorkspaceId={deletingWorkspaceId}
+      workspaceError={workspaceError}
+      pendingWorkspacePath={pendingWorkspacePath}
+      isSessionSwitching={isSessionSwitching}
+      isCurrentSessionRunning={isRunning && sessionId === highlightedSessionId}
+      editingSessionId={editingSessionId}
+      titleDraft={titleDraft}
+      confirmingAction={confirmingAction as SessionConfirmAction}
+      onQueryChange={setSessionQuery}
+      onCreateSession={startNewSession}
+      onRefreshWorkspaces={() => void refreshWorkspaces()}
+      onSelectWorkspace={selectSavedWorkspace}
+      onSaveWorkspace={() => void saveWorkspace()}
+      onDeleteWorkspace={(workspace) => void deleteWorkspace(workspace)}
+      onRefresh={() => void refreshSessions()}
+      onTabChange={(tab) => {
+        setSessionListTab(tab);
+        setEditingSessionId(null);
+        setTitleDraft("");
+      }}
+      onOpenSession={(session) => {
+        void openSession(session.id, sessionListTab === "archived" ? "archived" : "active");
+        options?.onAfterSelect?.();
+      }}
+      onBeginRename={beginRenameSession}
+      onTitleDraftChange={setTitleDraft}
+      onSubmitRename={() => void submitRenameSession()}
+      onCancelRename={() => {
+        setEditingSessionId(null);
+        setTitleDraft("");
+      }}
+      onArchive={(session) => void archiveSession(session)}
+      onUnarchive={(session) => void unarchiveSession(session)}
+      onDelete={(session) => void deleteSession(session)}
+      onConfirmActionChange={setConfirmingAction}
+    />
+  );
 
   const desktopSidebarVisible = !isSidebarCollapsed;
 
   return (
-    <main className="relative h-dvh overflow-hidden bg-canvas p-0 text-text-1 min-[720px]:p-1 min-[900px]:p-2">
-      <div className="qq-shell flex h-full min-h-0 flex-col overflow-hidden rounded-[4px]">
-        {/* QQ 标题栏：窗口控件映射真实网页动作 */}
-        <header className="qq-titlebar flex shrink-0 items-center gap-2 px-2">
-          <img
-            src="/qq2007/sidebar-avatar.png"
-            alt=""
-            aria-hidden
-            width={28}
-            height={28}
-            decoding="async"
-            className="hidden size-7 rounded-[3px] border border-white/30 bg-white/10 object-cover min-[380px]:block"
-          />
-          <div className="min-w-0">
-            <p className="qq-titlebar-title truncate">Mboo Code 2007</p>
-          </div>
-          <div className="ml-1 hidden items-center gap-0.5 md:flex" aria-hidden="true">
-            <span className="qq-chrome-deco inline-flex size-7 items-center justify-center text-xs">←</span>
-            <span className="qq-chrome-deco inline-flex size-7 items-center justify-center text-xs">→</span>
-            <span className="qq-chrome-deco qq-chrome-deco-label hidden px-2 py-1 text-xs lg:inline">文件</span>
-            <span className="qq-chrome-deco qq-chrome-deco-label hidden px-2 py-1 text-xs lg:inline">编辑</span>
-            <span className="qq-chrome-deco qq-chrome-deco-label hidden px-2 py-1 text-xs lg:inline">视图</span>
-            <span className="qq-chrome-deco qq-chrome-deco-label hidden px-2 py-1 text-xs lg:inline">帮助</span>
-          </div>
-          <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-1.5">
-            <StatusPill status={status} compact />
-            {/* 设计决策：手机只有会话抽屉，收栏无桌面侧栏可折叠；重置属低频桌面动作 */}
-            <button
-              className="qq-window-action hidden items-center justify-center min-[900px]:inline-flex"
-              type="button"
-              aria-label={isSidebarCollapsed ? "展开左侧会话栏" : "折叠左侧会话栏"}
-              title={isSidebarCollapsed ? "展开会话栏" : "折叠会话栏"}
-              onClick={() => setIsSidebarCollapsed((current) => !current)}
-            >
-              {isSidebarCollapsed ? "侧栏" : "收栏"}
-            </button>
-            <button
-              className="qq-window-action inline-flex items-center justify-center"
-              type="button"
-              aria-label={isFullscreen ? "退出浏览器全屏" : "浏览器全屏"}
-              title={isFullscreen ? "退出全屏" : "浏览器全屏"}
-              onClick={() => void toggleFullscreen()}
-            >
-              {isFullscreen ? "还原" : "全屏"}
-            </button>
-            <button
-              className="qq-window-action qq-window-action-danger hidden items-center justify-center sm:inline-flex"
-              type="button"
-              aria-label="重置布局：展开侧栏并退出全屏"
-              title="重置布局（不会关闭标签页）"
-              onClick={() => void resetWindowLayout()}
-            >
-              重置
-            </button>
-          </div>
-        </header>
+    <main className="relative h-dvh overflow-hidden bg-[#e8e8e8] p-0 text-text-1 [overscroll-behavior:none]">
+      <div className={layoutStyles.shell}>
+        <WorkbenchHeader
+          status={status}
+          isSidebarCollapsed={isSidebarCollapsed}
+          isFullscreen={isFullscreen}
+          onToggleSidebar={() => setIsSidebarCollapsed((current) => !current)}
+          onToggleFullscreen={() => void toggleFullscreen()}
+          onResetLayout={() => void resetWindowLayout()}
+        />
 
         <div
-          className={`grid min-h-0 flex-1 ${
-            desktopSidebarVisible
-              ? "min-[900px]:max-[1179px]:grid-cols-[minmax(240px,292px)_minmax(0,1fr)] min-[1180px]:grid-cols-[292px_minmax(0,1fr)_210px]"
-              : "min-[900px]:max-[1179px]:grid-cols-[minmax(0,1fr)] min-[1180px]:grid-cols-[minmax(0,1fr)_210px]"
+          className={`${layoutStyles.grid} ${
+            desktopSidebarVisible ? layoutStyles.gridSidebarVisible : layoutStyles.gridSidebarCollapsed
           }`}
         >
           {/* 桌面侧栏：联系人式会话索引 */}
           {desktopSidebarVisible ? (
-            <aside className="qq-sidebar hidden min-h-0 min-[900px]:flex min-[900px]:flex-col">
-              <div className="qq-profile">
-                <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={44} height={44} decoding="async" className="qq-profile-avatar" />
+            <aside className={`${sidebarStyles.sidebar} hidden min-h-0 min-[900px]:flex min-[900px]:flex-col`}>
+              <div className={sidebarStyles.profile}>
+                <span aria-hidden className={sidebarStyles.profileAvatar}>
+                  M
+                </span>
                 <div className="min-w-0">
-                  <p className="qq-profile-name truncate">Mboo Code</p>
-                  <p className="qq-profile-status">
-                    <span className="qq-status-dot-online" aria-hidden />
-                    我在线上
+                  <p className={sidebarStyles.profileName}>Mboo Code</p>
+                  <p className={sidebarStyles.profileStatus}>
+                    <span className={sidebarStyles.onlineDot} aria-hidden />
+                    本地代理在线
                   </p>
                   <p className="mt-0.5 truncate font-mono text-[11px] text-text-3" title={modelName || "未选择模型"}>
                     {modelName.trim() || "未选择模型"}
@@ -2520,22 +2118,24 @@ export default function Home() {
                 role="dialog"
                 aria-modal="true"
                 aria-label="会话列表"
-                className="qq-sidebar absolute inset-y-0 left-0 flex w-[min(20rem,88vw)] max-w-[100vw] flex-col pt-[env(safe-area-inset-top)] shadow-dock"
+                className={`${sidebarStyles.sidebar} absolute inset-y-0 left-0 flex w-[min(20rem,88vw)] max-w-[100vw] flex-col pt-[env(safe-area-inset-top)] shadow-dock`}
               >
-                <div className="qq-profile justify-between gap-2 pr-2">
+                <div className={`${sidebarStyles.profile} justify-between gap-2 pr-2`}>
                   <div className="flex min-w-0 items-center gap-2">
-                    <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={44} height={44} decoding="async" className="qq-profile-avatar" />
+                    <span aria-hidden className={sidebarStyles.profileAvatar}>
+                      M
+                    </span>
                     <div className="min-w-0">
-                      <p className="qq-profile-name truncate">会话</p>
-                      <p className="qq-profile-status">
-                        <span className="qq-status-dot-online" aria-hidden />
+                      <p className={sidebarStyles.profileName}>会话</p>
+                      <p className={sidebarStyles.profileStatus}>
+                        <span className={sidebarStyles.onlineDot} aria-hidden />
                         选择或管理任务
                       </p>
                     </div>
                   </div>
                   <button
                     aria-label="关闭会话列表"
-                    className="qq-button inline-flex size-11 shrink-0 items-center justify-center text-text-2"
+                    className={sidebarStyles.closeButton}
                     type="button"
                     onClick={() => setIsSessionDrawerOpen(false)}
                   >
@@ -2549,124 +2149,37 @@ export default function Home() {
             </div>
           ) : null}
 
-          <section className="qq-main-surface flex min-h-0 min-w-0 flex-col">
-            <div className="shrink-0 border-b border-line bg-panel">
-              <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:px-4">
-                <button
-                  ref={sessionMenuButtonRef}
-                  aria-label="打开会话列表"
-                  aria-expanded={isSessionDrawerOpen}
-                  aria-haspopup="dialog"
-                  className="qq-button inline-flex size-11 items-center justify-center text-text-2 min-[900px]:hidden"
-                  type="button"
-                  onClick={() => setIsSessionDrawerOpen(true)}
-                >
-                  <Menu className="size-4" aria-hidden />
-                </button>
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <h1 className="truncate text-sm font-semibold text-text-1">
-                      {currentSession?.title || (sessionId ? "当前会话" : "新任务")}
-                    </h1>
-                    {isArchivedView ? (
-                      <span className="rounded-[2px] border border-running/30 bg-running-soft px-1.5 py-0.5 text-[11px] text-running">
-                        归档只读
-                      </span>
-                    ) : null}
-                    {/* 设计决策：空闲态标题栏已有状态；中栏只在异常/连接中补第二枚，避免三处“空闲” */}
-                    {status.running || status.label === "异常" || status.label === "连接中" ? (
-                      <StatusPill status={status} />
-                    ) : null}
-                  </div>
-                </div>
-              </div>
+          <section className={layoutStyles.mainSurface}>
+            <ConversationStatusPanel
+              title={currentSession?.title || (sessionId ? "当前会话" : "新任务")}
+              archived={isArchivedView}
+              status={status}
+              errorMessage={errorMessage}
+              hasRetryInput={Boolean(lastFailedInput)}
+              sessionMenuButtonRef={sessionMenuButtonRef}
+              isSessionDrawerOpen={isSessionDrawerOpen}
+              onOpenSessionDrawer={() => setIsSessionDrawerOpen(true)}
+              onCopyError={() => void copyError()}
+              onRetryInput={retryLastInput}
+              onClearError={() => {
+                setErrorMessage("");
+                setConnectionState("idle");
+              }}
+            />
 
-              {isRunning ? (
-                <div
-                  className="flex flex-wrap items-center justify-between gap-2 border-t border-running/25 bg-running-soft px-3 py-2 text-sm text-running sm:px-4"
-                  aria-live="polite"
-                >
-                  <div className="min-w-0">
-                    <span className="font-medium">运行中</span>
-                    <span className="mx-2 text-running/50">·</span>
-                    <span className="truncate">
-                      {activeTool
-                        ? `工具：${getToolLabel(activeTool.toolName)}${
-                            activeTool.status === "waiting_approval"
-                              ? "（等待授权）"
-                              : activeTool.status === "submitting"
-                                ? "（处理授权）"
-                                : activeTool.status === "started"
-                                  ? "（执行中）"
-                                  : ""
-                          }`
-                        : activeTurnId
-                          ? "正在生成回复"
-                          : "正在连接"}
-                    </span>
-                  </div>
-                  <button
-                    className="qq-button inline-flex h-10 items-center gap-1.5 px-3 text-xs font-medium text-running min-[900px]:h-8"
-                    type="button"
-                    onClick={stopCurrentRun}
-                  >
-                    <Square className="size-3 fill-current" aria-hidden />
-                    停止
-                  </button>
-                </div>
-              ) : null}
-
-              {errorMessage ? (
-                <div className="border-t border-danger/20 bg-danger-soft px-3 py-2 sm:px-4" role="alert">
-                  <p className="text-sm text-danger">{errorMessage}</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <button
-                      className="qq-button inline-flex h-8 items-center gap-1.5 px-2.5 text-xs text-danger"
-                      type="button"
-                      onClick={() => void copyError()}
-                    >
-                      <Copy className="size-3.5" aria-hidden />
-                      复制错误
-                    </button>
-                    {lastFailedInput ? (
-                      <button
-                        className="qq-button inline-flex h-8 items-center gap-1.5 px-2.5 text-xs text-danger"
-                        type="button"
-                        onClick={retryLastInput}
-                      >
-                        <RotateCcw className="size-3.5" aria-hidden />
-                        回填上次输入
-                      </button>
-                    ) : null}
-                    <button
-                      className="qq-button inline-flex h-8 items-center gap-1.5 px-2.5 text-xs text-text-2"
-                      type="button"
-                      onClick={() => {
-                        setErrorMessage("");
-                        setConnectionState("idle");
-                      }}
-                    >
-                      清除
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="relative min-h-0 flex-1 qq-thread-host">
-              {/* 外层 scroller 结构保持稳定：加载中不切换到另一套 qq-thread 壳，避免闪烁 */}
+            <div className={layoutStyles.threadHost}>
+              {/* 空态与消息态共享同一个线程宿主，避免切会话时重置垂直布局。 */}
               {messages.length === 0 ? (
-                <div className="qq-scrollbar console-scroll qq-thread qq-thread-scroller h-full overflow-y-auto px-3 py-4 sm:px-6">
+                <div className={layoutStyles.threadScroller}>
                   {isSessionSwitching ? (
-                    <div className="mx-auto flex max-w-[46rem] flex-col items-center gap-2 py-16 text-text-3">
-                      <LoaderCircle className="size-5 motion-safe:animate-spin" aria-hidden />
-                      <p className="text-sm">读取会话事件</p>
-                    </div>
+                    <ConversationLoadingState />
                   ) : (
                     <div className="mx-auto max-w-[46rem] rounded-[var(--radius-md)] border border-line bg-panel px-4 py-5 shadow-panel sm:px-5 sm:py-6">
                       {/* 设计决策：缺模型只在输入器保留一个主阻断；空态只给下一步与示例 */}
                       <div className="flex items-center gap-3">
-                        <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={48} height={48} decoding="async" className="size-12 rounded-[4px] border border-line object-cover" />
+                        <span aria-hidden className="mboo-avatar-m size-12 rounded-[12px] border border-line text-xl">
+                          M
+                        </span>
                         <div className="min-w-0">
                           <p className="text-base font-semibold text-text-1">等待新的任务指令</p>
                           <p className="mt-1 text-xs leading-5 text-text-3">
@@ -2703,8 +2216,8 @@ export default function Home() {
                                 type="button"
                                 onClick={() => {
                                   setInput(hint);
-                                  if (!isModelReady) {
-                                    focusModelSelect();
+                                  if (!modelName.trim()) {
+                                    focusModelInput();
                                   }
                                 }}
                               >
@@ -2718,9 +2231,47 @@ export default function Home() {
                   )}
                 </div>
               ) : (
-                <SessionMessageList
+                <MessageList
                   sessionId={sessionId || PENDING_SESSION_KEY}
                   messages={messages}
+                  isRunning={isRunning}
+                  activityMessage={
+                    activeTool
+                      ? `工具：${getToolLabel(activeTool.toolName)}${
+                          activeTool.status === "waiting_approval"
+                            ? "（等待授权）"
+                            : activeTool.status === "submitting"
+                              ? "（处理授权）"
+                              : activeTool.status === "started"
+                                ? "（执行中）"
+                                : ""
+                        }`
+                      : activeTurnId
+                        ? "正在处理"
+                        : "正在连接"
+                  }
+                  onStop={stopCurrentRun}
+                  readToolResult={async (targetSessionId, resultId) => {
+                    const response = await fetch(
+                      `/api/session/${encodeURIComponent(targetSessionId)}/tool-results/${encodeURIComponent(resultId)}`,
+                      { cache: "no-store" },
+                    );
+                    return readApiData<ToolResultDetail>(response);
+                  }}
+                  toErrorMessage={toErrorMessage}
+                  onRegenerate={() => {
+                    // 重新生成：回填最近发送的用户消息并聚焦（T8 消息操作栏）
+                    setInput(lastUserMessageRef.current);
+                    window.requestAnimationFrame(() => {
+                      document.getElementById("task-input")?.focus();
+                    });
+                  }}
+                  onContinue={() => {
+                    // 继续：聚焦输入框让用户接着追问
+                    window.requestAnimationFrame(() => {
+                      document.getElementById("task-input")?.focus();
+                    });
+                  }}
                 />
               )}
               {isSessionSwitching && messages.length > 0 ? (
@@ -2735,7 +2286,7 @@ export default function Home() {
               ) : null}
             </div>
 
-            <div className="shrink-0 border-t border-line bg-panel px-3 py-2 sm:px-4">
+            <div className={`${layoutStyles.composerDock} px-3 sm:px-4 min-[1440px]:px-0`}>
               {isArchivedView ? (
                 <div className="mx-auto max-w-[46rem] rounded-[var(--radius-sm)] border border-running/30 bg-running-soft px-4 py-3 text-sm text-running">
                   当前为归档会话，仅支持回看。可在会话列表中取消归档后继续对话。
@@ -2743,254 +2294,55 @@ export default function Home() {
               ) : (
                 <>
                   {pendingApprovalTools.length > 0 ? (
-                    <div className="mx-auto mb-2 w-full max-w-[46rem] space-y-2">
+                    <div className={`${layoutStyles.approvalStack} mx-auto mb-2 w-full max-w-[46rem] space-y-2`}>
                       {pendingApprovalTools.map((toolCall) => (
                         <ToolApprovalCard
                           key={toolCall.approvalId || toolCall.id}
                           toolCall={toolCall}
-                          toolLabel={getToolLabel(toolCall.toolName)}
                           onResolveApproval={resolveToolApproval}
                         />
                       ))}
                     </div>
                   ) : null}
-                <form className="qq-composer mx-auto w-full max-w-[46rem]" onSubmit={sendMessage}>
-                  {!isModelReady ? (
-                    <div className="flex items-center justify-between gap-2 border-b border-running/30 bg-running-soft px-2.5 py-1.5 text-[11px] text-running">
-                      <span>{modelInfoError || (modelName ? "正在加载模型能力信息" : "当前没有可用模型")}</span>
-                      <button
-                        className="rounded-[2px] font-medium underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]"
-                        type="button"
-                        onClick={focusModelSelect}
-                      >
-                        查看模型
-                      </button>
-                    </div>
-                  ) : null}
-                  <div className="border-b border-line bg-panel">
-                      <button
-                        className="flex min-h-11 w-full items-center justify-between gap-2 px-2.5 py-2 text-left text-xs text-text-2 sm:hidden"
-                        type="button"
-                        aria-expanded={isComposerSettingsOpen || !modelName.trim()}
-                        onClick={() => setIsComposerSettingsOpen((current) => !current)}
-                      >
-                        <span className="min-w-0 truncate">
-                          任务设置 · {modelName.trim() || "未填模型"} ·{" "}
-                          {workspaceBasename(displayedWorkspacePath) || workspaceStatusText}
-                        </span>
-                        <ChevronDown
-                          className={`size-3.5 shrink-0 transition-transform ${
-                            isComposerSettingsOpen || !modelName.trim() ? "" : "-rotate-90"
-                          }`}
-                          aria-hidden
-                        />
-                      </button>
-                      <div
-                        className={`grid gap-2 px-2.5 py-2 sm:grid-cols-[minmax(0,14rem)_7rem_minmax(0,1fr)] ${
-                          isComposerSettingsOpen || !modelName.trim() ? "grid" : "hidden"
-                        } sm:grid`}
-                      >
-                        <div className="block min-w-0 text-[11px] font-medium text-text-3">
-                          <label htmlFor="model-select">模型</label>
-                          <div className="mt-1 flex items-center gap-1.5">
-                            <select
-                              id="model-select"
-                              className="qq-input h-8 min-w-0 flex-1 px-2 text-xs text-text-1 outline-none"
-                              value={modelName}
-                              disabled={isLoadingModelOptions || modelOptions.length === 0 || isRunning || isCompressing}
-                              onChange={(event) => applyModelName(event.target.value)}
-                            >
-                              {modelOptions.length === 0 ? <option value="">暂无可用模型</option> : null}
-                              {modelOptions.map((option) => (
-                                <option key={option} value={option}>
-                                  {option}
-                                </option>
-                              ))}
-                            </select>
-                            <ContextUsageIndicator
-                              usage={contextUsage}
-                              modelId={modelName}
-                              contextLimit={modelContextLimit}
-                              maximumContextLimit={modelInfo?.limit.context}
-                              loadError={modelContextLimitError}
-                              disabled={isRunning || isCompressing}
-                              onContextLimitChange={setModelContextLimit}
-                            />
-                          </div>
-                          <span
-                            className={`mt-1 block min-h-3.5 truncate text-[10px] ${modelOptionsError || modelInfoError || modelContextLimitError ? "text-danger" : "text-text-3"}`}
-                            title={modelOptionsError || modelInfoError || modelContextLimitError}
-                          >
-                            {isLoadingModelOptions
-                              ? "正在加载模型候选"
-                              : modelOptionsError
-                                ? "模型候选加载失败"
-                                : modelOptions.length === 0
-                                  ? "暂无模型候选"
-                                  : modelInfoState === "loading"
-                                    ? "正在加载模型能力"
-                                    : modelInfoError || modelContextLimitError || `${modelOptions.length} 个模型候选`}
-                          </span>
-                        </div>
-                        {hasReasoningOptions ? (
-                          <label className="block min-w-0 text-[11px] font-medium text-text-3">
-                            推理
-                            <select
-                              className="qq-input mt-1 h-8 w-full px-2 text-xs text-text-1 outline-none"
-                              value={reasoningEffort}
-                              disabled={!isModelReady || isRunning || isCompressing}
-                              onChange={(event) => setReasoningEffort(event.target.value)}
-                            >
-                              {reasoningOptions.map((option) => (
-                                <option key={option.value || "provider-default"} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        ) : null}
-                        <div className={`min-w-0 ${hasReasoningOptions ? "" : "sm:col-span-2"}`}>
-                          <WorkspaceBar
-                            compact
-                            displayedPath={displayedWorkspacePath}
-                            statusText={workspaceStatusText}
-                            canSelect={!sessionId && !isSessionSwitching && !isArchivedView && !isRunning && !isCompressing && !isAddingWorkspace}
-                            isSelecting={isSelectingWorkspace}
-                            errorMessage={workspaceMessage}
-                            onSelect={() => void selectWorkspace()}
-                            onClear={clearPendingWorkspace}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  <div className="qq-composer-toolbar">
-                    <div className="qq-composer-toolbar-actions">
-                      <button
-                        className="qq-button inline-flex h-8 items-center gap-1 px-2.5 text-xs text-text-2 sm:h-6 sm:px-2 sm:text-[11px]"
-                        type="button"
-                        disabled={!input.trim() || isRunning}
-                        onClick={() => setInput("")}
-                        title="清空输入"
-                        aria-label="清空输入"
-                      >
-                        清空
-                      </button>
-                      {sessionId && viewingSessionStatus === "active" ? (
-                        <button
-                          className="qq-button inline-flex h-8 items-center gap-1 px-2.5 text-xs text-text-2 sm:h-6 sm:px-2 sm:text-[11px]"
-                          type="button"
-                          disabled={!isCompressing && (isRunning || isSessionSwitching)}
-                          onClick={() => (isCompressing ? stopCompression() : void compressContext())}
-                          title={isCompressing ? "停止压缩" : "压缩上下文"}
-                          aria-label={isCompressing ? "停止压缩" : "压缩上下文"}
-                        >
-                          {isCompressing ? (
-                            <>
-                              <Square className="size-3 fill-current" aria-hidden />
-                              停止压缩
-                            </>
-                          ) : (
-                            <>
-                              <Shrink className="size-3" aria-hidden />
-                              压缩
-                            </>
-                          )}
-                        </button>
-                      ) : null}
-                      <span className="max-w-[12rem] truncate text-[11px] text-text-3">
-                        {isRunning ? (
-                          <span className="sm:hidden">生成中，可点停止</span>
-                        ) : (
-                          <span className="sm:hidden">填好后点发送</span>
-                        )}
-                        <span className="hidden sm:inline">
-                          {isRunning ? "生成中，Esc 可停止" : "⌘/Ctrl + Enter 发送"}
-                        </span>
-                      </span>
-                    </div>
-                  </div>
-                  <label className="sr-only" htmlFor="task-input">
-                    任务输入
-                  </label>
-                  <div className="qq-composer-editor">
-                    <textarea
-                      id="task-input"
-                      disabled={isRunning || isSessionSwitching || isSelectingWorkspace}
-                      placeholder="写下任务目标，或继续追问…"
-                      value={input}
-                      onChange={(event) => setInput(event.target.value)}
-                    />
-                  </div>
-                  <div className="qq-composer-statusbar">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <select
-                        className="qq-input h-8 shrink-0 px-2 text-[11px] text-text-1 outline-none sm:h-[30px]"
-                        value={permissionMode}
-                        disabled={isSessionSwitching || (isRunning && !sessionId)}
-                        onChange={(event) =>
-                          void changePermissionMode(event.target.value as PermissionMode)
-                        }
-                        title={
-                          isSessionSwitching
-                            ? "正在同步会话"
-                            : !sessionId
-                              ? isRunning
-                                ? "会话创建中，使用本次选择的权限模式"
-                                : "新会话将使用所选权限模式"
-                              : "完全访问：工具调用自动通过，不再询问"
-                        }
-                        aria-label="权限模式"
-                      >
-                        <option value="DEFAULT">默认权限</option>
-                        <option value="FULL_ACCESS">完全访问</option>
-                      </select>
-                      <p className="min-w-0 truncate text-[11px] text-text-3">
-                      {workspaceBasename(displayedWorkspacePath) || workspaceStatusText}
-                      {modelName.trim() ? ` · ${modelName.trim()}` : ""}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 gap-1.5">
-                      {isRunning ? (
-                        <button
-                          className="qq-button inline-flex h-10 items-center gap-1 px-3 text-xs font-medium text-running sm:h-[30px]"
-                          type="button"
-                          onClick={stopCurrentRun}
-                        >
-                          <Square className="size-3 fill-current" aria-hidden />
-                          停止
-                        </button>
-                      ) : (
-                        <button
-                          className={`qq-button-primary inline-flex h-10 min-w-[72px] items-center justify-center px-4 text-xs sm:h-[30px] sm:min-w-[64px] ${
-                            !input.trim() || !isModelReady || !isReasoningEffortValid || isSessionSwitching || isSelectingWorkspace
-                              ? "qq-button-locked"
-                              : ""
-                          }`}
-                          disabled={isRunning || isSessionSwitching || isSelectingWorkspace || !input.trim() || !isModelReady || !isReasoningEffortValid}
-                          type="submit"
-                          title={
-                            !isModelReady
-                              ? modelInfoError || "模型能力信息尚未加载完成"
-                              : !isReasoningEffortValid
-                                ? "当前模型不支持所选思考深度"
-                              : !input.trim()
-                                ? "请先输入任务"
-                                : "发送"
-                          }
-                        >
-                          发送
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </form>
+                <TaskComposer
+                  input={input}
+                  onInputChange={setInput}
+                  isRunning={isRunning}
+                  isCompressing={isCompressing}
+                  contextUsage={contextUsage}
+                  compressionState={compressionState}
+                  compressionMessage={compressionMessage}
+                  canCompress={Boolean(sessionId && !isArchivedView)}
+                  isSessionSwitching={isSessionSwitching}
+                  isSelectingWorkspace={isSelectingWorkspace}
+                  modelName={modelName}
+                  isManualModel={isManualModel}
+                  onModelChange={applyModelName}
+                  modelOptions={modelOptions}
+                  modelOptionsError={modelOptionsError}
+                  isLoadingModelOptions={isLoadingModelOptions}
+                  modelContextLimit={modelContextLimit}
+                  reasoningEffort={reasoningEffort}
+                  onReasoningChange={setReasoningEffort}
+                  workspacePath={displayedWorkspacePath}
+                  workspaceStatusText={workspaceStatusText}
+                  canSelectWorkspace={!sessionId && !isSessionSwitching && !isArchivedView}
+                  canClearWorkspace={Boolean(!sessionId && displayedWorkspacePath)}
+                  onSelectWorkspace={() => void selectWorkspace()}
+                  onClearWorkspace={clearPendingWorkspace}
+                  isComposerSettingsOpen={isComposerSettingsOpen}
+                  onToggleSettings={() => setIsComposerSettingsOpen((current) => !current)}
+                  onSend={sendMessage}
+                  onStop={stopCurrentRun}
+                  onCompress={() => void compressContext()}
+                  onFocusModelInput={focusModelInput}
+                />
                 </>
               )}
             </div>
           </section>
 
-          <AgentInfoRail
-            status={status}
+          <ContextRail
             modelName={modelName}
             workspacePath={displayedWorkspacePath}
             workspaceStatusText={workspaceStatusText}
@@ -3000,12 +2352,6 @@ export default function Home() {
             pendingApprovalCount={pendingApprovalCount}
             errorMessage={errorMessage}
             isRunning={isRunning}
-            onNewSession={startNewSession}
-            onRefresh={() => void refreshSessions()}
-            onOpenArchived={() => {
-              setSessionListTab("archived");
-              setIsSidebarCollapsed(false);
-            }}
             onOpenSession={(id) => void openSession(id, "active")}
           />
         </div>
@@ -3013,1076 +2359,6 @@ export default function Home() {
     </main>
   );
 }
-
-function ContextUsageIndicator({
-  usage,
-  modelId,
-  contextLimit,
-  maximumContextLimit,
-  loadError,
-  disabled,
-  onContextLimitChange,
-}: {
-  usage: ContextUsageSnapshot | null;
-  modelId: string;
-  contextLimit: ModelContextLimit | null;
-  maximumContextLimit?: number;
-  loadError: string;
-  disabled: boolean;
-  onContextLimitChange: (value: ModelContextLimit) => void;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [draftLimit, setDraftLimit] = useState(0);
-  const [isSaving, setIsSaving] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [panelPosition, setPanelPosition] = useState<{ left: number; top: number } | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const effectiveContextLimit = contextLimit?.effectiveContextLimit ?? maximumContextLimit;
-  const activeContextLimit = typeof effectiveContextLimit === "number" && effectiveContextLimit > 0 ? effectiveContextLimit : 0;
-  const hasUsage = Boolean(usage && usage.totalTokens >= 0 && activeContextLimit > 0);
-  const ratio = hasUsage && usage ? usage.totalTokens / activeContextLimit : 0;
-  const clampedRatio = Math.max(0, Math.min(1, ratio));
-  const label = hasUsage && usage
-    ? `${(ratio * 100).toFixed(1)}% · ${formatTokens(usage.totalTokens)} / ${formatTokens(activeContextLimit)} 上下文已使用`
-    : activeContextLimit > 0
-      ? `上下文上限 ${formatTokens(activeContextLimit)}`
-      : "上下文上限尚未加载";
-  const background = hasUsage
-    ? `conic-gradient(var(--accent) ${clampedRatio * 360}deg, color-mix(in srgb, var(--line) 45%, white) 0deg)`
-    : "color-mix(in srgb, var(--line) 45%, white)";
-  const minimum = contextLimit?.minimumContextLimit ?? 0;
-  const maximum = contextLimit?.maximumContextLimit ?? 0;
-  const sliderMaximum = maximum > minimum ? Math.ceil((maximum - minimum) / 1000) : 0;
-  const sliderValue = contextLimit ? contextLimitToSliderValue(draftLimit, minimum, maximum) : 0;
-  const canSave = Boolean(contextLimit?.adjustable && draftLimit !== contextLimit.effectiveContextLimit && !disabled && !isSaving);
-  const canReset = Boolean(contextLimit?.configuredContextLimit != null && !disabled && !isSaving);
-
-  useEffect(() => {
-    setIsOpen(false);
-    setDraftLimit(activeContextLimit);
-    setActionError("");
-  }, [activeContextLimit, modelId]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!containerRef.current?.contains(target) && !panelRef.current?.contains(target)) setIsOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setIsOpen(false);
-    };
-    const closePanel = () => setIsOpen(false);
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("resize", closePanel);
-    window.addEventListener("scroll", closePanel, true);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("resize", closePanel);
-      window.removeEventListener("scroll", closePanel, true);
-    };
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const frame = window.requestAnimationFrame(() => {
-      if (!triggerRef.current || !panelRef.current) return;
-      const rect = triggerRef.current.getBoundingClientRect();
-      const panelRect = panelRef.current.getBoundingClientRect();
-      const left = Math.max(8, Math.min(rect.right - panelRect.width, window.innerWidth - panelRect.width - 8));
-      const below = rect.bottom + 6;
-      const top = below + panelRect.height <= window.innerHeight ? below : Math.max(8, rect.top - panelRect.height - 6);
-      setPanelPosition({ left, top });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [actionError, contextLimit?.adjustable, isOpen, loadError]);
-
-  const togglePanel = () => {
-    setActionError("");
-    setDraftLimit(activeContextLimit);
-    if (!isOpen && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      const panelWidth = 256;
-      const panelHeight = 190;
-      const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8));
-      const below = rect.bottom + 6;
-      const top = below + panelHeight <= window.innerHeight ? below : Math.max(8, rect.top - panelHeight - 6);
-      setPanelPosition({ left, top });
-    }
-    setIsOpen((current) => !current);
-  };
-
-  const saveContextLimit = async () => {
-    if (!canSave) return;
-    setIsSaving(true);
-    setActionError("");
-    try {
-      const response = await fetch(`/api/model/${encodeURIComponent(modelId)}/context-limit`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contextLimit: draftLimit }),
-      });
-      const result = await readApiData<ModelContextLimit>(response);
-      if (!result || result.modelId !== modelId) throw new Error("上下文设置响应与当前模型不匹配");
-      onContextLimitChange(result);
-      setIsOpen(false);
-    } catch (error) {
-      setActionError(toErrorMessage(error));
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const resetContextLimit = async () => {
-    if (!canReset) return;
-    setIsSaving(true);
-    setActionError("");
-    try {
-      const response = await fetch(`/api/model/${encodeURIComponent(modelId)}/context-limit`, { method: "DELETE" });
-      const result = await readApiData<ModelContextLimit>(response);
-      if (!result || result.modelId !== modelId) throw new Error("上下文设置响应与当前模型不匹配");
-      onContextLimitChange(result);
-      setIsOpen(false);
-    } catch (error) {
-      setActionError(toErrorMessage(error));
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <div ref={containerRef} className="group relative size-8 shrink-0">
-      <button
-        ref={triggerRef}
-        className="relative size-8 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)]"
-        type="button"
-        aria-label={label}
-        aria-expanded={isOpen}
-        aria-haspopup="dialog"
-        title={label}
-        disabled={!modelId || activeContextLimit <= 0}
-        onClick={togglePanel}
-      >
-        <span className="absolute inset-1 rounded-full" style={{ background }} aria-hidden>
-          <span className="absolute inset-[3px] rounded-full bg-panel-elevated" />
-        </span>
-      </button>
-      <span
-        className={`pointer-events-none absolute right-0 top-[calc(100%+0.25rem)] z-30 w-max max-w-[17rem] rounded-[3px] border border-line bg-panel-elevated px-2 py-1 text-left text-[10px] font-normal text-text-1 shadow-panel transition-opacity ${isOpen ? "hidden" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}
-        role="tooltip"
-      >
-        {label}
-      </span>
-      {isOpen && panelPosition ? createPortal(
-        <div
-          ref={panelRef}
-          className="fixed z-[100] w-64 rounded-[4px] border border-line bg-panel-elevated p-3 text-left font-normal text-text-1 shadow-panel"
-          style={{ left: panelPosition.left, top: panelPosition.top }}
-          role="dialog"
-          aria-label="上下文窗口上限"
-        >
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="text-[11px] text-text-3">当前上限</span>
-            <strong className="text-sm font-semibold text-text-1">{activeContextLimit > 0 ? formatTokens(activeContextLimit) : "--"}</strong>
-          </div>
-          <div className="mt-1 flex items-baseline justify-between gap-3 text-[10px] text-text-3">
-            <span>模型上限</span>
-            <span>{maximumContextLimit ? formatTokens(maximumContextLimit) : "--"}</span>
-          </div>
-          {contextLimit?.adjustable ? (
-            <div className="mt-3">
-              <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-text-3">
-                <label htmlFor="context-limit-slider">自定义上限</label>
-                <span className="font-medium text-text-1">{formatTokens(draftLimit)}</span>
-              </div>
-              <input
-                id="context-limit-slider"
-                className="h-5 w-full cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                type="range"
-                min={0}
-                max={sliderMaximum}
-                step={1}
-                value={sliderValue}
-                disabled={disabled || isSaving}
-                onChange={(event) => setDraftLimit(sliderValueToContextLimit(Number(event.target.value), minimum, maximum))}
-              />
-              <div className="flex justify-between text-[9px] text-text-3">
-                <span>{formatTokens(minimum)}</span>
-                <span>{formatTokens(maximum)}</span>
-              </div>
-            </div>
-          ) : null}
-          {loadError || actionError ? <p className="mt-2 text-[10px] leading-4 text-danger">{actionError || loadError}</p> : null}
-          <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-2">
-            <button
-              className="qq-button inline-flex h-7 items-center gap-1 px-2 text-[10px] disabled:cursor-not-allowed disabled:opacity-50"
-              type="button"
-              title="恢复模型上限"
-              disabled={!canReset}
-              onClick={() => void resetContextLimit()}
-            >
-              <RotateCcw className="size-3" aria-hidden />
-              恢复默认
-            </button>
-            <button
-              className="qq-button-primary inline-flex h-7 items-center gap-1 px-2 text-[10px] disabled:cursor-not-allowed disabled:opacity-50"
-              type="button"
-              disabled={!canSave}
-              onClick={() => void saveContextLimit()}
-            >
-              {isSaving ? <LoaderCircle className="size-3 motion-safe:animate-spin" aria-hidden /> : <Save className="size-3" aria-hidden />}
-              保存
-            </button>
-          </div>
-        </div>,
-        document.body,
-      ) : null}
-    </div>
-  );
-}
-
-function contextLimitToSliderValue(contextLimit: number, minimum: number, maximum: number) {
-  if (contextLimit >= maximum) return Math.ceil((maximum - minimum) / 1000);
-  return Math.max(0, Math.round((contextLimit - minimum) / 1000));
-}
-
-function sliderValueToContextLimit(sliderValue: number, minimum: number, maximum: number) {
-  const regularValue = minimum + sliderValue * 1000;
-  return regularValue >= maximum ? maximum : regularValue;
-}
-
-const WorkspaceBar = memo(function WorkspaceBar({
-  displayedPath,
-  statusText,
-  canSelect = false,
-  isSelecting = false,
-  errorMessage = "",
-  compact = false,
-  onSelect,
-  onClear,
-}: {
-  displayedPath: string;
-  statusText: string;
-  canSelect?: boolean;
-  isSelecting?: boolean;
-  errorMessage?: string;
-  compact?: boolean;
-  onSelect?: () => void;
-  onClear?: () => void;
-}) {
-  return (
-    <div
-      className={`flex min-w-0 flex-col gap-1 sm:flex-row sm:items-end sm:justify-between sm:gap-2 ${
-        compact ? "sm:items-center" : ""
-      }`}
-    >
-      <div className="min-w-0">
-        <p className={`${compact ? "text-[11px]" : "text-xs"} font-medium text-text-3`}>工作区</p>
-        <p
-          className={`mt-0.5 truncate font-mono ${compact ? "text-[11px]" : "text-xs"} text-text-2`}
-          title={displayedPath || statusText}
-        >
-          {statusText}
-        </p>
-        {errorMessage ? <p className="mt-1 text-xs text-danger">{errorMessage}</p> : null}
-      </div>
-      <div className="flex shrink-0 gap-1">
-        {canSelect ? (
-          <button
-            className={`qq-button inline-flex items-center gap-1.5 px-2.5 font-medium text-text-2 ${
-              compact ? "h-7 text-[11px]" : "h-8 text-xs"
-            }`}
-            disabled={isSelecting}
-            type="button"
-            onClick={onSelect}
-          >
-            {isSelecting ? (
-              <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden />
-            ) : (
-              <FolderOpen className="size-3.5" aria-hidden />
-            )}
-            选择目录
-          </button>
-        ) : null}
-        {canSelect && displayedPath ? (
-          <button
-            className={`qq-button inline-flex items-center gap-1.5 px-2.5 text-text-2 ${
-              compact ? "h-7 text-[11px]" : "h-8 text-xs"
-            }`}
-            type="button"
-            onClick={onClear}
-          >
-            <X className="size-3.5" aria-hidden />
-            清除
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-});
-
-// 普通滚动列表：动态 Markdown 高度下比虚拟列表更稳，避免滚动时整列量高纠偏闪烁
-type SessionMessageListProps = {
-  sessionId: string;
-  messages: ChatMessage[];
-};
-
-const SessionMessageList = memo(function SessionMessageList({
-  sessionId,
-  messages,
-}: SessionMessageListProps) {
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const stickToBottomRef = useRef(true);
-  const toolResultCacheRef = useRef<Map<string, Promise<ToolResultDetail>>>(new Map());
-  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
-
-  const loadToolResult = useCallback<ToolResultLoader>(async (resultId, force = false) => {
-    const cacheKey = `${sessionId}:${resultId}`;
-    if (force) toolResultCacheRef.current.delete(cacheKey);
-    const cached = toolResultCacheRef.current.get(cacheKey);
-    if (cached) return cached;
-
-    const request = (async () => {
-      const response = await fetch(
-        `/api/session/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(resultId)}`,
-        { cache: "no-store" },
-      );
-      return readApiData<ToolResultDetail>(response);
-    })();
-    toolResultCacheRef.current.set(cacheKey, request);
-    try {
-      return await request;
-    } catch (error) {
-      toolResultCacheRef.current.delete(cacheKey);
-      throw error;
-    }
-  }, [sessionId]);
-
-  const syncStickState = useCallback(() => {
-    const scroller = scrollerRef.current;
-    if (!scroller) {
-      return;
-    }
-    const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    const atBottom = distance <= NEAR_BOTTOM_PX;
-    stickToBottomRef.current = atBottom;
-    setShowJumpToBottom((prev) => {
-      const next = !atBottom;
-      return prev === next ? prev : next;
-    });
-  }, []);
-
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
-    const scroller = scrollerRef.current;
-    if (!scroller) {
-      return;
-    }
-    stickToBottomRef.current = true;
-    setShowJumpToBottom(false);
-    scroller.scrollTo({ top: scroller.scrollHeight, behavior });
-  }, []);
-
-  useEffect(() => {
-    // 切会话后落到末尾；等一帧让消息完成布局
-    stickToBottomRef.current = true;
-    setShowJumpToBottom(false);
-    const frame = window.requestAnimationFrame(() => {
-      const scroller = scrollerRef.current;
-      if (!scroller) {
-        return;
-      }
-      scroller.scrollTop = scroller.scrollHeight;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [sessionId]);
-
-  useEffect(() => {
-    // 仅在用户贴底时跟随内容增长（流式 delta / 历史一次提交）
-    if (!stickToBottomRef.current) {
-      return;
-    }
-    const scroller = scrollerRef.current;
-    if (!scroller) {
-      return;
-    }
-    scroller.scrollTop = scroller.scrollHeight;
-  }, [messages]);
-
-  return (
-    <>
-      <div
-        ref={scrollerRef}
-        className="qq-scrollbar console-scroll qq-thread qq-thread-scroller h-full overflow-y-auto px-3 py-4 sm:px-6"
-        onScroll={syncStickState}
-      >
-        <div className="mx-auto flex min-h-full max-w-[46rem] flex-col">
-          {messages.map((message) => (
-            <div key={message.id} className="message-item pb-4">
-              <MessageBubble message={message} sessionId={sessionId} loadToolResult={loadToolResult} />
-            </div>
-          ))}
-          <div className="h-2 shrink-0" aria-hidden />
-        </div>
-      </div>
-      {showJumpToBottom ? (
-        <button
-          className="qq-button absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-1/2 z-10 min-h-10 -translate-x-1/2 px-4 py-2 text-xs font-medium text-text-2 shadow-panel min-[900px]:min-h-0 min-[900px]:px-3 min-[900px]:py-1.5"
-          type="button"
-          aria-label="回到消息列表底部"
-          onClick={() => scrollToBottom("smooth")}
-        >
-          回到底部
-        </button>
-      ) : null}
-    </>
-  );
-});
-
-const MessageBubble = memo(function MessageBubble({
-  message,
-  sessionId,
-  loadToolResult,
-}: {
-  message: ChatMessage;
-  sessionId: string;
-  loadToolResult: ToolResultLoader;
-}) {
-  if (message.role === "assistant") {
-    // 设计决策：助手像 QQ 聊天记录里的文档流，少卡片阴影，长回复优先
-    const stateText = message.state ? stateLabel(message.state) : "";
-    return (
-      <article
-        className="flex gap-2.5"
-        aria-label={stateText ? `Mboo Bot，${stateText}` : "Mboo Bot"}
-      >
-        <img
-          src="/qq2007/sidebar-avatar.png"
-          alt=""
-          aria-hidden
-          width={32}
-          height={32}
-          decoding="async"
-          loading="lazy"
-          className="mt-0.5 size-8 shrink-0 rounded-[3px] border border-line object-cover"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="mb-1 flex items-baseline gap-2">
-            <span className="text-xs font-semibold text-accent" id={`assistant-label-${message.id}`}>
-              Mboo Bot
-            </span>
-            {message.state ? (
-              <span className="text-[11px] text-text-3" role="status">
-                {stateLabel(message.state)}
-              </span>
-            ) : null}
-            {message.createdAt ? (
-              <span className="text-[11px] text-text-3">{formatSessionTime(message.createdAt)}</span>
-            ) : null}
-          </div>
-          <div className="min-w-0 space-y-3 text-text-1">
-            {message.parts && message.parts.length > 0 ? (
-              groupAssistantParts(message.parts).map((segment, segmentIndex, segments) => {
-                if (segment.type === "text") {
-                  if (!segment.text && message.state !== "streaming") {
-                    return null;
-                  }
-                  const isLastSegment = segmentIndex === segments.length - 1;
-                  return (
-                    <AssistantMarkdown
-                      key={segment.id}
-                      content={segment.text}
-                      messageId={`${message.id}:${segment.id}`}
-                      isStreaming={message.state === "streaming" && isLastSegment}
-                    />
-                  );
-                }
-                // 连续 tool 合成一块；key 锚在组首 tool，流式追加时不拆卸载
-                return (
-                  <ToolTrace
-                    key={`tool-group-${segment.id}`}
-                    toolCalls={segment.toolCalls}
-                    sessionId={sessionId}
-                    loadToolResult={loadToolResult}
-                    isRunning={message.state === "streaming" && isToolGroupRunning(segment.toolCalls)}
-                  />
-                );
-              })
-            ) : (
-              <>
-                {message.text || message.state === "streaming" ? (
-                  <AssistantMarkdown
-                    content={message.text}
-                    messageId={message.id}
-                    isStreaming={message.state === "streaming"}
-                  />
-                ) : null}
-                {message.toolCalls && message.toolCalls.length > 0 ? (
-                  <ToolTrace
-                    toolCalls={message.toolCalls}
-                    sessionId={sessionId}
-                    loadToolResult={loadToolResult}
-                    isRunning={message.state === "streaming" && isToolGroupRunning(message.toolCalls)}
-                  />
-                ) : null}
-              </>
-            )}
-          </div>
-        </div>
-      </article>
-    );
-  }
-
-  if (message.role === "user") {
-    return (
-      <article className="rounded-[var(--radius-sm)] border border-line bg-panel-muted/70 px-3 py-2">
-        <div className="mb-1 flex items-center gap-2">
-          <span className="text-xs font-semibold text-text-2">我</span>
-          {message.createdAt ? (
-            <span className="text-[11px] text-text-3">{formatSessionTime(message.createdAt)}</span>
-          ) : null}
-        </div>
-        <p className="whitespace-pre-wrap break-words text-sm leading-7 text-text-1">
-          {message.text || " "}
-        </p>
-      </article>
-    );
-  }
-
-  return (
-    <article className="rounded-[var(--radius-sm)] border border-running/30 bg-running-soft px-3 py-2.5">
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-running">系统</span>
-        {message.state ? <span className="text-[11px] text-running">{stateLabel(message.state)}</span> : null}
-      </div>
-      <p className="whitespace-pre-wrap break-words text-sm leading-6 text-text-1">
-        {message.text || " "}
-      </p>
-    </article>
-  );
-});
-
-const ToolTrace = memo(function ToolTrace({
-  toolCalls,
-  isRunning,
-  sessionId,
-  loadToolResult,
-}: {
-  toolCalls: ToolCallView[];
-  isRunning: boolean;
-  sessionId: string;
-  loadToolResult: ToolResultLoader;
-}) {
-  const [open, setOpen] = useState(false);
-  const hasPendingApproval = toolCalls.some(
-    (tool) => tool.status === "waiting_approval" || tool.status === "submitting",
-  );
-  const runningCount = toolCalls.filter((tool) =>
-    tool.status === "started" || tool.status === "waiting_approval" || tool.status === "submitting",
-  ).length;
-  const summaryText = isRunning || runningCount > 0
-    ? toolCalls.length > 1
-      ? `调用工具中 · ${runningCount}/${toolCalls.length}`
-      : "调用工具中"
-    : toolCalls.length > 1
-      ? `调用了 ${toolCalls.length} 个工具`
-      : "调用了一个工具";
-
-  return (
-    <div className="mt-3 overflow-hidden rounded-[var(--radius-sm)] border border-line bg-panel">
-      <button
-        className="flex w-full min-w-0 cursor-pointer select-none items-center gap-2 bg-panel-muted/60 px-2.5 py-2 text-left text-xs font-medium text-text-2"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        {open ? (
-          <ChevronDown className="size-3.5 shrink-0 text-text-3" aria-hidden />
-        ) : (
-          <ChevronRight className="size-3.5 shrink-0 text-text-3" aria-hidden />
-        )}
-        {isRunning ? (
-          <LoaderCircle className="size-3.5 shrink-0 animate-spin text-running" aria-hidden />
-        ) : (
-          <span className="shrink-0" aria-hidden>🔧</span>
-        )}
-        <span className="min-w-0 flex-1 truncate text-text-1">{summaryText}</span>
-        {hasPendingApproval ? (
-          <span className="shrink-0 rounded-[2px] bg-running-soft px-1.5 py-0.5 text-[11px] text-running">
-            等待授权
-          </span>
-        ) : null}
-        <span className="shrink-0 font-mono text-[11px] text-text-3">{toolCalls.length}</span>
-      </button>
-      {open ? (
-        <div className="space-y-1.5 border-t border-line bg-panel-elevated p-2">
-          {toolCalls.map((toolCall) => (
-            <ToolTraceItem
-              key={toolCall.id}
-              toolCall={toolCall}
-              toolLabel={getToolLabel(toolCall.toolName)}
-              sessionId={sessionId}
-              loadToolResult={loadToolResult}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-});
-
-const ToolTraceItem = memo(function ToolTraceItem({
-  toolCall,
-  toolLabel,
-  sessionId,
-  loadToolResult,
-}: {
-  toolCall: ToolCallView;
-  toolLabel: string;
-  sessionId: string;
-  loadToolResult: ToolResultLoader;
-}) {
-  const [open, setOpen] = useState(false);
-  const [resultState, setResultState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
-  const [resultDetail, setResultDetail] = useState<ToolResultDetail | null>(null);
-  const [resultError, setResultError] = useState("");
-
-  const requestResult = useCallback(async (force = false) => {
-    if (!toolCall.resultId || sessionId === PENDING_SESSION_KEY) return;
-    setResultState("loading");
-    setResultError("");
-    try {
-      const detail = await loadToolResult(toolCall.resultId, force);
-      setResultDetail(detail);
-      setResultState("loaded");
-    } catch (error) {
-      setResultState("error");
-      setResultError(toErrorMessage(error));
-    }
-  }, [loadToolResult, sessionId, toolCall.resultId]);
-
-  useEffect(() => {
-    setResultDetail(null);
-    setResultError("");
-    setResultState("idle");
-  }, [toolCall.resultId]);
-
-  useEffect(() => {
-    if (open && toolCall.resultId && resultState === "idle") void requestResult();
-  }, [open, requestResult, resultState, toolCall.resultId]);
-
-  return (
-    <div className="overflow-hidden rounded-[var(--radius-sm)] border border-line bg-panel">
-      <button
-        className="flex w-full min-w-0 cursor-pointer select-none items-center gap-2 bg-panel-muted/60 px-2.5 py-1.5 text-left text-xs font-medium text-text-2"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="shrink-0 text-text-1">🔧 {toolLabel}</span>
-        {toolCall.pathText ? (
-          <span
-            className="min-w-0 flex-1 truncate font-mono text-[11px] font-normal text-text-3"
-            title={toolCall.pathText}
-          >
-            · {toolCall.pathText}
-          </span>
-        ) : (
-          <span className="min-w-0 flex-1" />
-        )}
-        <span className={`shrink-0 rounded-[2px] px-1.5 py-0.5 text-[11px] ${toolStatusClassName(toolCall.status)}`}>
-          {toolStatusLabel(toolCall.status)}
-        </span>
-        {typeof toolCall.durationMs === "number" ? (
-          <span className="shrink-0 font-mono text-[11px] text-text-3">{toolCall.durationMs}ms</span>
-        ) : null}
-      </button>
-      {open ? (
-        <div className="space-y-2 border-t border-line bg-panel-elevated px-2.5 py-2.5">
-          {toolLabel !== toolCall.toolName ? (
-            <p className="font-mono text-[11px] text-text-3">{toolCall.toolName}</p>
-          ) : null}
-          {toolCall.argumentsText ? (
-            <CopyableToolText
-              ariaLabel="复制工具参数"
-              text={toolCall.argumentsText}
-              className="max-h-32"
-            />
-          ) : null}
-          {resultState === "loading" ? (
-            <p className="flex items-center gap-1.5 text-[11px] text-text-3" role="status">
-              <LoaderCircle className="size-3 animate-spin" aria-hidden />
-              加载工具结果
-            </p>
-          ) : null}
-          {(toolCall.status === "completed" || toolCall.status === "failed") && !toolCall.resultId ? (
-            <p className="text-[11px] text-text-3">工具结果不可用</p>
-          ) : null}
-          {resultState === "loaded" && resultDetail?.resultPreview ? (
-            <ToolResultPreview toolName={toolCall.toolName} text={resultDetail.resultPreview} />
-          ) : null}
-          {resultState === "error" ? (
-            <div className="flex items-center justify-between gap-2 rounded-[3px] border border-danger/30 bg-danger-soft px-2 py-1.5">
-              <p className="min-w-0 break-words text-[11px] text-danger">{resultError || "工具结果加载失败"}</p>
-              <button
-                className="qq-icon-button size-7 shrink-0"
-                type="button"
-                aria-label="重试加载工具结果"
-                title="重试加载工具结果"
-                onClick={() => void requestResult(true)}
-              >
-                <RefreshCw className="size-3.5" aria-hidden />
-              </button>
-            </div>
-          ) : null}
-          {toolCall.errorMessage || toolCall.errorCode ? (
-            <div className="space-y-1">
-              {toolCall.errorMessage ? (
-                <p className="break-words text-xs text-danger">{toolCall.errorMessage}</p>
-              ) : null}
-              {toolCall.errorCode ? (
-                <p className="font-mono text-[11px] text-text-3">{toolCall.errorCode}</p>
-              ) : null}
-            </div>
-          ) : null}
-          {toolCall.status === "waiting_approval" || toolCall.status === "submitting" ? (
-            <p className="text-[11px] leading-5 text-running">
-              授权操作在输入框上方，请在底部完成允许或拒绝。
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-});
-
-/** 输入框上方授权区：与消息流中的工具轨迹解耦，避免在折叠工具里找按钮 */
-const ToolApprovalCard = memo(function ToolApprovalCard({
-  toolCall,
-  toolLabel,
-  onResolveApproval,
-}: {
-  toolCall: ToolCallView;
-  toolLabel: string;
-  onResolveApproval: (toolCall: ToolCallView, decision: ToolApprovalDecision) => Promise<void>;
-}) {
-  const submitting = toolCall.status === "submitting";
-
-  return (
-    <div
-      className="rounded-[var(--radius-sm)] border border-running/40 bg-running-soft px-3 py-2.5 shadow-panel"
-      role="region"
-      aria-label="工具授权请求"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-running">
-            {toolCall.approvalTitle || "需要工具授权"}
-          </p>
-          <p className="mt-0.5 text-[11px] text-text-3">
-            🔧 {toolLabel}
-            {toolCall.pathText ? (
-              <span className="font-mono" title={toolCall.pathText}>
-                {" "}
-                · {toolCall.pathText}
-              </span>
-            ) : null}
-          </p>
-        </div>
-        <span className={`shrink-0 rounded-[2px] px-1.5 py-0.5 text-[11px] ${toolStatusClassName(toolCall.status)}`}>
-          {toolStatusLabel(toolCall.status)}
-        </span>
-      </div>
-      {toolCall.approvalDescription ? (
-        <p className="mt-1.5 whitespace-pre-wrap text-xs leading-5 text-text-2">{toolCall.approvalDescription}</p>
-      ) : null}
-      {typeof toolCall.approvalIndex === "number" && typeof toolCall.approvalCount === "number" ? (
-        <p className="mt-1 text-[11px] text-text-3">
-          授权阶段 {toolCall.approvalIndex}/{toolCall.approvalCount}
-        </p>
-      ) : null}
-      {toolCall.permissionType === "COMMAND" && typeof toolCall.parsedArguments?.command === "string" ? (
-        <div className="mt-2 rounded-[3px] border border-running/20 bg-panel-elevated px-2.5 py-2">
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-text-1">
-            {toolCall.parsedArguments.command}
-          </pre>
-        </div>
-      ) : null}
-      {toolCall.grantPath &&
-      (toolCall.permissionType === "READ" || toolCall.permissionType === "WRITE") ? (
-        <div className="mt-2 rounded-[3px] border border-running/20 bg-panel-elevated px-2.5 py-2">
-          <p className="break-all font-mono text-xs leading-5 text-text-1">{toolCall.grantPath}</p>
-          <p className="mt-1 text-[11px] text-text-3">包含其子目录</p>
-        </div>
-      ) : null}
-      {toolCall.errorMessage ? (
-        <p className="mt-2 break-words text-xs text-danger">{toolCall.errorMessage}</p>
-      ) : null}
-      <div className="mt-2.5 flex flex-wrap gap-1.5">
-        <button
-          className="qq-button-primary px-3 py-1.5 text-xs disabled:opacity-50"
-          disabled={submitting}
-          type="button"
-          onClick={() => void onResolveApproval(toolCall, "ALLOW_ONCE")}
-        >
-          仅允许本次
-        </button>
-        <button
-          className="qq-button px-3 py-1.5 text-xs text-ok disabled:opacity-50"
-          disabled={submitting}
-          type="button"
-          onClick={() => void onResolveApproval(toolCall, "ALLOW_SESSION")}
-        >
-          {sessionAllowLabel(toolCall.permissionType)}
-        </button>
-        <button
-          className="qq-button px-3 py-1.5 text-xs text-danger disabled:opacity-50"
-          disabled={submitting}
-          type="button"
-          onClick={() => void onResolveApproval(toolCall, "DENY")}
-        >
-          拒绝
-        </button>
-      </div>
-      {toolCall.permissionType === "COMMAND" ? (
-        <p className="mt-1.5 text-[11px] text-text-3">
-          本会话授权只匹配完全相同的命令、工作目录和 Shell 身份
-        </p>
-      ) : null}
-    </div>
-  );
-});
-
-const CopyableToolText = memo(function CopyableToolText({
-  text,
-  ariaLabel,
-  className = "max-h-40",
-}: {
-  text: string;
-  ariaLabel: string;
-  className?: string;
-}) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-
-  const copy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopyState("copied");
-    } catch {
-      setCopyState("failed");
-    }
-    window.setTimeout(() => setCopyState("idle"), 1600);
-  }, [text]);
-
-  return (
-    <div className="relative overflow-hidden rounded-[3px] border border-line bg-panel-muted">
-      <button
-        className="absolute right-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded-[3px] border border-line bg-panel-elevated px-1.5 py-1 text-[10px] text-text-3 hover:text-text-1"
-        type="button"
-        aria-label={ariaLabel}
-        onClick={() => void copy()}
-      >
-        <Copy className="size-3" aria-hidden />
-        {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}
-      </button>
-      <pre className={`console-scroll overflow-auto p-2 pr-16 font-mono text-[11px] leading-5 text-text-2 ${className}`}>
-        {text}
-      </pre>
-    </div>
-  );
-});
-
-const ToolResultPreview = memo(function ToolResultPreview({
-  toolName,
-  text,
-}: {
-  toolName: string;
-  text: string;
-}) {
-  const showDiff = (toolName === "edit_file" || toolName === "write_file") && hasDiffContent(text);
-
-  if (!showDiff) {
-    return <CopyableToolText ariaLabel="复制工具结果" text={text} />;
-  }
-
-  return (
-    <div className="relative overflow-hidden rounded-[3px] border border-line bg-panel-muted">
-      <DiffCopyButton text={text} />
-      <div className="console-scroll max-h-56 overflow-auto py-2 pr-16 font-mono text-[11px] leading-5 text-text-2">
-        {text.split("\n").map((line, index) => (
-          <div key={`${index}_${line.slice(0, 16)}`} className={`min-w-max whitespace-pre px-2 ${diffLineClassName(line)}`}>
-            {line || " "}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-});
-
-const DiffCopyButton = memo(function DiffCopyButton({ text }: { text: string }) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-
-  const copy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopyState("copied");
-    } catch {
-      setCopyState("failed");
-    }
-    window.setTimeout(() => setCopyState("idle"), 1600);
-  }, [text]);
-
-  return (
-    <button
-      className="absolute right-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded-[3px] border border-line bg-panel-elevated px-1.5 py-1 text-[10px] text-text-3 hover:text-text-1"
-      type="button"
-      aria-label="复制工具结果"
-      onClick={() => void copy()}
-    >
-      <Copy className="size-3" aria-hidden />
-      {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}
-    </button>
-  );
-});
-
-const StatusPill = memo(function StatusPill({
-  status,
-  compact = false,
-}: {
-  status: { label: string; className: string; running?: boolean };
-  /** 标题栏深色底上的紧凑态；中栏浅色面不要套 titlebar 皮肤 */
-  compact?: boolean;
-}) {
-  return (
-    <span
-      className={`inline-flex h-6 max-w-full items-center gap-1.5 rounded-[3px] border px-2 text-[11px] font-medium ${
-        compact ? "qq-titlebar-status min-w-0 shrink" : ""
-      } ${status.className}`}
-      aria-live="polite"
-      title={status.label}
-      data-running={status.running ? "true" : undefined}
-      data-error={status.label === "异常" ? "true" : undefined}
-    >
-      <span
-        className={`qq-status-dot shrink-0 bg-current ${status.running ? "motion-safe:animate-pulse" : ""}`}
-        aria-hidden
-      />
-      <span className={`min-w-0 truncate ${compact ? "qq-titlebar-status-label" : ""}`}>{status.label}</span>
-    </span>
-  );
-});
-
-// 宽屏右栏：只展示真实 Agent 状态，不造虚假社交数据
-const AgentInfoRail = memo(function AgentInfoRail({
-  modelName,
-  workspacePath,
-  workspaceStatusText,
-  recentSessions,
-  sessionPreviews,
-  sessionId,
-  pendingApprovalCount,
-  errorMessage,
-  isRunning,
-  onOpenSession,
-}: {
-  status?: { label: string; className: string; running?: boolean };
-  modelName: string;
-  workspacePath: string;
-  workspaceStatusText: string;
-  recentSessions: SessionInfo[];
-  sessionPreviews: Record<string, string>;
-  sessionId: string;
-  pendingApprovalCount: number;
-  errorMessage: string;
-  isRunning: boolean;
-  onNewSession?: () => void;
-  onRefresh?: () => void;
-  onOpenArchived?: () => void;
-  onOpenSession: (sessionId: string) => void;
-}) {
-  return (
-    <aside className="qq-right-rail qq-right-rail-desktop qq-scrollbar console-scroll hidden min-h-0 flex-col overflow-y-auto min-[1180px]:flex">
-      {/* 设计决策：立绘压缩为识别点缀，不再抢资料与通知的扫描空间 */}
-      <div className="qq-right-show" aria-hidden="true" />
-
-      <section className="border-b border-line/70">
-        <div className="qq-right-label-fallback" data-label="profile">
-          当前上下文
-        </div>
-        <div className="space-y-1 px-2.5 py-2">
-          <p className="truncate text-sm font-semibold text-text-1">Mboo Bot</p>
-          <p className="truncate text-[11px] text-text-3" title={modelName || "模型在中栏配置"}>
-            模型：{modelName.trim() || "未配置"}
-          </p>
-          <p className="truncate text-[11px] text-text-3" title={workspacePath || workspaceStatusText}>
-            工作区：{workspaceBasename(workspacePath) || workspaceStatusText}
-          </p>
-        </div>
-      </section>
-
-      {recentSessions.length > 0 ? (
-        <section className="border-b border-line/70">
-          <div className="qq-right-label-fallback" data-label="recent">
-            最近会话
-          </div>
-          <div className="space-y-0.5 p-1.5">
-            {recentSessions.map((session) => {
-              const selected = session.id === sessionId;
-              return (
-                <button
-                  key={session.id}
-                  className={`flex w-full items-center gap-2 rounded-[3px] px-1.5 py-1.5 text-left ${
-                    selected ? "qq-selected-row" : "qq-session-row"
-                  }`}
-                  type="button"
-                  onClick={() => onOpenSession(session.id)}
-                >
-                  <img src="/qq2007/sidebar-avatar.png" alt="" aria-hidden width={24} height={24} decoding="async" loading="lazy" className="size-6 rounded-[2px] border border-line object-cover" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium text-text-1">
-                      {sessionListTitle(session, sessionPreviews[session.id])}
-                    </span>
-                    <span className="block truncate text-[11px] text-text-3">
-                      {formatSessionTime(session.updatedAt)}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      {pendingApprovalCount > 0 || errorMessage || isRunning ? (
-        <section>
-          <div className="qq-right-label-fallback" data-label="notice">
-            通知中心
-          </div>
-          <div className="space-y-1.5 p-2 text-xs text-text-2">
-            {pendingApprovalCount > 0 ? (
-              <p className="rounded-[3px] border border-running/30 bg-running-soft px-2 py-1.5 text-running">
-                待授权工具：{pendingApprovalCount}
-              </p>
-            ) : null}
-            {errorMessage ? (
-              <p className="rounded-[3px] border border-danger/30 bg-danger-soft px-2 py-1.5 text-danger">
-                最近错误：{errorMessage}
-              </p>
-            ) : null}
-            {isRunning ? (
-              <p className="rounded-[3px] border border-line bg-panel-elevated px-2 py-1.5">
-                当前状态：运行中
-              </p>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-    </aside>
-  );
-});
 
 function getStatusView(state: ConnectionState, activeTurnId: string | null) {
   if (state === "running") {
@@ -4215,43 +2491,6 @@ function diffLineClassName(line: string) {
     return "bg-danger-soft text-danger";
   }
   return "text-text-2";
-}
-
-/** 渲染用分段：相邻 tool 收成一组，text 仍按事件序切开 */
-type AssistantRenderSegment =
-  | { type: "text"; id: string; text: string }
-  | { type: "tool_group"; id: string; toolCalls: ToolCallView[] };
-
-function groupAssistantParts(parts: AssistantPart[]): AssistantRenderSegment[] {
-  const segments: AssistantRenderSegment[] = [];
-  for (const part of parts) {
-    if (part.type === "text") {
-      segments.push({ type: "text", id: part.id, text: part.text });
-      continue;
-    }
-    const last = segments[segments.length - 1];
-    if (last?.type === "tool_group") {
-      // 同一连续 tool 段内追加；已存在的 toolCallId 由 reduce 保证不会重复 part
-      last.toolCalls.push(part.toolCall);
-      continue;
-    }
-    segments.push({
-      type: "tool_group",
-      // 用组内首个 tool id 做稳定锚点，避免流式 N 变大时整组 remount
-      id: part.id,
-      toolCalls: [part.toolCall],
-    });
-  }
-  return segments;
-}
-
-function isToolGroupRunning(toolCalls: ToolCallView[]): boolean {
-  return toolCalls.some(
-    (tool) =>
-      tool.status === "started" ||
-      tool.status === "waiting_approval" ||
-      tool.status === "submitting",
-  );
 }
 
 function collectMessageToolCalls(message: ChatMessage): ToolCallView[] {
@@ -4434,64 +2673,6 @@ function isToolCallEvent(event: SessionEvent): event is ToolCallEvent {
   );
 }
 
-function getReasoningEffortValues(modelInfo: ModelInfo) {
-  const values = new Set<string>();
-  for (const option of modelInfo.reasoningOptions) {
-    if (option.type !== "effort" || !Array.isArray(option.values)) continue;
-    for (const value of option.values) {
-      if (typeof value !== "string") continue;
-      const cleaned = value.trim();
-      if (cleaned) values.add(cleaned);
-    }
-  }
-  return [...values];
-}
-
-function normalizeContextUsage(value?: ContextUsageSnapshot | null): ContextUsageSnapshot | null {
-  if (!value || typeof value.modelId !== "string" || !value.modelId.trim()) return null;
-  if (typeof value.totalTokens !== "number" || !Number.isFinite(value.totalTokens) || value.totalTokens < 0) return null;
-  const inputTokens = typeof value.inputTokens === "number" && Number.isFinite(value.inputTokens) && value.inputTokens >= 0 ? value.inputTokens : null;
-  const outputTokens = typeof value.outputTokens === "number" && Number.isFinite(value.outputTokens) && value.outputTokens >= 0 ? value.outputTokens : null;
-  return { modelId: value.modelId.trim(), inputTokens, outputTokens, totalTokens: value.totalTokens };
-}
-
-function findLastContextUsage(events: SessionEvent[], modelId: string) {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    // 遇到已完成的压缩：更早的 usage 全部失效，等待压缩后的新 usage
-    if (event.type === "CONTEXT_COMPRESSION" && event.payload.state === "completed") return null;
-    if (event.type !== "ASSISTANT_MESSAGE") continue;
-    const usage = normalizeContextUsage(event.payload.contextUsage);
-    if (usage?.modelId === modelId) return usage;
-  }
-  return null;
-}
-
-/**
- * 压缩状态文案：界面只展示简短状态，不展示摘要、turn 数或 Token 统计。
- * interrupted 用于历史回放中只剩 started 的压缩。
- */
-function describeCompressionState(
-  state: ContextCompressionState,
-  errorMessage: string | null | undefined,
-  interrupted: boolean,
-): { text: string; state: MessageState } {
-  if (state === "started") {
-    return { text: interrupted ? "上下文压缩已中断" : "正在压缩上下文…", state: "info" };
-  }
-  if (state === "completed") {
-    return { text: "上下文压缩完成", state: "info" };
-  }
-  if (state === "skipped") {
-    return { text: "当前上下文无需压缩", state: "info" };
-  }
-  return { text: `上下文压缩失败${errorMessage ? `：${errorMessage}` : ""}`, state: "error" };
-}
-
-function formatTokens(tokens: number) {
-  return `${(tokens / 1000).toFixed(1)}K`;
-}
-
 function toToolCallView(event: ToolCallEvent): ToolCallView {
   const { payload } = event;
   const toolName = payload.toolName || "unknown_tool";
@@ -4552,6 +2733,38 @@ function sessionAllowLabel(permissionType?: ToolPermissionType) {
     return "本会话允许此命令";
   }
   return "本会话始终允许此工具";
+}
+
+function findLastContextUsage(events: SessionEvent[]) {
+  let latest: ContextUsageSnapshot | null = null;
+  for (const event of events) {
+    if (event.type === "CONTEXT_USAGE_UPDATED") {
+      latest = event.payload;
+    } else if (event.type === "ASSISTANT_MESSAGE" && event.payload.contextUsage) {
+      latest = event.payload.contextUsage;
+    }
+  }
+  return latest;
+}
+
+function findLastCompression(events: SessionEvent[]) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type === "CONTEXT_COMPRESSION") {
+      return event.payload;
+    }
+  }
+  return null;
+}
+
+function compressionSystemText(payload: ContextCompressionPayload) {
+  if (payload.state === "started") return "上下文压缩已开始";
+  if (payload.state === "completed") {
+    const detail = payload.summarizedTurnCount ? `，整理 ${payload.summarizedTurnCount} 个历史回合` : "";
+    return `上下文压缩完成${detail}`;
+  }
+  if (payload.state === "skipped") return `本次未压缩上下文：${payload.skipReason || "当前没有需要整理的内容"}`;
+  return `上下文压缩失败：${payload.errorMessage || "后端未提供具体原因"}`;
 }
 
 function reduceSessionEventsToMessages(events: SessionEvent[]) {
@@ -4632,7 +2845,6 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
             state: event.payload.state,
             turnId: event.turnId,
             createdAt: event.createdAt,
-            contextUsage: normalizeContextUsage(event.payload.contextUsage),
             parts: applyFinalAssistantText(undefined, finalText, messageId),
           }),
         );
@@ -4644,7 +2856,6 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
           state: event.payload.state,
           turnId: existing.turnId || event.turnId,
           createdAt: existing.createdAt || event.createdAt,
-          contextUsage: normalizeContextUsage(event.payload.contextUsage) ?? existing.contextUsage,
           parts: applyFinalAssistantText(existing.parts, finalText, messageId),
         });
         messages = next;
@@ -4653,14 +2864,11 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
     }
 
     if (event.type === "CONTEXT_COMPRESSION") {
-      const payload = event.payload;
-      // 相同 compressionId 归并为一个压缩项；只有 started 的历史压缩显示为已中断
-      const view = describeCompressionState(payload.state, payload.errorMessage, true);
       messages = upsertMessageSnapshot(messages, {
-        id: `compression_${payload.compressionId || event.eventId}`,
+        id: `compression_${event.payload.compressionId}_${event.payload.state}`,
         role: "system",
-        text: view.text,
-        state: view.state,
+        text: compressionSystemText(event.payload),
+        state: event.payload.state === "failed" ? "error" : "info",
         turnId: event.turnId,
         createdAt: event.createdAt,
       });
@@ -4798,19 +3006,6 @@ function mergeMessagesById(base: ChatMessage[], incoming: ChatMessage[]) {
   return Array.from(map.values());
 }
 
-// 从 metadataJson 解析权限模式；缺失或非法时按默认权限处理
-function parsePermissionMode(metadataJson?: string | null): PermissionMode {
-  if (!metadataJson) {
-    return "DEFAULT";
-  }
-  try {
-    const meta = JSON.parse(metadataJson) as { permissionMode?: unknown };
-    return meta.permissionMode === "FULL_ACCESS" ? "FULL_ACCESS" : "DEFAULT";
-  } catch {
-    return "DEFAULT";
-  }
-}
-
 function normalizeSessionInfo(session: SessionInfo): SessionInfo {
   const status: SessionStatus =
     session.status === "archived" ? "archived" : "active";
@@ -4818,6 +3013,18 @@ function normalizeSessionInfo(session: SessionInfo): SessionInfo {
     ...session,
     status,
   };
+}
+
+function parsePermissionMode(metadataJson?: string | null): PermissionMode {
+  if (!metadataJson?.trim()) {
+    return "DEFAULT";
+  }
+  try {
+    const metadata = JSON.parse(metadataJson) as { permissionMode?: unknown };
+    return metadata.permissionMode === "FULL_ACCESS" ? "FULL_ACCESS" : "DEFAULT";
+  } catch {
+    return "DEFAULT";
+  }
 }
 
 function upsertSession(list: SessionInfo[], session: SessionInfo) {
@@ -4830,6 +3037,16 @@ function upsertSession(list: SessionInfo[], session: SessionInfo) {
     ...next[index],
     ...session,
   };
+  return next;
+}
+
+function upsertWorkspace(list: FeatureWorkspaceInfo[], workspace: FeatureWorkspaceInfo) {
+  const index = list.findIndex((item) => item.id === workspace.id);
+  if (index < 0) {
+    return [workspace, ...list];
+  }
+  const next = list.slice();
+  next[index] = workspace;
   return next;
 }
 
@@ -4966,31 +3183,6 @@ function saveSessionPreviewMap(map: Record<string, string>) {
   }
 }
 
-function readCollapsedSidebarGroups(): Record<string, boolean> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.collapsedSidebarGroups);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const next: Record<string, boolean> = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (typeof value === "boolean") next[key] = value;
-    }
-    return next;
-  } catch {
-    return {};
-  }
-}
-
-function saveCollapsedSidebarGroups(groups: Record<string, boolean>) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_KEYS.collapsedSidebarGroups, JSON.stringify(groups));
-  } catch {
-    // 忽略配额等本地存储失败
-  }
-}
-
 function compactPreviewText(raw: string) {
   const normalized = raw.trim().replace(/\s+/g, " ");
   if (!normalized) {
@@ -5038,108 +3230,4 @@ function workspaceBasename(path?: string | null) {
   const normalized = path.replace(/\\/g, "/");
   const parts = normalized.split("/").filter(Boolean);
   return parts[parts.length - 1] || path;
-}
-
-function workspaceParentPath(path: string) {
-  const usesBackslash = path.includes("\\");
-  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
-  const separatorIndex = normalized.lastIndexOf("/");
-  if (separatorIndex < 0) return path;
-  let parent = normalized.slice(0, separatorIndex) || "/";
-  if (/^[A-Za-z]:$/.test(parent)) parent += "/";
-  return usesBackslash ? parent.replace(/\//g, "\\") : parent;
-}
-
-function formatSessionTime(value?: string | null) {
-  if (!value) {
-    return "时间未知";
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function roleLabel(role: MessageRole) {
-  if (role === "assistant") {
-    return "助手";
-  }
-
-  if (role === "system") {
-    return "系统";
-  }
-
-  return "用户";
-}
-
-function stateLabel(state: MessageState) {
-  if (state === "streaming") {
-    return "生成中";
-  }
-
-  if (state === "complete") {
-    return "完成";
-  }
-
-  if (state === "cancel") {
-    return "已取消";
-  }
-
-  if (state === "error") {
-    return "错误";
-  }
-
-  return "提示";
-}
-
-function toolStatusLabel(status: ToolCallStatus) {
-  if (status === "waiting_approval") {
-    return "等待授权";
-  }
-
-  if (status === "submitting") {
-    return "处理中";
-  }
-
-  if (status === "started") {
-    return "运行中";
-  }
-
-  if (status === "completed") {
-    return "完成";
-  }
-
-  if (status === "failed") {
-    return "失败";
-  }
-
-  return "运行中";
-}
-
-function toolStatusClassName(status: ToolCallStatus) {
-  if (status === "waiting_approval" || status === "submitting") {
-    return "bg-running-soft text-running";
-  }
-
-  if (status === "started") {
-    return "bg-running-soft text-running";
-  }
-
-  if (status === "completed") {
-    return "bg-ok-soft text-ok";
-  }
-
-  if (status === "failed") {
-    return "bg-danger-soft text-danger";
-  }
-
-  return "bg-running-soft text-running";
 }

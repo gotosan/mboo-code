@@ -1,0 +1,794 @@
+.searchField {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 0 11px;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  background: #f7f7f7;
+  color: #35352c;
+}
+
+.searchField:focus-within {
+  border-color: #cccccc;
+  outline: 2px solid rgb(92 21 224 / 12%);
+  outline-offset: 1px;
+  background: #fff;
+}
+
+.searchIcon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: #8b8b84;
+}
+
+.searchInput {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #080807;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.searchInput::placeholder {
+  color: #8b8b84;
+}
+
+.actionRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.primaryButton,
+.secondaryButton,
+.smallButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid #e1e1dc;
+  border-radius: 999px;
+  background: #fff;
+  color: #35352c;
+  font: inherit;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 100ms ease;
+}
+
+.primaryButton {
+  height: 32px;
+  min-width: 0;
+  flex: 1;
+  padding: 0 10px;
+  border-color: #8064ee;
+  background: #8064ee;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.secondaryButton {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 0;
+  color: #575547;
+}
+
+.smallButton {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.smallPrimaryButton {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #8064ee;
+  border-radius: 999px;
+  background: #8064ee;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dangerButton {
+  color: #c94b59;
+}
+
+.smallPrimaryButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.primaryButton:hover:not(:disabled),
+.secondaryButton:hover:not(:disabled),
+.smallButton:hover:not(:disabled) {
+  border-color: #c8c8c0;
+  background: #f4f4f5;
+}
+
+.primaryButton:hover:not(:disabled) {
+  border-color: #6c50d8;
+  background: #6c50d8;
+}
+
+.primaryButton:active:not(:disabled),
+.secondaryButton:active:not(:disabled),
+.smallButton:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.workspaceConfirmTitle,
+.workspaceConfirmText {
+  margin: 0;
+}
+
+.workspaceLoading {
+  margin: 4px 6px 6px 28px;
+  color: #8b8b84;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.workspaceListHeader {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 2px 6px;
+  color: #575547;
+}
+
+.workspaceListTitle {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+}
+
+.workspaceListIcon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.workspaceRefresh,
+.workspaceDelete {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #9b9b92;
+  cursor: pointer;
+}
+
+.workspaceRefresh {
+  width: 24px;
+  height: 24px;
+}
+
+.workspaceRefresh:hover:not(:disabled),
+.workspaceDelete:hover:not(:disabled) {
+  background: #ecece8;
+  color: #5c15e0;
+}
+
+.workspaceRefresh:disabled,
+.workspaceDelete:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.workspaceSaveCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border: 1px solid rgb(128 100 238 / 24%);
+  border-radius: 7px;
+  background: #f0edff;
+}
+
+.workspaceSaveCopy,
+.workspaceCopy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.workspaceSaveLabel {
+  color: #7567d9;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.workspacePath,
+.workspaceName,
+.workspaceMeta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspacePath,
+.workspaceName {
+  color: #35352c;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.workspaceSaveButton {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid #8064ee;
+  border-radius: 999px;
+  background: #8064ee;
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workspaceSaveButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workspaceTree {
+  min-width: 0;
+}
+
+.workspaceItem {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  min-width: 0;
+  border-radius: 8px;
+}
+
+.workspaceItem:hover {
+  background: #f4f4f5;
+}
+
+.workspaceToggle,
+.workspaceTogglePlaceholder {
+  display: inline-flex;
+  width: 22px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: #8b8b84;
+}
+
+.workspaceToggle {
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.workspaceToggle svg {
+  width: 13px;
+  height: 13px;
+}
+
+.workspaceToggle:hover:not(:disabled) {
+  background: #e6e6e6;
+  color: #35352c;
+}
+
+.workspaceToggle:focus-visible,
+.workspaceOpen:focus-visible,
+.workspaceDelete:focus-visible,
+.workspaceRefresh:focus-visible {
+  outline: 2px solid #5c15e0;
+  outline-offset: 1px;
+}
+
+.workspaceOpen,
+.workspaceOpenStatic {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+}
+
+.workspaceOpen {
+  cursor: pointer;
+}
+
+.workspaceOpen:hover:not(:disabled) {
+  background: transparent;
+}
+
+.workspaceFolderIcon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: #8b8b84;
+}
+
+.workspaceChildren {
+  min-width: 0;
+  margin-left: 22px;
+  padding: 1px 0 3px 6px;
+  border-left: 1px solid #f0f0ee;
+}
+
+.workspaceEmpty {
+  min-height: 28px;
+  margin: 1px 4px 2px 0;
+  padding: 6px 7px;
+  border: 1px solid #eeeeeb;
+  border-radius: 6px;
+  background: #fafaf9;
+  color: #6f6d64;
+  font-size: 10px;
+  line-height: 14px;
+}
+.workspaceOpen:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workspaceMeta {
+  margin-top: 1px;
+  color: #9b9b92;
+  font-size: 10px;
+  line-height: 13px;
+}
+
+.workspaceDelete {
+  width: 24px;
+  height: 24px;
+  margin: 2px 2px 2px auto;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.workspaceError,
+.workspaceConfirm {
+  padding: 7px;
+  border-radius: 7px;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.workspaceError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid rgb(188 74 74 / 24%);
+  background: #fff0f0;
+  color: #bc4a4a;
+}
+
+.workspaceError button,
+.workspaceConfirmActions button {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.workspaceConfirm {
+  width: 100%;
+  border: 1px solid rgb(188 74 74 / 24%);
+  background: #fff0f0;
+}
+
+.workspaceConfirmTitle {
+  color: #8f343d;
+  font-weight: 600;
+}
+
+.workspaceConfirmText {
+  margin-top: 3px;
+  color: #bc4a4a;
+}
+
+.workspaceConfirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.workspaceConfirmDanger {
+  font-weight: 600;
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.smallButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.buttonIcon {
+  width: 14px;
+  height: 14px;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  height: 32px;
+  margin-top: 8px;
+  padding: 2px;
+  border: 1px solid #e6e6e6;
+  border-radius: 8px;
+  background: #f2f2f2;
+}
+
+.tab {
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8b8b84;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: #080807;
+}
+
+.tabSelected {
+  border: 1px solid #cccccc;
+  background: #fff;
+  color: #5c15e0;
+}
+
+.feedback,
+.errorBox,
+.emptyBox {
+  margin-top: 8px;
+  border-radius: 6px;
+}
+
+.feedback {
+  padding: 8px 10px;
+  border: 1px solid rgb(235 86 86 / 30%);
+  background: rgb(235 86 86 / 10%);
+  color: #eb5656;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.errorBox {
+  padding: 8px 10px;
+  border: 1px solid rgb(235 86 86 / 35%);
+  background: rgb(235 86 86 / 10%);
+}
+
+.errorTitle {
+  margin: 0;
+  color: #eb5656;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.errorDescription {
+  margin: 4px 0 0;
+  color: #575547;
+  font-size: 11px;
+  line-height: 20px;
+}
+
+.errorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sessionScroller {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #d2d2d2 transparent;
+}
+
+.emptyBox {
+  padding: 24px 12px;
+  border: 1px dashed #e6e6e6;
+  text-align: center;
+}
+
+.emptyBoxCompact {
+  padding-block: 16px;
+}
+
+.emptyTitle,
+.emptyDescription {
+  margin: 0;
+}
+
+.emptyTitle {
+  color: #35352c;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.emptyDescription {
+  margin-top: 4px;
+  color: #8b8b84;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.sessionItem {
+  min-height: 46px;
+  padding: 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.sessionItemNested {
+  padding-left: 6px;
+}
+
+.sessionItemSelected {
+  border-color: #cccccc;
+  background: #f4f4f5;
+}
+
+.sessionMainRow {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.sessionOpenButton {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuTrigger {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8b8b84;
+  cursor: pointer;
+}
+
+.menuTrigger:hover:not(:disabled),
+.menuTrigger[aria-expanded="true"] {
+  background: #e6e6e6;
+  color: #35352c;
+}
+
+.menuTrigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.menuTriggerIcon {
+  width: 16px;
+  height: 16px;
+}
+
+.sessionOpenButton:focus-visible,
+.menuTrigger:focus-visible,
+.tab:focus-visible,
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible,
+.smallButton:focus-visible,
+.titleInput:focus-visible {
+  outline: 2px solid #5c15e0;
+  outline-offset: 2px;
+}
+
+.sessionCopy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sessionTitle {
+  display: block;
+  overflow: hidden;
+  color: #080807;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionItemSelected .sessionTitle {
+  color: #5c15e0;
+}
+
+.sessionMeta {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: #8b8b84;
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionMetaTime {
+  flex: 0 0 auto;
+  color: #9e9e9e;
+  font-size: 10px;
+  line-height: 13px;
+  text-align: right;
+}
+
+.sessionMetaWorkspace {
+  min-width: 0;
+  overflow: hidden;
+  font-family: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionMenu {
+  position: fixed;
+  z-index: 100;
+  display: grid;
+  width: 164px;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid #cccccc;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 8px 20px rgb(8 8 7 / 14%);
+  transform-origin: top right;
+  animation: session-menu-arrive 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.menuItem {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #35352c;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuItem:hover:not(:disabled),
+.menuItem:focus-visible {
+  background: #f4f4f5;
+  outline: 0;
+}
+
+.menuItem:focus-visible {
+  box-shadow: inset 0 0 0 2px #5c15e0;
+}
+
+.menuItem:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@keyframes session-menu-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sessionMenu {
+    animation: none;
+  }
+}
+
+.menuItemDanger {
+  color: #c94b59;
+}
+
+.menuItemIcon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.titleInput {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #e6e6e6;
+  border-radius: 6px;
+  background: #fff;
+  color: #080807;
+  font-size: 13px;
+  outline: 0;
+}
+
+.renameActions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.renameAction {
+  height: 28px;
+  flex: 1;
+}
+
+@media (min-width: 900px) {
+  .primaryButton,
+  .secondaryButton {
+    height: 32px;
+  }
+
+}

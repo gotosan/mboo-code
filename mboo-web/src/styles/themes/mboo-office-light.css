@@ -1,0 +1,640 @@
+/* Mboo Office Light：白色工作台与淡紫动作色 */
+
+/*
+  函数级意图：把现有工作台切换到轻量白色主题，同时保留 page.tsx 的业务结构。
+  关键决策：先用独立覆盖层验证视觉方向，避免一次性重写会话和 Agent 状态逻辑。
+*/
+:root,
+[data-theme="mboo-office-light"] {
+  color-scheme: light;
+  /* 骨架：页面外层画布与 /preview 对齐；工作区内部仍保持白色面板。 */
+  --canvas: #e8e8e8;
+  --canvas-deep: #f7f7f7;
+  --panel: #ffffff;
+  --panel-elevated: #ffffff;
+  --panel-muted: #f2f2f2;
+  --line: #e6e6e6;
+  --line-strong: #cccccc;
+  /* 文字 5 级中性色 */
+  --text-1: #080807;
+  --text-2: #35352c;
+  --text-3: #575547;
+  --text-4: #8b8b84;
+  /* 紫色系：主紫做动作，深紫做强调文字（对比度达标） */
+  --accent: #996af1;
+  --accent-strong: #5c15e0;
+  --accent-soft: rgba(153, 106, 241, 0.1);
+  --accent-fg: #ffffff;
+  /* 运行态保持紫色（用户选定），文字用深紫保证可读性 */
+  --running: #996af1;
+  --running-soft: rgba(153, 106, 241, 0.1);
+  --danger: #eb5656;
+  --danger-soft: rgba(235, 86, 86, 0.1);
+  --ok: #1e9e7c;
+  --ok-soft: rgba(87, 219, 180, 0.16);
+  --focus: #5c15e0;
+  --panel-shadow: 0 1px 2px rgb(17 24 39 / 0.05);
+  --dock-shadow: 0 8px 24px rgb(17 24 39 / 0.1);
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --qq-sidebar-bg: #ffffff;
+  --qq-selected: #f4f4f5;
+  --qq-titlebar-height: 60px;
+  --qq-profile-height: 76px;
+  --qq-composer-toolbar-height: 38px;
+  --qq-composer-editor-min-height: 104px;
+  --qq-composer-status-height: 46px;
+}
+
+/* 外壳与顶部工具栏：参考页的白色工作台，不再保留复古窗体材质 */
+body {
+  background: #e8e8e8;
+  color: var(--text-1);
+  font-family: "Noto Sans SC", "Noto Sans SC Fallback", "PingFang SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", sans-serif;
+}
+
+.qq-shell {
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+/* 侧栏：保留会话索引功能，转为轻量导航 */
+.qq-sidebar {
+  background: #ffffff;
+  border-right: 1px solid #f2f2f2;
+  box-shadow: none;
+}
+
+.qq-profile {
+  min-height: 76px;
+  padding: 16px;
+  border-bottom: 1px solid #f2f2f2;
+  background: #ffffff;
+}
+
+.qq-profile-avatar {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: none;
+}
+
+.qq-profile-name {
+  color: var(--text-1);
+  font-size: 14px;
+}
+
+.qq-profile-status {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.qq-search-field {
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  background: #fafafa;
+  color: var(--text-2);
+  box-shadow: none;
+}
+
+.qq-search-field:focus-within {
+  border-color: var(--line-strong);
+  background: #ffffff;
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.qq-selected-row {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--qq-selected);
+  box-shadow: none;
+  color: var(--accent-strong);
+  text-shadow: none;
+}
+
+.qq-session-row {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.qq-session-row:hover {
+  border-color: var(--line);
+  background: #f4f4f5;
+  box-shadow: none;
+}
+
+.qq-group-header {
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-3);
+  text-shadow: none;
+}
+
+.qq-group-header:hover {
+  color: var(--accent-strong);
+  background: var(--panel-muted);
+}
+
+.message-item article {
+  border-radius: 14px;
+}
+
+/* MasterGo 3:3160 输入区：40px 配置条 + 38px 工具栏 + 104px 编辑区 */
+.qq-composer-config-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  min-height: 40px;
+  height: 40px;
+  padding-inline: 12px;
+  gap: 8px;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  background: #f7f7f7;
+  box-shadow: none;
+}
+
+.qq-composer-config-select {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #080807;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.qq-composer-config-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.qq-composer-form {
+  min-width: 0;
+}
+
+.qq-composer {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e6e6e6;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.qq-composer-toolbar {
+  display: flex;
+  min-height: 38px;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding-inline: 12px;
+  border-bottom: 1px solid #f2f2f2;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.qq-composer-toolbar::before {
+  display: none;
+}
+
+.qq-composer-clear {
+  flex-shrink: 0;
+  height: 30px !important;
+  padding-inline: 10px !important;
+  border-radius: 999px !important;
+  border-color: #e6e6e6 !important;
+  background: #ffffff !important;
+  color: #35352c !important;
+  font-size: 12px !important;
+  line-height: 16px;
+}
+
+.qq-composer-editor {
+  height: 104px;
+  min-height: 104px;
+  border-bottom: 1px solid #f2f2f2;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.qq-composer-editor textarea {
+  box-sizing: border-box;
+  width: 100%;
+  height: 104px;
+  min-height: 104px;
+  padding: 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #080807;
+  caret-color: var(--accent-strong);
+  font-size: 14px;
+  line-height: 24px;
+  outline: none;
+}
+
+.qq-composer-editor textarea::placeholder {
+  color: #9e9e9e;
+  opacity: 1;
+}
+
+.qq-composer-editor textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+
+/* 历史候选浮层（T8）：浅灰底圆角列表，选中行淡紫底紫字 + 左竖条 */
+.qq-composer-suggest {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--panel-muted);
+  background: var(--canvas-deep);
+}
+
+.qq-suggest-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding-inline: 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  transition: background 150ms ease;
+}
+
+.qq-suggest-row:hover {
+  background: var(--panel-muted);
+}
+
+.qq-suggest-row-selected {
+  background: var(--accent-soft);
+  border-color: var(--line);
+}
+
+.qq-suggest-row-selected .qq-suggest-bar {
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.qq-suggest-hint {
+  align-self: flex-end;
+  padding: 2px 4px 0;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-4);
+}
+
+/* 消息操作栏（T8）：助手消息底部小图标组，灰图标 + 中性灰 hover + 点赞紫 */
+.msg-action-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  margin-top: 8px;
+  padding-left: 2px;
+}
+
+.msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-4);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.msg-action-btn:hover {
+  background: var(--panel-muted);
+  color: var(--text-2);
+}
+
+.msg-action-btn-liked {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Mboo 字母标识：替代 QQ 企鹅素材（浅紫底 + 深紫粗体 M） */
+.mboo-avatar-m {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 700;
+  user-select: none;
+}
+
+.qq-input {
+  border-color: rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.qq-input:focus,
+.qq-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 细滚动条：中性灰，保持可见但不抢视觉 */
+.qq-scrollbar,
+.console-scroll {
+  scrollbar-color: #cccccc #f7f7f7;
+}
+
+.qq-scrollbar::-webkit-scrollbar,
+.console-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.qq-scrollbar::-webkit-scrollbar-track,
+.console-scroll::-webkit-scrollbar-track {
+  border: 0;
+  background: #f7f7f7;
+  box-shadow: none;
+}
+
+.qq-scrollbar::-webkit-scrollbar-thumb,
+.console-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid #f7f7f7;
+  border-radius: 999px;
+  background: #cccccc;
+  box-shadow: none;
+}
+
+.mboo-markdown .mboo-md-codeblock__bar {
+  border-bottom-color: var(--line);
+  background: var(--panel-muted);
+}
+
+.mboo-markdown .mboo-md-copy {
+  border-color: var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--accent-strong);
+  box-shadow: none;
+}
+
+/* 真实 TaskComposer 视觉命名空间：与遗留 qq-* 控件规则隔离，直接对齐 /preview D2C */
+.mboo-composer-form {
+  min-width: 0;
+}
+
+.mboo-composer-config-bar {
+  display: flex;
+  min-width: 0;
+  height: 40px;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  padding-inline: 12px;
+  overflow: hidden;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  background: #f7f7f7;
+}
+
+.mboo-composer-config-select {
+  min-width: 0;
+  height: 28px !important;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #080807;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.mboo-composer-config-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.mboo-composer {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e6e6e6;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.mboo-composer-toolbar {
+  display: flex;
+  height: 38px;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding-inline: 12px;
+  border-bottom: 1px solid #f2f2f2;
+  background: #ffffff;
+}
+
+.mboo-composer-button,
+.mboo-composer-button-primary {
+  display: inline-flex;
+  min-height: 0 !important;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e6e6e6;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: none;
+  color: #35352c;
+  font-size: 12px;
+  text-shadow: none;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 100ms ease;
+}
+
+.mboo-composer-button:hover:not(:disabled) {
+  border-color: #cccccc;
+  background: #f2f2f2;
+}
+
+.mboo-composer-button:active:not(:disabled),
+.mboo-composer-button-primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.mboo-composer-button:focus-visible,
+.mboo-composer-button-primary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.mboo-composer-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.mboo-composer-button-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.mboo-composer-button-primary:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+.mboo-composer-button-primary:disabled,
+.mboo-composer-button-locked {
+  border-color: #dedbe8 !important;
+  background: #e9e7ed !important;
+  color: #6f6e76 !important;
+  cursor: not-allowed;
+}
+
+.mboo-composer-clear {
+  flex-shrink: 0;
+  height: 30px !important;
+  padding-inline: 10px !important;
+}
+
+.mboo-composer-editor {
+  height: 104px;
+  min-height: 104px;
+  border-bottom: 1px solid #f2f2f2;
+  background: #ffffff;
+}
+
+.mboo-composer-editor textarea {
+  box-sizing: border-box;
+  width: 100%;
+  height: 104px;
+  min-height: 104px;
+  padding: 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #080807;
+  caret-color: var(--accent-strong);
+  font-size: 14px;
+  line-height: 24px;
+  outline: none;
+}
+
+.mboo-composer-editor textarea::placeholder {
+  color: #9e9e9e;
+  opacity: 1;
+}
+
+.mboo-composer-editor textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.mboo-composer-suggest {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #f2f2f2;
+  background: #f7f7f7;
+}
+
+.mboo-composer-suggest-row {
+  display: flex;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding-inline: 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #35352c;
+}
+
+.mboo-composer-suggest-row:hover,
+.mboo-composer-suggest-row-selected {
+  background: var(--accent-soft);
+  border-color: #e6e6e6;
+}
+
+.mboo-composer-suggest-bar {
+  width: 3px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.mboo-composer-suggest-hint {
+  align-self: flex-end;
+  padding: 2px 4px 0;
+  color: var(--text-4);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.mboo-composer-statusbar {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #ffffff;
+}
+
+.mboo-composer-statusbar .mboo-composer-button,
+.mboo-composer-statusbar .mboo-composer-button-primary {
+  height: 30px !important;
+  min-height: 30px !important;
+}
+
+@media (max-width: 719px) {
+  .qq-profile {
+    min-height: 68px;
+    padding: 12px;
+  }
+
+  .qq-composer {
+    border-radius: 16px;
+  }
+
+  .qq-composer-editor,
+  .qq-composer-editor textarea {
+    min-height: 88px;
+    height: 88px;
+  }
+
+  .mboo-composer-editor,
+  .mboo-composer-editor textarea {
+    min-height: 88px;
+    height: 88px;
+  }
+}
