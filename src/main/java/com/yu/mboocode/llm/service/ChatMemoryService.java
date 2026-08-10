@@ -36,6 +36,28 @@ public class ChatMemoryService extends ServiceImpl<ChatMemoryMapper, ChatMemory>
     }
 
     /**
+     * 原子提交工具压薄结果并使旧 usage 失效；模型和上下文窗口信息继续保留。
+     */
+    @Transactional
+    public void commitToolThinning(String memoryId, String messagesJson) {
+        String now = DateTimeUtil.now();
+        boolean updated = lambdaUpdate()
+                .eq(ChatMemory::getMemoryId, memoryId)
+                .set(ChatMemory::getMessagesJson, messagesJson)
+                .set(ChatMemory::getLastContextUsageJson, null)
+                .set(ChatMemory::getLastUsageAt, null)
+                .set(ChatMemory::getUpdatedAt, now)
+                .update();
+        if (!updated) {
+            ChatMemory chatMemory = new ChatMemory();
+            chatMemory.setMemoryId(memoryId);
+            chatMemory.setMessagesJson(messagesJson);
+            chatMemory.setUpdatedAt(now);
+            save(chatMemory);
+        }
+    }
+
+    /**
      * 保存本轮最后一次有效主模型 usage；摘要模型 usage 不允许走这里。
      */
     @Transactional

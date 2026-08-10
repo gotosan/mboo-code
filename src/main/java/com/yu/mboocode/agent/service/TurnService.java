@@ -412,10 +412,8 @@ public class TurnService {
             log.error("清理 turn 授权请求失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
         }
         if (sessionTurn.operationType() == TurnOperationType.CHAT) {
-            // 持久化本轮最后一次有效主模型 usage，供下一轮 70% 触发判断和摘要模型选择
+            // 持久化本轮最后一次有效主模型 usage，供下一轮工具压薄、自动摘要和摘要模型选择
             persistLastUsage(runtime);
-            // 固定的工具压薄：同步、尽力，必须在释放执行锁前完成
-            contextManagementService.thinOldToolInteractions(sessionTurn.sessionId());
         }
         try {
             sessionService.clearActiveTurn(sessionTurn.sessionId(), sessionTurn.turnId());

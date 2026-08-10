@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS mboo_chat_memory (
                           messages_json TEXT NOT NULL DEFAULT '[]', -- 模型使用的近期聊天消息
                           summary_text TEXT, -- 早期历史摘要
                           last_model_id TEXT, -- 上一次聊天实际使用的模型 ID
-                          last_context_usage_json TEXT, -- 最近一次有效主对话 ContextUsageSnapshot JSON
+                          last_context_usage_json TEXT, -- 最近一次有效主对话 ContextUsageSnapshot JSON，上下文改写后清空
                           last_context_limit INTEGER, -- 产生该 usage 时模型的上下文窗口
                           last_usage_at TEXT, -- 最近一次有效主对话 usage 时间
                           summary_updated_at TEXT, -- 最近一次模型摘要成功提交时间
