@@ -1,4 +1,6 @@
 .form {
+  position: relative;
+  z-index: 1000;
   width: min(100%, 736px);
   min-width: 0;
   margin: 0 auto;
@@ -56,125 +58,6 @@
 
 .configBarClosed {
   display: none;
-}
-
-.modelMetaPanel {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 9px 12px;
-  border: 1px solid #e6e6e1;
-  border-radius: 10px;
-  background: #f8f8f6;
-}
-
-.modelMetaHeader,
-.modelMetaTitleGroup,
-.permissionControl,
-.contextLimitRow,
-.contextLimitActions {
-  display: flex;
-  align-items: center;
-}
-
-.modelMetaHeader {
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.permissionControl {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  color: #8b8b84;
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.permissionSelect {
-  height: 25px;
-  padding: 0 4px;
-  border: 1px solid #dfded8;
-  border-radius: 6px;
-  background: #fff;
-  color: #35352c;
-  font: inherit;
-  font-size: 10px;
-}
-
-.modelMetaTitleGroup {
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-
-.modelMetaTitle {
-  color: #35352c;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 15px;
-}
-
-.modelMetaHint,
-.modelMetaError,
-.contextLimitRangeLabel {
-  color: #9b9b92;
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.modelMetaError {
-  color: #bc4a4a;
-}
-
-.contextLimitValue {
-  flex: 0 0 auto;
-  color: #7567d9;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 15px;
-}
-
-.contextLimitRow {
-  flex-wrap: wrap;
-  gap: 6px 8px;
-}
-
-.contextLimitRange {
-  min-width: 120px;
-  flex: 1 1 180px;
-  accent-color: #8064ee;
-}
-
-.contextLimitRangeLabel {
-  flex: 0 0 auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-.contextLimitActions {
-  flex: 0 0 auto;
-  gap: 6px;
-  margin-left: auto;
-}
-
-.contextResetButton {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: #8b8b84;
-  font-size: 10px;
-  cursor: pointer;
-}
-
-.contextResetButton:hover:not(:disabled) {
-  color: #5c15e0;
-}
-
-.contextResetButton:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 .configGroup {
@@ -307,8 +190,7 @@
 
 .composerButton:focus-visible,
 .primaryButton:focus-visible,
-.mobileSettingsToggle:focus-visible,
-.textarea:focus-visible {
+.mobileSettingsToggle:focus-visible {
   outline: 2px solid #8d71ff;
   outline-offset: 2px;
 }
@@ -347,15 +229,33 @@
 
 .composer {
   position: relative;
+  z-index: 1001;
   display: flex;
   width: 100%;
   min-width: 0;
   flex-direction: column;
-  overflow: hidden;
-  border: 1px solid #e6e6e6;
+  overflow: visible;
+  border: 1px solid transparent;
   border-radius: 16px;
   background: #fff;
   box-shadow: none;
+}
+
+/* 将边框绘制在内容层上方，避免 toolbar/statusbar 的白色背景盖住圆角与焦点态。 */
+.composer::after {
+  position: absolute;
+  z-index: 1003;
+  inset: -1px;
+  border: 1px solid #e6e6e6;
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.composer:focus-within::after {
+  border-color: #c9bdf5;
+  box-shadow: 0 0 0 3px rgb(141 113 255 / 14%);
 }
 
 .toolbar {
@@ -496,9 +396,234 @@
 }
 
 .statusActions {
+  position: relative;
+  z-index: 1002;
   display: flex;
   flex: 0 0 auto;
+  align-items: center;
   gap: 6px;
+}
+
+.contextTrigger {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.contextTrigger:focus-visible {
+  outline: 2px solid #8d71ff;
+  outline-offset: 3px;
+}
+
+.contextRing {
+  position: relative;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: #d8d3f5;
+  transition: transform 140ms ease, border-color 140ms ease;
+}
+
+.contextRingTrack {
+  position: absolute;
+  inset: 3px;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.contextRingValue {
+  position: relative;
+  z-index: 1;
+  color: #5c15e0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.contextTrigger:hover .contextRing,
+.contextTriggerOpen .contextRing {
+  transform: scale(1.06);
+  border-color: #6c50d8;
+}
+
+.contextPopover {
+  position: fixed;
+  z-index: 2147483647;
+  display: flex;
+  width: min(292px, calc(100vw - 32px));
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e6e6e1;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgb(53 53 44 / 14%);
+  color: #35352c;
+}
+
+.contextPopover::after {
+  position: absolute;
+  right: 22px;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  border-right: 1px solid #e6e6e1;
+  border-bottom: 1px solid #e6e6e1;
+  background: #fff;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.contextPopoverHeader,
+.contextPopoverSummary,
+.contextPopoverActions,
+.contextDetails > div {
+  display: flex;
+  align-items: center;
+}
+
+.contextPopoverHeader,
+.contextPopoverSummary,
+.contextPopoverActions,
+.contextDetails > div {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.contextPopoverTitle {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.contextPopoverStatus,
+.contextPopoverUnit,
+.contextDetails dt,
+.compactionState {
+  color: #8b8b84;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.contextPopoverTotal {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 22px;
+}
+
+.contextPopoverPercent {
+  color: #5c15e0;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+}
+
+.contextPopoverTrack {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e6e6e1;
+}
+
+.contextPopoverTrack span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #996af1;
+  transition: width 180ms ease;
+}
+
+.contextDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 2px 0;
+}
+
+.contextDetails dt,
+.contextDetails dd {
+  margin: 0;
+}
+
+.contextDetails dd {
+  color: #575547;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.contextPopoverActions {
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid #f2f2f2;
+}
+
+.compactionState {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactionStateError {
+  color: #bc4a4a;
+}
+
+.contextCompressButton {
+  display: inline-flex;
+  min-height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid #d8d3f5;
+  border-radius: 6px;
+  background: #f0edff;
+  color: #5c15e0;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.contextCompressButton:hover:not(:disabled) {
+  border-color: #996af1;
+  background: #e9e4ff;
+}
+
+.contextCompressButton:focus-visible {
+  outline: 2px solid #8d71ff;
+  outline-offset: 2px;
+}
+
+.contextCompressButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.contextSpinner {
+  width: 12px;
+  height: 12px;
+  animation: context-spin 900ms linear infinite;
+}
+
+@keyframes context-spin {
+  to { transform: rotate(360deg); }
 }
 
 .stopButton {

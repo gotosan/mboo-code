@@ -24,7 +24,6 @@ import type {
   AssistantMessageState,
   ChatReq,
   ModelContextLimit,
-  ModelInfo,
   ContextCompressionPayload,
   ContextCompressionState,
   ContextUsageSnapshot,
@@ -174,14 +173,7 @@ export default function Home() {
   const [isLoadingModelOptions, setIsLoadingModelOptions] = useState(true);
   const [isManualModel, setIsManualModel] = useState(true);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
-  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
-  const [modelInfoError, setModelInfoError] = useState("");
-  const [isLoadingModelInfo, setIsLoadingModelInfo] = useState(false);
   const [modelContextLimit, setModelContextLimit] = useState<ModelContextLimit | null>(null);
-  const [modelContextLimitError, setModelContextLimitError] = useState("");
-  const [contextLimitDraft, setContextLimitDraft] = useState<number | null>(null);
-  const [isLoadingModelContextLimit, setIsLoadingModelContextLimit] = useState(false);
-  const [isSavingContextLimit, setIsSavingContextLimit] = useState(false);
   const [contextUsage, setContextUsage] = useState<ContextUsageSnapshot | null>(null);
   const [compressionState, setCompressionState] = useState<ContextCompressionState | null>(null);
   const [compressionMessage, setCompressionMessage] = useState("");
@@ -262,7 +254,6 @@ export default function Home() {
   const lastSentModelRef = useRef("");
   const modelOptionsRef = useRef<string[]>([]);
   const modelNameRef = useRef("");
-  const modelMetadataRequestRef = useRef(0);
   const contextUsageBySessionRef = useRef<Record<string, ContextUsageSnapshot | null>>({});
   const compressionAbortControllerRef = useRef<AbortController | null>(null);
   const isRunning = connectionState === "running";
@@ -338,108 +329,35 @@ export default function Home() {
 
   useEffect(() => {
     const targetModel = modelName.trim();
-    const requestVersion = ++modelMetadataRequestRef.current;
     if (!targetModel) {
-      setModelInfo(null);
-      setModelInfoError("");
       setModelContextLimit(null);
-      setModelContextLimitError("");
       setContextUsage(null);
-      setContextLimitDraft(null);
-      setIsLoadingModelInfo(false);
-      setIsLoadingModelContextLimit(false);
       return;
     }
 
     let cancelled = false;
-    setModelInfo(null);
-    setModelInfoError("");
     setModelContextLimit(null);
-    setModelContextLimitError("");
     setContextUsage((current) => current?.modelId === targetModel ? current : null);
-    setContextLimitDraft(null);
-    setIsLoadingModelInfo(true);
-    setIsLoadingModelContextLimit(true);
 
-    const loadModelMetadata = async () => {
-      const [infoResult, contextLimitResult] = await Promise.allSettled([
-        fetch(`/api/model/${encodeURIComponent(targetModel)}`, { cache: "no-store" }).then((response) => readApiData<ModelInfo>(response)),
-        fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, { cache: "no-store" }).then((response) => readApiData<ModelContextLimit>(response)),
-      ]);
-      if (cancelled || requestVersion !== modelMetadataRequestRef.current) {
-        return;
+    const loadContextLimit = async () => {
+      try {
+        const contextLimit = await fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, { cache: "no-store" })
+          .then((response) => readApiData<ModelContextLimit>(response));
+        if (!cancelled && contextLimit?.modelId === targetModel) {
+          setModelContextLimit(contextLimit);
+        }
+      } catch {
+        if (!cancelled) {
+          setModelContextLimit(null);
+        }
       }
-
-      if (infoResult.status === "fulfilled" && infoResult.value?.modelId === targetModel) {
-        setModelInfo(infoResult.value);
-        setModelInfoError("");
-      } else {
-        setModelInfoError(infoResult.status === "rejected" ? toErrorMessage(infoResult.reason) : "模型能力信息与当前模型不匹配");
-      }
-      if (contextLimitResult.status === "fulfilled" && contextLimitResult.value?.modelId === targetModel) {
-        setModelContextLimit(contextLimitResult.value);
-        setModelContextLimitError("");
-        setContextLimitDraft(contextLimitResult.value.effectiveContextLimit);
-      } else {
-        setModelContextLimitError(contextLimitResult.status === "rejected" ? toErrorMessage(contextLimitResult.reason) : "上下文窗口信息与当前模型不匹配");
-      }
-      setIsLoadingModelInfo(false);
-      setIsLoadingModelContextLimit(false);
     };
 
-    void loadModelMetadata();
+    void loadContextLimit();
     return () => {
       cancelled = true;
     };
   }, [modelName]);
-
-  const saveContextLimit = useCallback(async () => {
-    const targetModel = modelName.trim();
-    if (!targetModel || !modelContextLimit || contextLimitDraft === null || isSavingContextLimit) {
-      return;
-    }
-    setIsSavingContextLimit(true);
-    try {
-      const response = await fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contextLimit: contextLimitDraft }),
-      });
-      const saved = await readApiData<ModelContextLimit>(response);
-      if (saved?.modelId !== targetModel) {
-        throw new Error("后端返回的模型与当前选择不一致");
-      }
-      setModelContextLimit(saved);
-      setContextLimitDraft(saved.effectiveContextLimit);
-      setSessionMessage("上下文窗口上限已保存");
-    } catch (error) {
-      setSessionMessage(`上下文窗口保存失败：${toErrorMessage(error)}`);
-    } finally {
-      setIsSavingContextLimit(false);
-    }
-  }, [contextLimitDraft, isSavingContextLimit, modelContextLimit, modelName]);
-
-  const resetContextLimit = useCallback(async () => {
-    const targetModel = modelName.trim();
-    if (!targetModel || !modelContextLimit || isSavingContextLimit) {
-      return;
-    }
-    setIsSavingContextLimit(true);
-    try {
-      const response = await fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, { method: "DELETE" });
-      const reset = await readApiData<ModelContextLimit>(response);
-      if (reset?.modelId !== targetModel) {
-        throw new Error("后端返回的模型与当前选择不一致");
-      }
-      setModelContextLimit(reset);
-      setContextLimitDraft(reset.effectiveContextLimit);
-      setSessionMessage("上下文窗口已恢复默认");
-    } catch (error) {
-      setSessionMessage(`上下文窗口恢复失败：${toErrorMessage(error)}`);
-    } finally {
-      setIsSavingContextLimit(false);
-    }
-  }, [isSavingContextLimit, modelContextLimit, modelName]);
 
   const changePermissionMode = useCallback(async (nextMode: PermissionMode) => {
     const previousMode = permissionMode;
@@ -2031,10 +1949,12 @@ export default function Home() {
       const title = sessionListTitle(session, sessionPreviews[session.id]).toLowerCase();
       const preview = (sessionPreviews[session.id] || "").toLowerCase();
       const path = (session.workspacePath || "").toLowerCase();
+      const workspaceName = workspaces.find((workspace) => workspace.id === session.workspaceId)?.name.toLowerCase() || "";
       return (
         title.includes(query) ||
         preview.includes(query) ||
         path.includes(query) ||
+        workspaceName.includes(query) ||
         session.id.toLowerCase().includes(query)
       );
     });
@@ -2049,6 +1969,7 @@ export default function Home() {
     sessionPreviews,
     sessionQuery,
     sessions,
+    workspaces,
   ]);
 
   // 运行中最近工具（T3）
@@ -2386,31 +2307,21 @@ export default function Home() {
                 <TaskComposer
                   input={input}
                   onInputChange={setInput}
-                  recentInputs={recentInputsRef.current}
                   isRunning={isRunning}
                   isCompressing={isCompressing}
+                  contextUsage={contextUsage}
+                  compressionState={compressionState}
+                  compressionMessage={compressionMessage}
                   canCompress={Boolean(sessionId && !isArchivedView)}
                   isSessionSwitching={isSessionSwitching}
                   isSelectingWorkspace={isSelectingWorkspace}
                   modelName={modelName}
                   isManualModel={isManualModel}
-                  permissionMode={permissionMode}
-                  onPermissionModeChange={(value) => void changePermissionMode(value)}
                   onModelChange={applyModelName}
                   modelOptions={modelOptions}
                   modelOptionsError={modelOptionsError}
                   isLoadingModelOptions={isLoadingModelOptions}
-                  modelInfo={modelInfo}
-                  modelInfoError={modelInfoError}
-                  isLoadingModelInfo={isLoadingModelInfo}
                   modelContextLimit={modelContextLimit}
-                  modelContextLimitError={modelContextLimitError}
-                  contextLimitDraft={contextLimitDraft}
-                  isLoadingModelContextLimit={isLoadingModelContextLimit}
-                  isSavingContextLimit={isSavingContextLimit}
-                  onContextLimitChange={setContextLimitDraft}
-                  onSaveContextLimit={() => void saveContextLimit()}
-                  onResetContextLimit={() => void resetContextLimit()}
                   reasoningEffort={reasoningEffort}
                   onReasoningChange={setReasoningEffort}
                   workspacePath={displayedWorkspacePath}
@@ -2441,15 +2352,7 @@ export default function Home() {
             pendingApprovalCount={pendingApprovalCount}
             errorMessage={errorMessage}
             isRunning={isRunning}
-            isCompressing={isCompressing}
-            contextUsage={contextUsage}
-            modelContextLimit={modelContextLimit}
-            compressionState={compressionState}
-            compressionMessage={compressionMessage}
-            canCompress={Boolean(sessionId && !isArchivedView)}
             onOpenSession={(id) => void openSession(id, "active")}
-            onCompressContext={() => void compressContext()}
-            onStop={stopCurrentRun}
           />
         </div>
       </div>

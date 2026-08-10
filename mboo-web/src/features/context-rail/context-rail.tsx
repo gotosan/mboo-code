@@ -2,7 +2,6 @@
 
 import { memo } from "react";
 import type { SessionInfo } from "@/features/sessions/session-types";
-import type { ContextCompressionState, ContextUsageSnapshot, ModelContextLimit } from "@/lib/session-types";
 import styles from "./context-rail.module.css";
 
 type ContextRailProps = {
@@ -15,15 +14,7 @@ type ContextRailProps = {
   pendingApprovalCount: number;
   errorMessage: string;
   isRunning: boolean;
-  isCompressing: boolean;
-  contextUsage: ContextUsageSnapshot | null;
-  modelContextLimit: ModelContextLimit | null;
-  compressionState: ContextCompressionState | null;
-  compressionMessage: string;
-  canCompress: boolean;
   onOpenSession: (sessionId: string) => void;
-  onCompressContext: () => void;
-  onStop: () => void;
 };
 
 export const ContextRail = memo(function ContextRail(props: ContextRailProps) {
@@ -97,41 +88,6 @@ export const ContextRail = memo(function ContextRail(props: ContextRailProps) {
         </section>
       ) : null}
 
-      <section className={styles.section}>
-        <SectionLabel>上下文用量</SectionLabel>
-        <div className={styles.usageBody}>
-          {props.contextUsage ? (
-            <>
-              <div className={styles.usageNumbers}>
-                <span>{formatTokenCount(props.contextUsage.totalTokens)} 已用</span>
-                <span>{props.modelContextLimit ? `${usagePercent(props.contextUsage.totalTokens, props.modelContextLimit.effectiveContextLimit)}%` : "上限未知"}</span>
-              </div>
-              {props.modelContextLimit ? (
-                <>
-                  <div className={styles.usageTrack} aria-label="上下文使用比例">
-                    <span className={styles.usageBar} style={{ width: `${usagePercent(props.contextUsage.totalTokens, props.modelContextLimit.effectiveContextLimit)}%` }} />
-                  </div>
-                  <p className={styles.usageHint}>上限 {formatTokenCount(props.modelContextLimit.effectiveContextLimit)}</p>
-                </>
-              ) : <p className={styles.usageHint}>模型上下文上限尚未读取</p>}
-            </>
-          ) : (
-            <p className={styles.usageHint}>等待本轮使用量</p>
-          )}
-          {props.compressionMessage ? (
-            <p className={`${styles.compressionNotice} ${props.compressionState === "failed" ? styles.compressionNoticeError : ""}`} role="status">
-              {props.compressionMessage}
-            </p>
-          ) : null}
-          {props.canCompress ? (
-            props.isCompressing ? (
-              <button className={styles.compressButton} type="button" onClick={props.onStop}>停止压缩</button>
-            ) : (
-              <button className={styles.compressButton} disabled={props.isRunning} type="button" onClick={props.onCompressContext}>压缩上下文</button>
-            )
-          ) : null}
-        </div>
-      </section>
     </aside>
   );
 });
@@ -162,15 +118,4 @@ function formatSessionTime(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
-}
-
-function formatTokenCount(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}K`;
-  return String(value);
-}
-
-function usagePercent(totalTokens: number, contextLimit: number) {
-  if (contextLimit <= 0) return 0;
-  return Math.min(100, Math.max(0, Math.round((totalTokens / contextLimit) * 100)));
 }

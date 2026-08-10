@@ -1,8 +1,13 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, FolderOpen, LoaderCircle, Send, Square, X } from "lucide-react";
-import type { ModelContextLimit, ModelInfo, PermissionMode } from "@/lib/session-types";
+import type {
+  ContextCompressionState,
+  ContextUsageSnapshot,
+  ModelContextLimit,
+} from "@/lib/session-types";
 import styles from "./task-composer.module.css";
 
 export const MANUAL_MODEL_VALUE = "__manual__";
@@ -23,31 +28,21 @@ function workspaceBasename(path?: string | null) {
 export type TaskComposerProps = {
   input: string;
   onInputChange: (value: string) => void;
-  recentInputs: string[];
   isRunning: boolean;
   isCompressing: boolean;
+  contextUsage: ContextUsageSnapshot | null;
+  compressionState: ContextCompressionState | null;
+  compressionMessage: string;
   canCompress: boolean;
   isSessionSwitching: boolean;
   isSelectingWorkspace: boolean;
   modelName: string;
   isManualModel: boolean;
-  permissionMode: PermissionMode;
-  onPermissionModeChange: (value: PermissionMode) => void;
   onModelChange: (value: string, manual?: boolean) => void;
   modelOptions: string[];
   modelOptionsError: string;
   isLoadingModelOptions: boolean;
-  modelInfo: ModelInfo | null;
-  modelInfoError: string;
-  isLoadingModelInfo: boolean;
   modelContextLimit: ModelContextLimit | null;
-  modelContextLimitError: string;
-  contextLimitDraft: number | null;
-  isLoadingModelContextLimit: boolean;
-  isSavingContextLimit: boolean;
-  onContextLimitChange: (value: number) => void;
-  onSaveContextLimit: () => void;
-  onResetContextLimit: () => void;
   reasoningEffort: string;
   onReasoningChange: (value: string) => void;
   workspacePath: string;
@@ -67,31 +62,21 @@ export type TaskComposerProps = {
 export const TaskComposer = memo(function TaskComposer({
   input,
   onInputChange,
-  recentInputs,
   isRunning,
   isCompressing,
+  contextUsage,
+  compressionState,
+  compressionMessage,
   canCompress,
   isSessionSwitching,
   isSelectingWorkspace,
   modelName,
   isManualModel,
-  permissionMode,
-  onPermissionModeChange,
   onModelChange,
   modelOptions,
   modelOptionsError,
   isLoadingModelOptions,
-  modelInfo,
-  modelInfoError,
-  isLoadingModelInfo,
   modelContextLimit,
-  modelContextLimitError,
-  contextLimitDraft,
-  isLoadingModelContextLimit,
-  isSavingContextLimit,
-  onContextLimitChange,
-  onSaveContextLimit,
-  onResetContextLimit,
   reasoningEffort,
   onReasoningChange,
   workspacePath,
@@ -107,22 +92,68 @@ export const TaskComposer = memo(function TaskComposer({
   onCompress,
   onFocusModelInput,
 }: TaskComposerProps) {
-  const [suggestOpen, setSuggestOpen] = useState(false);
-  const [suggestIndex, setSuggestIndex] = useState(-1);
+  const [contextOpen, setContextOpen] = useState(false);
+  const [contextPopoverPosition, setContextPopoverPosition] = useState({ top: 0, left: 0, ready: false });
+  const contextTriggerRef = useRef<HTMLButtonElement>(null);
+  const contextPopoverRef = useRef<HTMLDivElement>(null);
   const workspaceLabel = workspaceBasename(workspacePath) || workspaceStatusText;
+  const contextLimit = modelContextLimit?.effectiveContextLimit ?? null;
+  const totalTokens = contextUsage?.totalTokens ?? null;
+  const usagePercentValue = contextLimit && totalTokens !== null
+    ? Math.min(100, Math.max(0, Math.round((totalTokens / contextLimit) * 100)))
+    : null;
+  const contextMessageTokens = totalTokens !== null && contextUsage?.inputTokens != null
+    ? Math.max(0, totalTokens - contextUsage.inputTokens)
+    : null;
+
+  useEffect(() => {
+    if (!contextOpen) return;
+    const updateContextPopoverPosition = () => {
+      const trigger = contextTriggerRef.current;
+      const popover = contextPopoverRef.current;
+      if (!trigger) return;
+      const triggerRect = trigger.getBoundingClientRect();
+      const popoverWidth = popover?.offsetWidth || 292;
+      const gap = 8;
+      const left = Math.min(
+        Math.max(16, triggerRect.right - popoverWidth),
+        window.innerWidth - popoverWidth - 16,
+      );
+      const top = Math.max(16, triggerRect.top - (popover?.offsetHeight || 202) - gap);
+      setContextPopoverPosition({ top, left, ready: true });
+    };
+    updateContextPopoverPosition();
+    const frame = window.requestAnimationFrame(updateContextPopoverPosition);
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (contextTriggerRef.current?.contains(target) || contextPopoverRef.current?.contains(target)) return;
+      setContextOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextOpen(false);
+        contextTriggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", updateContextPopoverPosition);
+    window.addEventListener("scroll", updateContextPopoverPosition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", updateContextPopoverPosition);
+      window.removeEventListener("scroll", updateContextPopoverPosition, true);
+    };
+  }, [contextOpen]);
   const canSend = Boolean(input.trim() && modelName.trim() && !isRunning && !isCompressing && !isSessionSwitching && !isSelectingWorkspace);
 
   const submit = () => {
     if (!canSend) return;
-    setSuggestOpen(false);
-    setSuggestIndex(-1);
+    setContextOpen(false);
     onSend();
-  };
-
-  const applyHistory = (value: string) => {
-    setSuggestOpen(false);
-    setSuggestIndex(-1);
-    onInputChange(value);
   };
 
   return (
@@ -180,80 +211,6 @@ export const TaskComposer = memo(function TaskComposer({
               ) : null}
             </div>
           </div>
-          {isComposerSettingsOpen ? (
-            <div className={styles.modelMetaPanel} aria-label="模型能力与上下文设置">
-              <div className={styles.modelMetaHeader}>
-                <div className={styles.modelMetaTitleGroup}>
-                  <span className={styles.modelMetaTitle}>模型能力</span>
-                  {isLoadingModelInfo ? <span className={styles.modelMetaHint}>读取中</span> : null}
-                  {!isLoadingModelInfo && modelInfoError ? <span className={styles.modelMetaError} title={modelInfoError}>能力未读取</span> : null}
-                  {!isLoadingModelInfo && !modelInfoError && modelInfo ? (
-                    <span className={styles.modelMetaHint}>{modelInfo.toolCall ? "支持工具" : "无工具"} · {modelInfo.reasoning ? "支持推理" : "标准响应"}</span>
-                  ) : null}
-                </div>
-                <label className={styles.permissionControl}>
-                  <span>权限</span>
-                  <select
-                    className={styles.permissionSelect}
-                    aria-label="会话权限模式"
-                    value={permissionMode}
-                    onChange={(event) => onPermissionModeChange(event.target.value as PermissionMode)}
-                  >
-                    <option value="DEFAULT">默认审批</option>
-                    <option value="FULL_ACCESS">完全访问</option>
-                  </select>
-                </label>
-                {modelContextLimit ? (
-                  <span className={styles.contextLimitValue}>
-                    {formatTokenCount(contextLimitDraft ?? modelContextLimit.effectiveContextLimit)} 上限
-                  </span>
-                ) : null}
-              </div>
-              {isLoadingModelContextLimit ? (
-                <p className={styles.modelMetaHint}>正在读取上下文窗口配置…</p>
-              ) : modelContextLimitError ? (
-                <p className={styles.modelMetaError} title={modelContextLimitError}>上下文窗口配置读取失败，保留当前模型选择。</p>
-              ) : modelContextLimit ? (
-                <div className={styles.contextLimitRow}>
-                  <input
-                    className={styles.contextLimitRange}
-                    type="range"
-                    min={modelContextLimit.minimumContextLimit}
-                    max={modelContextLimit.maximumContextLimit}
-                    step={contextLimitStep(modelContextLimit)}
-                    value={contextLimitDraft ?? modelContextLimit.effectiveContextLimit}
-                    disabled={!modelContextLimit.adjustable || isSavingContextLimit}
-                    aria-label="上下文窗口上限"
-                    onChange={(event) => onContextLimitChange(Number(event.target.value))}
-                  />
-                  <span className={styles.contextLimitRangeLabel}>{formatTokenCount(modelContextLimit.minimumContextLimit)}</span>
-                  <span className={styles.contextLimitRangeLabel}>{formatTokenCount(modelContextLimit.maximumContextLimit)}</span>
-                  {modelContextLimit.adjustable ? (
-                    <div className={styles.contextLimitActions}>
-                      <button
-                        className={styles.composerButton}
-                        disabled={isSavingContextLimit || contextLimitDraft === null || contextLimitDraft === modelContextLimit.effectiveContextLimit}
-                        type="button"
-                        onClick={onSaveContextLimit}
-                      >
-                        {isSavingContextLimit ? "保存中" : "保存上限"}
-                      </button>
-                      <button
-                        className={styles.contextResetButton}
-                        disabled={isSavingContextLimit || !modelContextLimit.configuredContextLimit}
-                        type="button"
-                        onClick={onResetContextLimit}
-                      >
-                        恢复默认
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <p className={styles.modelMetaHint}>当前模型暂时没有可配置的上下文窗口。</p>
-              )}
-            </div>
-          ) : null}
         </>
       ) : null}
 
@@ -268,7 +225,7 @@ export const TaskComposer = memo(function TaskComposer({
             className={styles.textarea}
             id="task-input"
             disabled={isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace}
-            placeholder="写下任务目标，或继续追问…"
+            placeholder="写下任务目标…"
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
             onKeyDown={(event) => {
@@ -276,48 +233,10 @@ export const TaskComposer = memo(function TaskComposer({
                 if (event.shiftKey || event.nativeEvent.isComposing) return;
                 event.preventDefault();
                 submit();
-                return;
-              }
-              if (!recentInputs.length) return;
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                const next = suggestIndex < 0 ? 0 : Math.min(suggestIndex + 1, recentInputs.length - 1);
-                setSuggestOpen(true);
-                setSuggestIndex(next);
-                onInputChange(recentInputs[next]);
-              }
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                const next = suggestIndex - 1;
-                if (next < 0) {
-                  setSuggestOpen(false);
-                  setSuggestIndex(-1);
-                } else {
-                  setSuggestIndex(next);
-                  onInputChange(recentInputs[next]);
-                }
               }
             }}
           />
         </div>
-        {suggestOpen && recentInputs.length ? (
-          <div className={styles.suggestions} role="listbox" aria-label="最近输入历史">
-            {recentInputs.map((item, index) => (
-              <button
-                className={`${styles.suggestionRow} ${index === suggestIndex ? styles.suggestionRowSelected : ""}`}
-                key={`${item}-${index}`}
-                type="button"
-                role="option"
-                aria-selected={index === suggestIndex}
-                onMouseDown={(event) => { event.preventDefault(); applyHistory(item); }}
-              >
-                {index === suggestIndex ? <span className={styles.suggestionBar} aria-hidden /> : null}
-                <span className={styles.suggestionText}>{item}</span>
-              </button>
-            ))}
-            <span className={styles.suggestionHint}>↑↓ 选择 · Enter 确认</span>
-          </div>
-        ) : null}
         <div className={styles.statusbar}>
           <span className={styles.statusText}>{workspaceLabel}{modelName.trim() ? ` · ${modelName.trim()}` : ""}</span>
           <div className={styles.statusActions}>
@@ -325,10 +244,68 @@ export const TaskComposer = memo(function TaskComposer({
               <button className={`${styles.composerButton} ${styles.stopButton}`} type="button" onClick={onStop}><Square className={styles.icon} aria-hidden />停止</button>
             ) : (
               <>
-                {canCompress ? (
-                  <button className={styles.composerButton} type="button" onClick={isCompressing ? onStop : onCompress}>
-                    {isCompressing ? "停止压缩" : "压缩上下文"}
-                  </button>
+                <button
+                  ref={contextTriggerRef}
+                  className={`${styles.contextTrigger} ${contextOpen ? styles.contextTriggerOpen : ""}`}
+                  type="button"
+                  aria-label="查看上下文用量"
+                  aria-expanded={contextOpen}
+                  aria-haspopup="dialog"
+                  onClick={() => setContextOpen((current) => !current)}
+                >
+                  <span
+                    className={styles.contextRing}
+                    aria-hidden
+                    style={usagePercentValue !== null ? { background: `conic-gradient(#996AF1 ${usagePercentValue * 3.6}deg, #D8D3F5 0deg)` } : undefined}
+                  >
+                    <span className={styles.contextRingTrack} />
+                    <span className={styles.contextRingValue}>{usagePercentValue ?? "—"}</span>
+                  </span>
+                </button>
+                {contextOpen && typeof document !== "undefined" ? createPortal(
+                  <div
+                    ref={contextPopoverRef}
+                    className={styles.contextPopover}
+                    role="dialog"
+                    aria-label="上下文使用情况"
+                    style={{
+                      top: contextPopoverPosition.top,
+                      left: contextPopoverPosition.left,
+                      visibility: contextPopoverPosition.ready ? "visible" : "hidden",
+                    }}
+                  >
+                    <div className={styles.contextPopoverHeader}>
+                      <span className={styles.contextPopoverTitle}>上下文使用情况</span>
+                      <span className={styles.contextPopoverStatus}>实时</span>
+                    </div>
+                    <div className={styles.contextPopoverSummary}>
+                      <span className={styles.contextPopoverTotal}>{totalTokens !== null ? formatTokenCount(totalTokens) : "—"}</span>
+                      <span className={styles.contextPopoverUnit}>tokens</span>
+                      <span className={styles.contextPopoverPercent}>{usagePercentValue !== null ? `${usagePercentValue}%` : "上限未知"}</span>
+                    </div>
+                    {usagePercentValue !== null ? (
+                      <div className={styles.contextPopoverTrack} aria-label={`已使用 ${usagePercentValue}%`}>
+                        <span style={{ width: `${usagePercentValue}%` }} />
+                      </div>
+                    ) : null}
+                    <dl className={styles.contextDetails}>
+                      <div><dt>当前输入</dt><dd>{contextUsage?.inputTokens != null ? formatTokenCount(contextUsage.inputTokens) : "—"}</dd></div>
+                      <div><dt>上下文消息</dt><dd>{contextMessageTokens !== null ? formatTokenCount(contextMessageTokens) : "—"}</dd></div>
+                      <div><dt>模型上限</dt><dd>{contextLimit !== null ? formatTokenCount(contextLimit) : "—"}</dd></div>
+                    </dl>
+                    <div className={styles.contextPopoverActions}>
+                      <span className={`${styles.compactionState} ${compressionState === "failed" ? styles.compactionStateError : ""}`} role="status">
+                        {isCompressing ? "压缩中…" : compressionMessage || "自动压缩：系统处理"}
+                      </span>
+                      {canCompress ? (
+                        <button className={styles.contextCompressButton} disabled={isRunning} type="button" onClick={isCompressing ? onStop : onCompress}>
+                          {isCompressing ? <LoaderCircle className={styles.contextSpinner} aria-hidden /> : null}
+                          {isCompressing ? "停止" : "压缩上下文"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>,
+                  document.body,
                 ) : null}
                 <button className={`${styles.primaryButton} ${!canSend ? styles.lockedButton : ""}`} disabled={!canSend} type="submit" title={!modelName.trim() ? "请先填写模型名称" : !input.trim() ? "请先输入任务" : "发送（Enter）"}>
                   <Send className={styles.icon} aria-hidden />发送
@@ -341,11 +318,6 @@ export const TaskComposer = memo(function TaskComposer({
     </form>
   );
 });
-
-function contextLimitStep(limit: ModelContextLimit) {
-  const span = limit.maximumContextLimit - limit.minimumContextLimit;
-  return Math.max(1_000, Math.round(span / 100));
-}
 
 function formatTokenCount(value: number) {
   if (value >= 1_000_000) {

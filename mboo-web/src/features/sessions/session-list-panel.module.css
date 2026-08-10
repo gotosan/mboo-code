@@ -128,44 +128,42 @@
   transform: translateY(1px);
 }
 
-.workspaceSection {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 12px;
-  padding: 10px;
-  border: 1px solid #e6e6e1;
-  border-radius: 10px;
-  background: #f8f8f6;
-}
-
-.workspaceHeader {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.workspaceTitle,
-.workspaceHint,
-.workspaceEmpty,
 .workspaceConfirmTitle,
 .workspaceConfirmText {
   margin: 0;
 }
 
-.workspaceTitle {
-  color: #35352c;
-  font-size: 12px;
-  font-weight: 600;
+.workspaceLoading {
+  margin: 4px 6px 6px 28px;
+  color: #8b8b84;
+  font-size: 10px;
   line-height: 16px;
 }
 
-.workspaceHint {
-  margin-top: 1px;
-  color: #9b9b92;
-  font-size: 10px;
+.workspaceListHeader {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 2px 6px;
+  color: #575547;
+}
+
+.workspaceListTitle {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
   line-height: 14px;
+}
+
+.workspaceListIcon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
 }
 
 .workspaceRefresh,
@@ -256,57 +254,108 @@
   opacity: 0.55;
 }
 
-.workspaceList {
-  display: flex;
-  max-height: 168px;
-  flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
+.workspaceTree {
+  min-width: 0;
 }
 
 .workspaceItem {
   display: flex;
+  min-height: 32px;
   align-items: center;
   min-width: 0;
-  border-radius: 7px;
+  border-radius: 8px;
 }
 
-.workspaceOpen {
+.workspaceItem:hover {
+  background: #f4f4f5;
+}
+
+.workspaceToggle,
+.workspaceTogglePlaceholder {
+  display: inline-flex;
+  width: 22px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: #8b8b84;
+}
+
+.workspaceToggle {
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.workspaceToggle svg {
+  width: 13px;
+  height: 13px;
+}
+
+.workspaceToggle:hover:not(:disabled) {
+  background: #e6e6e6;
+  color: #35352c;
+}
+
+.workspaceToggle:focus-visible,
+.workspaceOpen:focus-visible,
+.workspaceDelete:focus-visible,
+.workspaceRefresh:focus-visible {
+  outline: 2px solid #5c15e0;
+  outline-offset: 1px;
+}
+
+.workspaceOpen,
+.workspaceOpenStatic {
   display: flex;
   min-width: 0;
-  width: 100%;
+  flex: 1;
   align-items: center;
   gap: 7px;
-  padding: 6px 4px;
+  padding: 4px 2px;
   border: 0;
   border-radius: 7px;
   background: transparent;
   text-align: left;
+}
+
+.workspaceOpen {
   cursor: pointer;
 }
 
 .workspaceOpen:hover:not(:disabled) {
-  background: #ecece8;
+  background: transparent;
 }
 
+.workspaceFolderIcon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: #8b8b84;
+}
+
+.workspaceChildren {
+  min-width: 0;
+  margin-left: 22px;
+  padding: 1px 0 3px 6px;
+  border-left: 1px solid #f0f0ee;
+}
+
+.workspaceEmpty {
+  min-height: 28px;
+  margin: 1px 4px 2px 0;
+  padding: 6px 7px;
+  border: 1px solid #eeeeeb;
+  border-radius: 6px;
+  background: #fafaf9;
+  color: #6f6d64;
+  font-size: 10px;
+  line-height: 14px;
+}
 .workspaceOpen:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-}
-
-.workspaceDot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: 999px;
-}
-
-.workspaceDotAvailable {
-  background: #5d9b72;
-}
-
-.workspaceDotMissing {
-  background: #c9973d;
 }
 
 .workspaceMeta {
@@ -469,29 +518,13 @@
   margin-top: 8px;
 }
 
-.groupHeader {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 12px;
-  padding: 4px;
-  color: #8b8b84;
-  font-size: 11px;
-  line-height: 14px;
-}
-
-.groupIcon {
-  width: 14px;
-  height: 14px;
-}
-
 .sessionScroller {
   display: flex;
   min-height: 0;
   flex: 1;
   flex-direction: column;
   gap: 2px;
-  margin-top: 4px;
+  margin-top: 8px;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #d2d2d2 transparent;
@@ -531,6 +564,10 @@
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
+}
+
+.sessionItemNested {
+  padding-left: 6px;
 }
 
 .sessionItemSelected {
@@ -599,26 +636,6 @@
 .titleInput:focus-visible {
   outline: 2px solid #5c15e0;
   outline-offset: 2px;
-}
-
-.sessionAvatar {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #e6e6e6;
-  border-radius: 6px;
-  background: #f0f0f5;
-  color: #575547;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 14px;
-}
-
-.sessionItemSelected .sessionAvatar {
-  color: #5c15e0;
 }
 
 .sessionCopy {
