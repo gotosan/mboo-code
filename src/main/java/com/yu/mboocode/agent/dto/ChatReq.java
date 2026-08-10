@@ -1,5 +1,6 @@
 package com.yu.mboocode.agent.dto;
 
+import com.yu.mboocode.agent.tool.permission.PermissionMode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 
@@ -18,6 +19,9 @@ public record ChatReq(
 
         @Schema(description = "新会话工作区绝对路径，仅创建新会话时生效")
         String workspacePath,
+
+        @Schema(description = "新会话权限模式：DEFAULT 默认权限、FULL_ACCESS 完全访问，仅创建新会话时生效")
+        PermissionMode permissionMode,
 
         @Schema(description = "会话 ID，为空时创建新会话")
         String sessionId

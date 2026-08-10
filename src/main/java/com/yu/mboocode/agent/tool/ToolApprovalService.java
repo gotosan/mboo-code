@@ -14,6 +14,7 @@ import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.agent.tool.command.RunningCommandRegistry;
 import com.yu.mboocode.agent.tool.event.ToolEventFormatterRegistry;
 import com.yu.mboocode.agent.tool.permission.PermissionCheck;
+import com.yu.mboocode.agent.tool.permission.PermissionMode;
 import com.yu.mboocode.agent.tool.permission.PermissionRequirement;
 import com.yu.mboocode.agent.tool.permission.ToolAuthorizationResult;
 import com.yu.mboocode.agent.tool.permission.ToolPermissionChain;
@@ -259,7 +260,22 @@ public class ToolApprovalService {
 
     private ToolPermissionChain evaluate(String sessionId, ToolExecutionRequest request) {
         ToolPermissionSpec spec = toolPermissionRegistry.get(request.name());
-        return evaluatorRegistry.evaluate(sessionId, request, spec);
+        ToolPermissionChain chain = evaluatorRegistry.evaluate(sessionId, request, spec);
+        return applyPermissionMode(sessionId, chain);
+    }
+
+    /**
+     * 完全访问模式下 NEED_ASK 自动放行，初评与执行前复核共用；ERROR 与内置命令黑名单等硬错误保持原样。
+     */
+    private ToolPermissionChain applyPermissionMode(String sessionId, ToolPermissionChain chain) {
+        if (!chain.needsApproval() || sessionService.getPermissionMode(sessionId) != PermissionMode.FULL_ACCESS) return chain;
+        List<PermissionRequirement> requirements = chain.requirements().stream()
+                .map(requirement -> requirement.check().status() == PermissionCheck.CheckStatus.NEED_ASK
+                        ? new PermissionRequirement(requirement.permissionType(), requirement.grantPath(), requirement.grantValue(),
+                                requirement.title(), requirement.description(), PermissionCheck.allowed())
+                        : requirement)
+                .toList();
+        return new ToolPermissionChain(requirements);
     }
 
     private void persistSessionGrant(String sessionId, PendingApprovalStage pending) {
