@@ -7,11 +7,20 @@ export type SessionInfo = {
   status: SessionStatus;
   transcriptUri?: string | null;
   activeTurnId?: string | null;
+  workspaceId?: string | null;
   workspacePath?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
   archivedAt?: string | null;
   metadataJson?: string | null;
+};
+
+export type WorkspaceInfo = {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  createdAt?: string | null;
 };
 
 export type SessionConfirmAction = {

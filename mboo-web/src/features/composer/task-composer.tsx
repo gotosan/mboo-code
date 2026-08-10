@@ -2,6 +2,7 @@
 
 import { memo, useState } from "react";
 import { ChevronDown, FolderOpen, LoaderCircle, Send, Square, X } from "lucide-react";
+import type { ModelContextLimit, ModelInfo, PermissionMode } from "@/lib/session-types";
 import styles from "./task-composer.module.css";
 
 export const MANUAL_MODEL_VALUE = "__manual__";
@@ -24,14 +25,29 @@ export type TaskComposerProps = {
   onInputChange: (value: string) => void;
   recentInputs: string[];
   isRunning: boolean;
+  isCompressing: boolean;
+  canCompress: boolean;
   isSessionSwitching: boolean;
   isSelectingWorkspace: boolean;
   modelName: string;
   isManualModel: boolean;
+  permissionMode: PermissionMode;
+  onPermissionModeChange: (value: PermissionMode) => void;
   onModelChange: (value: string, manual?: boolean) => void;
   modelOptions: string[];
   modelOptionsError: string;
   isLoadingModelOptions: boolean;
+  modelInfo: ModelInfo | null;
+  modelInfoError: string;
+  isLoadingModelInfo: boolean;
+  modelContextLimit: ModelContextLimit | null;
+  modelContextLimitError: string;
+  contextLimitDraft: number | null;
+  isLoadingModelContextLimit: boolean;
+  isSavingContextLimit: boolean;
+  onContextLimitChange: (value: number) => void;
+  onSaveContextLimit: () => void;
+  onResetContextLimit: () => void;
   reasoningEffort: string;
   onReasoningChange: (value: string) => void;
   workspacePath: string;
@@ -44,6 +60,7 @@ export type TaskComposerProps = {
   onToggleSettings: () => void;
   onSend: () => void;
   onStop: () => void;
+  onCompress: () => void;
   onFocusModelInput: () => void;
 };
 
@@ -52,14 +69,29 @@ export const TaskComposer = memo(function TaskComposer({
   onInputChange,
   recentInputs,
   isRunning,
+  isCompressing,
+  canCompress,
   isSessionSwitching,
   isSelectingWorkspace,
   modelName,
   isManualModel,
+  permissionMode,
+  onPermissionModeChange,
   onModelChange,
   modelOptions,
   modelOptionsError,
   isLoadingModelOptions,
+  modelInfo,
+  modelInfoError,
+  isLoadingModelInfo,
+  modelContextLimit,
+  modelContextLimitError,
+  contextLimitDraft,
+  isLoadingModelContextLimit,
+  isSavingContextLimit,
+  onContextLimitChange,
+  onSaveContextLimit,
+  onResetContextLimit,
   reasoningEffort,
   onReasoningChange,
   workspacePath,
@@ -72,12 +104,13 @@ export const TaskComposer = memo(function TaskComposer({
   onToggleSettings,
   onSend,
   onStop,
+  onCompress,
   onFocusModelInput,
 }: TaskComposerProps) {
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestIndex, setSuggestIndex] = useState(-1);
   const workspaceLabel = workspaceBasename(workspacePath) || workspaceStatusText;
-  const canSend = Boolean(input.trim() && modelName.trim() && !isRunning && !isSessionSwitching && !isSelectingWorkspace);
+  const canSend = Boolean(input.trim() && modelName.trim() && !isRunning && !isCompressing && !isSessionSwitching && !isSelectingWorkspace);
 
   const submit = () => {
     if (!canSend) return;
@@ -147,20 +180,94 @@ export const TaskComposer = memo(function TaskComposer({
               ) : null}
             </div>
           </div>
+          {isComposerSettingsOpen ? (
+            <div className={styles.modelMetaPanel} aria-label="模型能力与上下文设置">
+              <div className={styles.modelMetaHeader}>
+                <div className={styles.modelMetaTitleGroup}>
+                  <span className={styles.modelMetaTitle}>模型能力</span>
+                  {isLoadingModelInfo ? <span className={styles.modelMetaHint}>读取中</span> : null}
+                  {!isLoadingModelInfo && modelInfoError ? <span className={styles.modelMetaError} title={modelInfoError}>能力未读取</span> : null}
+                  {!isLoadingModelInfo && !modelInfoError && modelInfo ? (
+                    <span className={styles.modelMetaHint}>{modelInfo.toolCall ? "支持工具" : "无工具"} · {modelInfo.reasoning ? "支持推理" : "标准响应"}</span>
+                  ) : null}
+                </div>
+                <label className={styles.permissionControl}>
+                  <span>权限</span>
+                  <select
+                    className={styles.permissionSelect}
+                    aria-label="会话权限模式"
+                    value={permissionMode}
+                    onChange={(event) => onPermissionModeChange(event.target.value as PermissionMode)}
+                  >
+                    <option value="DEFAULT">默认审批</option>
+                    <option value="FULL_ACCESS">完全访问</option>
+                  </select>
+                </label>
+                {modelContextLimit ? (
+                  <span className={styles.contextLimitValue}>
+                    {formatTokenCount(contextLimitDraft ?? modelContextLimit.effectiveContextLimit)} 上限
+                  </span>
+                ) : null}
+              </div>
+              {isLoadingModelContextLimit ? (
+                <p className={styles.modelMetaHint}>正在读取上下文窗口配置…</p>
+              ) : modelContextLimitError ? (
+                <p className={styles.modelMetaError} title={modelContextLimitError}>上下文窗口配置读取失败，保留当前模型选择。</p>
+              ) : modelContextLimit ? (
+                <div className={styles.contextLimitRow}>
+                  <input
+                    className={styles.contextLimitRange}
+                    type="range"
+                    min={modelContextLimit.minimumContextLimit}
+                    max={modelContextLimit.maximumContextLimit}
+                    step={contextLimitStep(modelContextLimit)}
+                    value={contextLimitDraft ?? modelContextLimit.effectiveContextLimit}
+                    disabled={!modelContextLimit.adjustable || isSavingContextLimit}
+                    aria-label="上下文窗口上限"
+                    onChange={(event) => onContextLimitChange(Number(event.target.value))}
+                  />
+                  <span className={styles.contextLimitRangeLabel}>{formatTokenCount(modelContextLimit.minimumContextLimit)}</span>
+                  <span className={styles.contextLimitRangeLabel}>{formatTokenCount(modelContextLimit.maximumContextLimit)}</span>
+                  {modelContextLimit.adjustable ? (
+                    <div className={styles.contextLimitActions}>
+                      <button
+                        className={styles.composerButton}
+                        disabled={isSavingContextLimit || contextLimitDraft === null || contextLimitDraft === modelContextLimit.effectiveContextLimit}
+                        type="button"
+                        onClick={onSaveContextLimit}
+                      >
+                        {isSavingContextLimit ? "保存中" : "保存上限"}
+                      </button>
+                      <button
+                        className={styles.contextResetButton}
+                        disabled={isSavingContextLimit || !modelContextLimit.configuredContextLimit}
+                        type="button"
+                        onClick={onResetContextLimit}
+                      >
+                        恢复默认
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className={styles.modelMetaHint}>当前模型暂时没有可配置的上下文窗口。</p>
+              )}
+            </div>
+          ) : null}
         </>
       ) : null}
 
       <div className={styles.composer}>
         <div className={styles.toolbar}>
           <button className={`${styles.composerButton} ${styles.toolbarButton}`} type="button" disabled={!input.trim() || isRunning} onClick={() => onInputChange("")}>清空</button>
-          <span className={styles.toolbarHint}>{isRunning ? "生成中，Esc 可停止" : "Enter 发送 · Shift+Enter 换行"}</span>
+          <span className={styles.toolbarHint}>{isRunning ? "生成中，Esc 可停止" : isCompressing ? "上下文压缩中" : "Enter 发送 · Shift+Enter 换行"}</span>
         </div>
         <label className="sr-only" htmlFor="task-input">任务输入</label>
         <div className={styles.editor}>
           <textarea
             className={styles.textarea}
             id="task-input"
-            disabled={isRunning || isSessionSwitching || isSelectingWorkspace}
+            disabled={isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace}
             placeholder="写下任务目标，或继续追问…"
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
@@ -217,9 +324,16 @@ export const TaskComposer = memo(function TaskComposer({
             {isRunning ? (
               <button className={`${styles.composerButton} ${styles.stopButton}`} type="button" onClick={onStop}><Square className={styles.icon} aria-hidden />停止</button>
             ) : (
-              <button className={`${styles.primaryButton} ${!canSend ? styles.lockedButton : ""}`} disabled={!canSend} type="submit" title={!modelName.trim() ? "请先填写模型名称" : !input.trim() ? "请先输入任务" : "发送（Enter）"}>
-                <Send className={styles.icon} aria-hidden />发送
-              </button>
+              <>
+                {canCompress ? (
+                  <button className={styles.composerButton} type="button" onClick={isCompressing ? onStop : onCompress}>
+                    {isCompressing ? "停止压缩" : "压缩上下文"}
+                  </button>
+                ) : null}
+                <button className={`${styles.primaryButton} ${!canSend ? styles.lockedButton : ""}`} disabled={!canSend} type="submit" title={!modelName.trim() ? "请先填写模型名称" : !input.trim() ? "请先输入任务" : "发送（Enter）"}>
+                  <Send className={styles.icon} aria-hidden />发送
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -227,3 +341,18 @@ export const TaskComposer = memo(function TaskComposer({
     </form>
   );
 });
+
+function contextLimitStep(limit: ModelContextLimit) {
+  const span = limit.maximumContextLimit - limit.minimumContextLimit;
+  return Math.max(1_000, Math.round(span / 100));
+}
+
+function formatTokenCount(value: number) {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}K`;
+  }
+  return String(value);
+}

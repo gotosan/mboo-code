@@ -17,12 +17,18 @@ import { ConversationLoadingState, ConversationStatusPanel } from "@/features/co
 import { MessageList } from "@/features/conversation/message-list";
 import { SessionListPanel } from "@/features/sessions/session-list-panel";
 import sidebarStyles from "@/features/sessions/session-sidebar.module.css";
-import type { SessionConfirmAction, SessionInfo as FeatureSessionInfo, SessionListTab as FeatureSessionListTab } from "@/features/sessions/session-types";
+import type { SessionConfirmAction, SessionInfo as FeatureSessionInfo, SessionListTab as FeatureSessionListTab, WorkspaceInfo as FeatureWorkspaceInfo } from "@/features/sessions/session-types";
 import { ToolApprovalCard } from "@/features/tools/tool-approval-card";
 import { readSessionEventStream } from "@/lib/session-stream";
 import type {
   AssistantMessageState,
   ChatReq,
+  ModelContextLimit,
+  ModelInfo,
+  ContextCompressionPayload,
+  ContextCompressionState,
+  ContextUsageSnapshot,
+  PermissionMode,
   SessionEvent,
   ToolApprovalDecision,
   ToolCallStatus,
@@ -126,6 +132,7 @@ type SessionInfo = {
   status: SessionStatus;
   transcriptUri?: string | null;
   activeTurnId?: string | null;
+  workspaceId?: string | null;
   workspacePath?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -166,6 +173,19 @@ export default function Home() {
   const [modelOptionsError, setModelOptionsError] = useState("");
   const [isLoadingModelOptions, setIsLoadingModelOptions] = useState(true);
   const [isManualModel, setIsManualModel] = useState(true);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
+  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
+  const [modelInfoError, setModelInfoError] = useState("");
+  const [isLoadingModelInfo, setIsLoadingModelInfo] = useState(false);
+  const [modelContextLimit, setModelContextLimit] = useState<ModelContextLimit | null>(null);
+  const [modelContextLimitError, setModelContextLimitError] = useState("");
+  const [contextLimitDraft, setContextLimitDraft] = useState<number | null>(null);
+  const [isLoadingModelContextLimit, setIsLoadingModelContextLimit] = useState(false);
+  const [isSavingContextLimit, setIsSavingContextLimit] = useState(false);
+  const [contextUsage, setContextUsage] = useState<ContextUsageSnapshot | null>(null);
+  const [compressionState, setCompressionState] = useState<ContextCompressionState | null>(null);
+  const [compressionMessage, setCompressionMessage] = useState("");
+  const [isCompressing, setIsCompressing] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("idle");
@@ -184,6 +204,11 @@ export default function Home() {
   const [confirmingAction, setConfirmingAction] = useState<{ type: "archive" | "delete"; id: string } | null>(null);
   const [viewingSessionStatus, setViewingSessionStatus] =
     useState<SessionStatus | null>(null);
+  const [workspaces, setWorkspaces] = useState<FeatureWorkspaceInfo[]>([]);
+  const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(true);
+  const [isSavingWorkspace, setIsSavingWorkspace] = useState(false);
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
+  const [workspaceError, setWorkspaceError] = useState("");
   const [pendingWorkspacePath, setPendingWorkspacePath] = useState("");
   const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [isSelectingWorkspace, setIsSelectingWorkspace] = useState(false);
@@ -237,6 +262,9 @@ export default function Home() {
   const lastSentModelRef = useRef("");
   const modelOptionsRef = useRef<string[]>([]);
   const modelNameRef = useRef("");
+  const modelMetadataRequestRef = useRef(0);
+  const contextUsageBySessionRef = useRef<Record<string, ContextUsageSnapshot | null>>({});
+  const compressionAbortControllerRef = useRef<AbortController | null>(null);
   const isRunning = connectionState === "running";
   const highlightedSessionId = openingSessionId || sessionId;
   const isSessionSwitching = Boolean(openingSessionId) || isLoadingHistory;
@@ -307,6 +335,135 @@ export default function Home() {
       cancelled = true;
     };
   }, [applyModelName]);
+
+  useEffect(() => {
+    const targetModel = modelName.trim();
+    const requestVersion = ++modelMetadataRequestRef.current;
+    if (!targetModel) {
+      setModelInfo(null);
+      setModelInfoError("");
+      setModelContextLimit(null);
+      setModelContextLimitError("");
+      setContextUsage(null);
+      setContextLimitDraft(null);
+      setIsLoadingModelInfo(false);
+      setIsLoadingModelContextLimit(false);
+      return;
+    }
+
+    let cancelled = false;
+    setModelInfo(null);
+    setModelInfoError("");
+    setModelContextLimit(null);
+    setModelContextLimitError("");
+    setContextUsage((current) => current?.modelId === targetModel ? current : null);
+    setContextLimitDraft(null);
+    setIsLoadingModelInfo(true);
+    setIsLoadingModelContextLimit(true);
+
+    const loadModelMetadata = async () => {
+      const [infoResult, contextLimitResult] = await Promise.allSettled([
+        fetch(`/api/model/${encodeURIComponent(targetModel)}`, { cache: "no-store" }).then((response) => readApiData<ModelInfo>(response)),
+        fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, { cache: "no-store" }).then((response) => readApiData<ModelContextLimit>(response)),
+      ]);
+      if (cancelled || requestVersion !== modelMetadataRequestRef.current) {
+        return;
+      }
+
+      if (infoResult.status === "fulfilled" && infoResult.value?.modelId === targetModel) {
+        setModelInfo(infoResult.value);
+        setModelInfoError("");
+      } else {
+        setModelInfoError(infoResult.status === "rejected" ? toErrorMessage(infoResult.reason) : "模型能力信息与当前模型不匹配");
+      }
+      if (contextLimitResult.status === "fulfilled" && contextLimitResult.value?.modelId === targetModel) {
+        setModelContextLimit(contextLimitResult.value);
+        setModelContextLimitError("");
+        setContextLimitDraft(contextLimitResult.value.effectiveContextLimit);
+      } else {
+        setModelContextLimitError(contextLimitResult.status === "rejected" ? toErrorMessage(contextLimitResult.reason) : "上下文窗口信息与当前模型不匹配");
+      }
+      setIsLoadingModelInfo(false);
+      setIsLoadingModelContextLimit(false);
+    };
+
+    void loadModelMetadata();
+    return () => {
+      cancelled = true;
+    };
+  }, [modelName]);
+
+  const saveContextLimit = useCallback(async () => {
+    const targetModel = modelName.trim();
+    if (!targetModel || !modelContextLimit || contextLimitDraft === null || isSavingContextLimit) {
+      return;
+    }
+    setIsSavingContextLimit(true);
+    try {
+      const response = await fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contextLimit: contextLimitDraft }),
+      });
+      const saved = await readApiData<ModelContextLimit>(response);
+      if (saved?.modelId !== targetModel) {
+        throw new Error("后端返回的模型与当前选择不一致");
+      }
+      setModelContextLimit(saved);
+      setContextLimitDraft(saved.effectiveContextLimit);
+      setSessionMessage("上下文窗口上限已保存");
+    } catch (error) {
+      setSessionMessage(`上下文窗口保存失败：${toErrorMessage(error)}`);
+    } finally {
+      setIsSavingContextLimit(false);
+    }
+  }, [contextLimitDraft, isSavingContextLimit, modelContextLimit, modelName]);
+
+  const resetContextLimit = useCallback(async () => {
+    const targetModel = modelName.trim();
+    if (!targetModel || !modelContextLimit || isSavingContextLimit) {
+      return;
+    }
+    setIsSavingContextLimit(true);
+    try {
+      const response = await fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, { method: "DELETE" });
+      const reset = await readApiData<ModelContextLimit>(response);
+      if (reset?.modelId !== targetModel) {
+        throw new Error("后端返回的模型与当前选择不一致");
+      }
+      setModelContextLimit(reset);
+      setContextLimitDraft(reset.effectiveContextLimit);
+      setSessionMessage("上下文窗口已恢复默认");
+    } catch (error) {
+      setSessionMessage(`上下文窗口恢复失败：${toErrorMessage(error)}`);
+    } finally {
+      setIsSavingContextLimit(false);
+    }
+  }, [isSavingContextLimit, modelContextLimit, modelName]);
+
+  const changePermissionMode = useCallback(async (nextMode: PermissionMode) => {
+    const previousMode = permissionMode;
+    setPermissionMode(nextMode);
+    const targetSessionId = currentSessionIdRef.current;
+    if (!targetSessionId) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/session/${encodeURIComponent(targetSessionId)}/permission-mode`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: nextMode }),
+      });
+      const updated = await readApiData<SessionInfo>(response);
+      if (updated) {
+        setSessions((current) => upsertSession(current, updated));
+      }
+      setSessionMessage(nextMode === "FULL_ACCESS" ? "当前会话已切换为完全访问" : "当前会话已恢复默认权限");
+    } catch (error) {
+      setPermissionMode(previousMode);
+      setSessionMessage(`权限模式切换失败：${toErrorMessage(error)}`);
+    }
+  }, [permissionMode]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -775,6 +932,32 @@ export default function Home() {
     return lastSentModelRef.current || modelOptionsRef.current[0] || "";
   }, []);
 
+  const rememberContextUsage = useCallback((sessionKey: string, usage: ContextUsageSnapshot | null | undefined) => {
+    contextUsageBySessionRef.current[sessionKey] = usage ?? null;
+    if (isViewingSessionKey(sessionKey)) {
+      setContextUsage(usage ?? null);
+    }
+  }, [isViewingSessionKey]);
+
+  const handleCompressionEvent = useCallback((
+    sessionKey: string,
+    event: Extract<SessionEvent, { type: "CONTEXT_COMPRESSION" }>,
+  ) => {
+    const payload = event.payload;
+    if (isViewingSessionKey(sessionKey)) {
+      setCompressionState(payload.state);
+      setCompressionMessage(compressionSystemText(payload));
+    }
+    commitSessionMessages(sessionKey, (current) => upsertMessageSnapshot(current, {
+      id: `compression_${payload.compressionId}_${payload.state}`,
+      role: "system",
+      text: compressionSystemText(payload),
+      state: payload.state === "failed" ? "error" : "info",
+      turnId: event.turnId,
+      createdAt: event.createdAt,
+    }));
+  }, [commitSessionMessages, isViewingSessionKey]);
+
   const handleSessionEvent = useCallback(
     (event: SessionEvent) => {
       const eventSessionId = event.sessionId || "";
@@ -796,6 +979,16 @@ export default function Home() {
 
       if (event.type !== "ERROR" && isViewingSessionKey(targetKey)) {
         setErrorMessage("");
+      }
+
+      if (event.type === "CONTEXT_USAGE_UPDATED") {
+        rememberContextUsage(targetKey, event.payload);
+        return;
+      }
+
+      if (event.type === "CONTEXT_COMPRESSION") {
+        handleCompressionEvent(targetKey, event);
+        return;
       }
 
       if (event.type === "USER_MESSAGE") {
@@ -841,6 +1034,9 @@ export default function Home() {
       }
 
       if (event.type === "ASSISTANT_MESSAGE") {
+        if (event.payload.contextUsage) {
+          rememberContextUsage(targetKey, event.payload.contextUsage);
+        }
         // 完整消息以服务端文本为准；保留已按事件序排好的 tool parts
         const messageId = event.payload.messageId || event.eventId;
         dropPendingAssistantDelta(targetKey, messageId);
@@ -919,6 +1115,8 @@ export default function Home() {
       commitSessionMessages,
       isViewingSessionKey,
       markStreamingMessagesCancelled,
+      handleCompressionEvent,
+      rememberContextUsage,
       rememberSessionPreview,
       upsertMessage,
       upsertToolCall,
@@ -929,6 +1127,8 @@ export default function Home() {
     pendingAutoTitleRef.current = null;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    compressionAbortControllerRef.current?.abort();
+    compressionAbortControllerRef.current = null;
     workspaceSelectionVersionRef.current += 1;
     historyLoadVersionRef.current += 1;
     shouldLoadSessionRef.current = false;
@@ -946,6 +1146,11 @@ export default function Home() {
     setEditingSessionId(null);
     setTitleDraft("");
     setViewingSessionStatus(null);
+    setPermissionMode("DEFAULT");
+    setContextUsage(null);
+    setCompressionState(null);
+    setCompressionMessage("");
+    setIsCompressing(false);
     setPendingWorkspacePath("");
     setWorkspaceMessage("");
     setIsSelectingWorkspace(false);
@@ -1008,6 +1213,20 @@ export default function Home() {
     }
   }, [clearCurrentSession]);
 
+  const refreshWorkspaces = useCallback(async () => {
+    setIsLoadingWorkspaces(true);
+    try {
+      const response = await fetch("/api/workspace/list", { cache: "no-store" });
+      const data = await readApiData<FeatureWorkspaceInfo[]>(response);
+      setWorkspaces(data ?? []);
+      setWorkspaceError("");
+    } catch (error) {
+      setWorkspaceError(toErrorMessage(error));
+    } finally {
+      setIsLoadingWorkspaces(false);
+    }
+  }, []);
+
   const loadSessionEvents = useCallback(async (
     nextSessionId: string,
     options?: { quiet?: boolean; status?: SessionStatus },
@@ -1046,6 +1265,7 @@ export default function Home() {
       let nextStatus = options?.status;
       if (detail) {
         const normalized = normalizeSessionInfo(detail);
+        setPermissionMode(parsePermissionMode(normalized.metadataJson));
         nextStatus = nextStatus ?? normalized.status;
         if (normalized.status === "active") {
           setSessions((current) => upsertSession(current, normalized));
@@ -1064,6 +1284,16 @@ export default function Home() {
         connectionStateRef.current === "running" &&
         streamSessionKeyRef.current === nextSessionId;
       const historyMessages = reduceSessionEventsToMessages(events ?? []);
+      const historyUsage = findLastContextUsage(events ?? []);
+      contextUsageBySessionRef.current[nextSessionId] = historyUsage;
+      setContextUsage(historyUsage);
+      const historyCompression = findLastCompression(events ?? []);
+      setCompressionState(historyCompression && historyCompression.state !== "started" ? historyCompression.state : null);
+      setCompressionMessage(historyCompression
+        ? historyCompression.state === "started"
+          ? "上次上下文压缩未完成，可重新发起"
+          : compressionSystemText(historyCompression)
+        : "");
 
       // 一次提交视图状态：避免“清空 → 加载态 → 内容”多次重置消息滚动槽。
       currentSessionIdRef.current = nextSessionId;
@@ -1115,6 +1345,10 @@ export default function Home() {
   }, [refreshSessions]);
 
   useEffect(() => {
+    void refreshWorkspaces();
+  }, [refreshWorkspaces]);
+
+  useEffect(() => {
     if (!sessionId || !shouldLoadSessionRef.current || isLoadingSessions) {
       return;
     }
@@ -1158,6 +1392,9 @@ export default function Home() {
       setPendingWorkspacePath("");
       setWorkspaceMessage("");
       setIsSelectingWorkspace(false);
+      setContextUsage(null);
+      setCompressionState(null);
+      setCompressionMessage("");
       setIsSessionDrawerOpen(false);
       setSessionMessage("");
       setEditingSessionId(null);
@@ -1358,6 +1595,70 @@ export default function Home() {
     }
   }, [isRunning, isSelectingWorkspace]);
 
+  const selectSavedWorkspace = useCallback((workspace: FeatureWorkspaceInfo) => {
+    if (currentSessionIdRef.current || isSelectingWorkspace || isRunning) {
+      return;
+    }
+    workspaceSelectionVersionRef.current += 1;
+    setPendingWorkspacePath(workspace.path);
+    setWorkspaceMessage(`已选择工作区：${workspace.name}`);
+  }, [isRunning, isSelectingWorkspace]);
+
+  const saveWorkspace = useCallback(async () => {
+    const path = pendingWorkspacePath.trim();
+    if (!path || currentSessionIdRef.current || isSavingWorkspace) {
+      return;
+    }
+    setIsSavingWorkspace(true);
+    setWorkspaceMessage("");
+    try {
+      const response = await fetch("/api/workspace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      const saved = await readApiData<FeatureWorkspaceInfo>(response);
+      if (saved) {
+        setWorkspaces((current) => upsertWorkspace(current, saved));
+        setWorkspaceMessage(`工作区“${saved.name}”已保存`);
+      }
+    } catch (error) {
+      setWorkspaceMessage(toErrorMessage(error));
+    } finally {
+      setIsSavingWorkspace(false);
+    }
+  }, [isSavingWorkspace, pendingWorkspacePath]);
+
+  const deleteWorkspace = useCallback(async (workspace: FeatureWorkspaceInfo) => {
+    if (deletingWorkspaceId) {
+      return;
+    }
+    setDeletingWorkspaceId(workspace.id);
+    setWorkspaceMessage("");
+    try {
+      const response = await fetch(`/api/workspace/${encodeURIComponent(workspace.id)}`, {
+        method: "DELETE",
+      });
+      await readApiData<{ deletedSessionCount: number }>(response);
+      setWorkspaces((current) => current.filter((item) => item.id !== workspace.id));
+      if (pendingWorkspacePath === workspace.path) {
+        setPendingWorkspacePath("");
+      }
+      const currentSessionBelongsToWorkspace = [...sessions, ...archivedSessions].some(
+        (session) => session.id === currentSessionIdRef.current && session.workspaceId === workspace.id,
+      );
+      if (currentSessionBelongsToWorkspace) {
+        clearCurrentSession();
+      }
+      setWorkspaceMessage(`工作区“${workspace.name}”已移除，磁盘目录未删除`);
+      await refreshSessions();
+    } catch (error) {
+      setWorkspaceMessage(toErrorMessage(error));
+    } finally {
+      setDeletingWorkspaceId(null);
+    }
+  }, [archivedSessions, clearCurrentSession, deletingWorkspaceId, pendingWorkspacePath, refreshSessions, sessions]);
+
   const clearPendingWorkspace = useCallback(() => {
     if (currentSessionIdRef.current || isSelectingWorkspace) {
       return;
@@ -1374,7 +1675,7 @@ export default function Home() {
       const userMessage = input.trim();
       const selectedModelName = modelName.trim();
 
-      if (!userMessage || isRunning || isSessionSwitching || isSelectingWorkspace) {
+      if (!userMessage || isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace) {
         return;
       }
 
@@ -1442,6 +1743,7 @@ export default function Home() {
         reasoningEffort: reasoningEffort.trim(),
         userMessage,
         workspacePath: sessionId ? "" : pendingWorkspacePath,
+        permissionMode: sessionId ? undefined : permissionMode,
         sessionId,
       };
 
@@ -1507,11 +1809,13 @@ export default function Home() {
       handleSessionEvent,
       input,
       isLoadingHistory,
+      isCompressing,
       isRunning,
       isSelectingWorkspace,
       maybeAutoTitleSession,
       modelName,
       pendingWorkspacePath,
+      permissionMode,
       reasoningEffort,
       refreshSessions,
       rememberSessionPreview,
@@ -1520,7 +1824,57 @@ export default function Home() {
     ],
   );
 
+  const compressContext = useCallback(async () => {
+    const targetSessionId = currentSessionIdRef.current;
+    if (!targetSessionId || isRunning || isCompressing || viewingSessionStatus === "archived") {
+      return;
+    }
+    const controller = new AbortController();
+    compressionAbortControllerRef.current = controller;
+    setIsCompressing(true);
+    setCompressionMessage("正在请求上下文压缩…");
+    try {
+      const response = await fetch(`/api/session/${encodeURIComponent(targetSessionId)}/context/compress`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(modelName.trim() ? { modelName: modelName.trim() } : {}),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await readSessionEventStream(response, handleSessionEvent, { signal: controller.signal });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        if (currentSessionIdRef.current === targetSessionId) {
+          setCompressionState("failed");
+          setCompressionMessage("上下文压缩已取消");
+        }
+        addSystemMessage("上下文压缩已取消", "info", targetSessionId);
+      } else {
+        const message = toErrorMessage(error);
+        setCompressionState("failed");
+        setCompressionMessage(message);
+        addSystemMessage(`上下文压缩失败：${message}`, "error", targetSessionId);
+      }
+    } finally {
+      if (compressionAbortControllerRef.current === controller) {
+        compressionAbortControllerRef.current = null;
+      }
+      setIsCompressing(false);
+    }
+  }, [addSystemMessage, handleSessionEvent, isCompressing, isRunning, modelName, viewingSessionStatus]);
+
   const stopCurrentRun = useCallback(() => {
+    if (compressionAbortControllerRef.current) {
+      compressionAbortControllerRef.current.abort();
+      compressionAbortControllerRef.current = null;
+      setIsCompressing(false);
+      setCompressionState("failed");
+      setCompressionMessage("上下文压缩已取消");
+      addSystemMessage("上下文压缩已取消", "info", currentSessionIdRef.current);
+      return;
+    }
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     const sessionKey =
@@ -1536,7 +1890,7 @@ export default function Home() {
       meta: { local: true },
     });
     void refreshSessions();
-  }, [activeTurnId, handleSessionEvent, refreshSessions]);
+  }, [activeTurnId, addSystemMessage, handleSessionEvent, refreshSessions]);
 
   const startNewSession = useCallback(() => {
     clearCurrentSession();
@@ -1600,6 +1954,16 @@ export default function Home() {
         .slice(0, 3),
     [sessions],
   );
+
+  const workspaceSessionCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const session of [...sessions, ...archivedSessions]) {
+      if (session.workspaceId) {
+        counts[session.workspaceId] = (counts[session.workspaceId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [archivedSessions, sessions]);
 
   // 可操作授权请求：仅当前实时会话中仍带 approvalId 的项
   const pendingApprovalTools = useMemo(() => {
@@ -1724,15 +2088,22 @@ export default function Home() {
   const renderSessionList = (options?: { onAfterSelect?: () => void }) => (
     <SessionListPanel
       visibleSessions={visibleSessions as FeatureSessionInfo[]}
+      workspaces={workspaces}
+      workspaceSessionCounts={workspaceSessionCounts}
       sessionPreviews={sessionPreviews}
       highlightedSessionId={highlightedSessionId}
       sessionListTab={sessionListTab as FeatureSessionListTab}
       sessionQuery={sessionQuery}
       isLoadingSessions={isLoadingSessions}
       sessionListError={sessionListError}
-      sessionMessage={sessionMessage}
+      sessionMessage={workspaceMessage || sessionMessage}
       isRunning={isRunning}
       isSelectingWorkspace={isSelectingWorkspace}
+      isLoadingWorkspaces={isLoadingWorkspaces}
+      isSavingWorkspace={isSavingWorkspace}
+      deletingWorkspaceId={deletingWorkspaceId}
+      workspaceError={workspaceError}
+      pendingWorkspacePath={pendingWorkspacePath}
       isSessionSwitching={isSessionSwitching}
       isCurrentSessionRunning={isRunning && sessionId === highlightedSessionId}
       editingSessionId={editingSessionId}
@@ -1740,6 +2111,10 @@ export default function Home() {
       confirmingAction={confirmingAction as SessionConfirmAction}
       onQueryChange={setSessionQuery}
       onCreateSession={startNewSession}
+      onRefreshWorkspaces={() => void refreshWorkspaces()}
+      onSelectWorkspace={selectSavedWorkspace}
+      onSaveWorkspace={() => void saveWorkspace()}
+      onDeleteWorkspace={(workspace) => void deleteWorkspace(workspace)}
       onRefresh={() => void refreshSessions()}
       onTabChange={(tab) => {
         setSessionListTab(tab);
@@ -2013,14 +2388,29 @@ export default function Home() {
                   onInputChange={setInput}
                   recentInputs={recentInputsRef.current}
                   isRunning={isRunning}
+                  isCompressing={isCompressing}
+                  canCompress={Boolean(sessionId && !isArchivedView)}
                   isSessionSwitching={isSessionSwitching}
                   isSelectingWorkspace={isSelectingWorkspace}
                   modelName={modelName}
                   isManualModel={isManualModel}
+                  permissionMode={permissionMode}
+                  onPermissionModeChange={(value) => void changePermissionMode(value)}
                   onModelChange={applyModelName}
                   modelOptions={modelOptions}
                   modelOptionsError={modelOptionsError}
                   isLoadingModelOptions={isLoadingModelOptions}
+                  modelInfo={modelInfo}
+                  modelInfoError={modelInfoError}
+                  isLoadingModelInfo={isLoadingModelInfo}
+                  modelContextLimit={modelContextLimit}
+                  modelContextLimitError={modelContextLimitError}
+                  contextLimitDraft={contextLimitDraft}
+                  isLoadingModelContextLimit={isLoadingModelContextLimit}
+                  isSavingContextLimit={isSavingContextLimit}
+                  onContextLimitChange={setContextLimitDraft}
+                  onSaveContextLimit={() => void saveContextLimit()}
+                  onResetContextLimit={() => void resetContextLimit()}
                   reasoningEffort={reasoningEffort}
                   onReasoningChange={setReasoningEffort}
                   workspacePath={displayedWorkspacePath}
@@ -2033,6 +2423,7 @@ export default function Home() {
                   onToggleSettings={() => setIsComposerSettingsOpen((current) => !current)}
                   onSend={sendMessage}
                   onStop={stopCurrentRun}
+                  onCompress={() => void compressContext()}
                   onFocusModelInput={focusModelInput}
                 />
                 </>
@@ -2050,7 +2441,15 @@ export default function Home() {
             pendingApprovalCount={pendingApprovalCount}
             errorMessage={errorMessage}
             isRunning={isRunning}
+            isCompressing={isCompressing}
+            contextUsage={contextUsage}
+            modelContextLimit={modelContextLimit}
+            compressionState={compressionState}
+            compressionMessage={compressionMessage}
+            canCompress={Boolean(sessionId && !isArchivedView)}
             onOpenSession={(id) => void openSession(id, "active")}
+            onCompressContext={() => void compressContext()}
+            onStop={stopCurrentRun}
           />
         </div>
       </div>
@@ -2433,6 +2832,38 @@ function sessionAllowLabel(permissionType?: ToolPermissionType) {
   return "本会话始终允许此工具";
 }
 
+function findLastContextUsage(events: SessionEvent[]) {
+  let latest: ContextUsageSnapshot | null = null;
+  for (const event of events) {
+    if (event.type === "CONTEXT_USAGE_UPDATED") {
+      latest = event.payload;
+    } else if (event.type === "ASSISTANT_MESSAGE" && event.payload.contextUsage) {
+      latest = event.payload.contextUsage;
+    }
+  }
+  return latest;
+}
+
+function findLastCompression(events: SessionEvent[]) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type === "CONTEXT_COMPRESSION") {
+      return event.payload;
+    }
+  }
+  return null;
+}
+
+function compressionSystemText(payload: ContextCompressionPayload) {
+  if (payload.state === "started") return "上下文压缩已开始";
+  if (payload.state === "completed") {
+    const detail = payload.summarizedTurnCount ? `，整理 ${payload.summarizedTurnCount} 个历史回合` : "";
+    return `上下文压缩完成${detail}`;
+  }
+  if (payload.state === "skipped") return `本次未压缩上下文：${payload.skipReason || "当前没有需要整理的内容"}`;
+  return `上下文压缩失败：${payload.errorMessage || "后端未提供具体原因"}`;
+}
+
 function reduceSessionEventsToMessages(events: SessionEvent[]) {
   const seenEventIds = new Set<string>();
   let messages: ChatMessage[] = [];
@@ -2526,6 +2957,18 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
         });
         messages = next;
       }
+      continue;
+    }
+
+    if (event.type === "CONTEXT_COMPRESSION") {
+      messages = upsertMessageSnapshot(messages, {
+        id: `compression_${event.payload.compressionId}_${event.payload.state}`,
+        role: "system",
+        text: compressionSystemText(event.payload),
+        state: event.payload.state === "failed" ? "error" : "info",
+        turnId: event.turnId,
+        createdAt: event.createdAt,
+      });
       continue;
     }
 
@@ -2669,6 +3112,18 @@ function normalizeSessionInfo(session: SessionInfo): SessionInfo {
   };
 }
 
+function parsePermissionMode(metadataJson?: string | null): PermissionMode {
+  if (!metadataJson?.trim()) {
+    return "DEFAULT";
+  }
+  try {
+    const metadata = JSON.parse(metadataJson) as { permissionMode?: unknown };
+    return metadata.permissionMode === "FULL_ACCESS" ? "FULL_ACCESS" : "DEFAULT";
+  } catch {
+    return "DEFAULT";
+  }
+}
+
 function upsertSession(list: SessionInfo[], session: SessionInfo) {
   const index = list.findIndex((item) => item.id === session.id);
   if (index < 0) {
@@ -2679,6 +3134,16 @@ function upsertSession(list: SessionInfo[], session: SessionInfo) {
     ...next[index],
     ...session,
   };
+  return next;
+}
+
+function upsertWorkspace(list: FeatureWorkspaceInfo[], workspace: FeatureWorkspaceInfo) {
+  const index = list.findIndex((item) => item.id === workspace.id);
+  if (index < 0) {
+    return [workspace, ...list];
+  }
+  const next = list.slice();
+  next[index] = workspace;
   return next;
 }
 

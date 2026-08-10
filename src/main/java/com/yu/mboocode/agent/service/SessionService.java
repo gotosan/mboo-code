@@ -3,6 +3,7 @@ package com.yu.mboocode.agent.service;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.thread.lock.LockUtil;
 import cn.hutool.core.thread.lock.SegmentLock;
+import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
@@ -10,10 +11,12 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yu.mboocode.agent.mapper.SessionsMapper;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.Sessions;
+import com.yu.mboocode.agent.model.Workspace;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.common.util.CommonUtil;
 import com.yu.mboocode.common.util.DateTimeUtil;
 import com.yu.mboocode.llm.service.PersistentChatMemoryStore;
+import com.yu.mboocode.agent.tool.permission.PermissionMode;
 import com.yu.mboocode.agent.tool.permission.SessionPermissions;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -38,27 +41,37 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     private PersistentChatMemoryStore persistentChatMemoryStore;
     @Resource
     private ToolResultStore toolResultStore;
+    @Resource
+    private WorkspaceService workspaceService;
 
     @Transactional
-    public Sessions getActiveOrCreateSession(String sessionId, String workspacePath) {
+    public Sessions getActiveOrCreateSession(String sessionId, String workspacePath, PermissionMode permissionMode) {
         if (StrUtil.isNotBlank(sessionId)) {
             return getActiveSession(sessionId);
         }
-        return createSession(workspacePath);
+        return createSession(workspacePath, permissionMode);
     }
 
     @Transactional
-    public Sessions createSession(String workspacePath) {
+    public Sessions createSession(String workspacePath, PermissionMode permissionMode) {
         Sessions session = new Sessions();
+        session.setId(IdUtil.getSnowflakeNextIdStr());
         session.setTitle("新会话"); //todo 后续看看用大模型的回答
         session.setStatus(Sessions.StatusEnum.ACTIVE.getCode());
-        session.setMetadataJson("{}");
-        save(session);
-
-        String resolvedWorkspacePath = StrUtil.isNotBlank(workspacePath) ? normalizeWorkspacePath(workspacePath) : createDefaultWorkspace(session.getId(), LocalDate.now());
-        session.setWorkspacePath(resolvedWorkspacePath);
+        JSONObject metadata = new JSONObject();
+        if (permissionMode != null) {
+            metadata.put(PERMISSION_MODE_KEY, permissionMode.getCode());
+        }
+        session.setMetadataJson(metadata.toJSONString());
+        if (StrUtil.isNotBlank(workspacePath)) {
+            Workspace workspace = workspaceService.getOrCreate(workspacePath);
+            session.setWorkspaceId(workspace.getId());
+            session.setWorkspacePath(workspace.getPath());
+        } else {
+            session.setWorkspacePath(createDefaultWorkspace(session.getId(), LocalDate.now()));
+        }
         session.setTranscriptUri(sessionEventStore.newTranscriptUri(session.getId()));
-        updateById(session);
+        save(session);
         return session;
     }
 
@@ -228,6 +241,32 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         return parsePermissions(session.getMetadataJson());
     }
 
+    /**
+     * 读取会话权限模式；字段缺失或非法时按默认权限处理，兼容历史会话。
+     */
+    public PermissionMode getPermissionMode(String sessionId) {
+        return getPermissionMode(getSession(sessionId));
+    }
+
+    /**
+     * 读取会话权限模式；字段缺失或非法时按默认权限处理，兼容历史会话。
+     */
+    public PermissionMode getPermissionMode(Sessions session) {
+        return PermissionMode.fromCode(parseMetadata(session.getMetadataJson()).getString(PERMISSION_MODE_KEY));
+    }
+
+    /**
+     * 修改会话权限模式；走统一的 metadataJson 更新（分段锁 + CAS 重试）。
+     */
+    @Transactional
+    public Sessions updatePermissionMode(String sessionId, PermissionMode mode) {
+        if (mode == null) {
+            throw new ServiceException("权限模式不能为空");
+        }
+        updateMetadataJson(sessionId, meta -> meta.put(PERMISSION_MODE_KEY, mode.getCode()));
+        return getSession(sessionId);
+    }
+
     @Transactional
     public void grantToolPermission(String sessionId, String toolName) {
         if (StrUtil.isBlank(toolName)) {
@@ -275,6 +314,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     }
 
     private static final String PERMISSIONS_KEY = "permissions"; // metadataJson 中权限字段名
+    private static final String PERMISSION_MODE_KEY = "permissionMode"; // metadataJson 中权限模式字段名
     /**
      * 修改会话 permissions 节点；底层走统一的 metadataJson 更新（分段锁 + CAS 重试）。
      */
@@ -377,20 +417,4 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         }
     }
 
-    private String normalizeWorkspacePath(String workspacePath) {
-        try {
-            Path path = Path.of(workspacePath).toAbsolutePath().normalize();
-            if (!Files.exists(path)) {
-                throw new ServiceException("工作区路径不存在");
-            }
-            if (!Files.isDirectory(path)) {
-                throw new ServiceException("工作区路径不是目录");
-            }
-            return path.toRealPath().toString();
-        } catch (InvalidPathException e) {
-            throw new ServiceException("工作区路径格式错误");
-        } catch (IOException e) {
-            throw new ServiceException("无法解析工作区真实路径");
-        }
-    }
 }

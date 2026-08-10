@@ -58,6 +58,125 @@
   display: none;
 }
 
+.modelMetaPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 12px;
+  border: 1px solid #e6e6e1;
+  border-radius: 10px;
+  background: #f8f8f6;
+}
+
+.modelMetaHeader,
+.modelMetaTitleGroup,
+.permissionControl,
+.contextLimitRow,
+.contextLimitActions {
+  display: flex;
+  align-items: center;
+}
+
+.modelMetaHeader {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.permissionControl {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: #8b8b84;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.permissionSelect {
+  height: 25px;
+  padding: 0 4px;
+  border: 1px solid #dfded8;
+  border-radius: 6px;
+  background: #fff;
+  color: #35352c;
+  font: inherit;
+  font-size: 10px;
+}
+
+.modelMetaTitleGroup {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.modelMetaTitle {
+  color: #35352c;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.modelMetaHint,
+.modelMetaError,
+.contextLimitRangeLabel {
+  color: #9b9b92;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.modelMetaError {
+  color: #bc4a4a;
+}
+
+.contextLimitValue {
+  flex: 0 0 auto;
+  color: #7567d9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.contextLimitRow {
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.contextLimitRange {
+  min-width: 120px;
+  flex: 1 1 180px;
+  accent-color: #8064ee;
+}
+
+.contextLimitRangeLabel {
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.contextLimitActions {
+  flex: 0 0 auto;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.contextResetButton {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #8b8b84;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.contextResetButton:hover:not(:disabled) {
+  color: #5c15e0;
+}
+
+.contextResetButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .configGroup {
   display: flex;
   min-width: 0;

@@ -1,12 +1,15 @@
 package com.yu.mboocode.agent.dto;
 
 import com.yu.mboocode.agent.model.SessionTurn;
+import com.yu.mboocode.agent.model.ContextUsageSnapshot;
 import dev.langchain4j.model.chat.response.StreamingHandle;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * 当前进程内活跃 turn 的运行时状态。
@@ -35,6 +38,24 @@ public class ActiveTurnRuntime {
 
     @Schema(description = "当前模型流取消句柄", hidden = true)
     private final AtomicReference<StreamingHandle> streamingHandle = new AtomicReference<>();
+
+    @Schema(description = "当前 turn 使用的模型 ID", hidden = true)
+    private final AtomicReference<String> modelId = new AtomicReference<>();
+
+    @Schema(description = "当前 turn 使用的生效上下文上限", hidden = true)
+    private final AtomicReference<Long> contextLimit = new AtomicReference<>();
+
+    @Schema(description = "当前助手消息 ID", hidden = true)
+    private final AtomicReference<String> assistantMessageId = new AtomicReference<>();
+
+    @Schema(description = "AI Service invocation ID", hidden = true)
+    private final AtomicReference<UUID> invocationId = new AtomicReference<>();
+
+    @Schema(description = "最后一次有效上下文用量", hidden = true)
+    private final AtomicReference<ContextUsageSnapshot> latestContextUsage = new AtomicReference<>();
+
+    @Schema(description = "上下文用量 SSE 发送器", hidden = true)
+    private final AtomicReference<Consumer<ContextUsageSnapshot>> contextUsageEmitter = new AtomicReference<>();
 
     public ActiveTurnRuntime(SessionTurn sessionTurn) {
         this.sessionTurn = sessionTurn;
@@ -100,6 +121,53 @@ public class ActiveTurnRuntime {
         if (handle != null) {
             handle.cancel();
         }
+    }
+
+    public void configureModelUsage(String currentModelId, Long currentContextLimit, String currentAssistantMessageId, Consumer<ContextUsageSnapshot> emitter) {
+        modelId.set(currentModelId);
+        contextLimit.set(currentContextLimit);
+        assistantMessageId.set(currentAssistantMessageId);
+        contextUsageEmitter.set(emitter);
+    }
+
+    public String getModelId() {
+        return modelId.get();
+    }
+
+    public Long getContextLimit() {
+        return contextLimit.get();
+    }
+
+    public String getAssistantMessageId() {
+        return assistantMessageId.get();
+    }
+
+    public boolean bindInvocation(UUID currentInvocationId) {
+        UUID existing = invocationId.compareAndExchange(null, currentInvocationId);
+        return existing == null || existing.equals(currentInvocationId);
+    }
+
+    public boolean matchesInvocation(UUID currentInvocationId) {
+        UUID existing = invocationId.get();
+        return existing != null && existing.equals(currentInvocationId);
+    }
+
+    public void updateContextUsage(ContextUsageSnapshot snapshot) {
+        latestContextUsage.set(snapshot);
+        Consumer<ContextUsageSnapshot> emitter = contextUsageEmitter.get();
+        if (emitter != null) emitter.accept(snapshot);
+    }
+
+    public ContextUsageSnapshot getLatestContextUsage() {
+        return latestContextUsage.get();
+    }
+
+    public boolean isUsageTrackingActive() {
+        return terminalState.get() == null && phase.get() != TurnPhase.TERMINATED;
+    }
+
+    public void clearContextUsageEmitter() {
+        contextUsageEmitter.set(null);
     }
 
     public void finish() {

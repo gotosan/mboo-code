@@ -4,9 +4,11 @@ export type SessionEventType =
   | "TOOL_CALL_STARTED"
   | "TOOL_CALL_ENDED"
   | "TOOL_APPROVAL_REQUIRED"
+  | "CONTEXT_COMPRESSION"
   | "ERROR"
   | "CANCELLED"
-  | "ASSISTANT_MESSAGE_DELTA";
+  | "ASSISTANT_MESSAGE_DELTA"
+  | "CONTEXT_USAGE_UPDATED";
 
 export type SessionEventSource = "USER" | "ASSISTANT" | "SYSTEM";
 
@@ -18,12 +20,51 @@ export type ToolApprovalDecision = "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY";
 
 export type ToolPermissionType = "NONE" | "TOOL" | "READ" | "WRITE" | "COMMAND";
 
+export type PermissionMode = "DEFAULT" | "FULL_ACCESS";
+
 export type ChatReq = {
   modelName: string;
   reasoningEffort: string;
   userMessage: string;
   workspacePath: string;
+  permissionMode?: PermissionMode;
   sessionId: string;
+};
+
+export type ModelLimit = {
+  context: number;
+  input?: number | null;
+  output: number;
+};
+
+export type ModelInfo = {
+  modelId: string;
+  name: string;
+  family?: string | null;
+  status?: string | null;
+  limit: ModelLimit;
+  toolCall: boolean;
+  reasoning: boolean;
+  reasoningOptions: Record<string, unknown>[];
+  attachment: boolean;
+  inputModalities: string[];
+  outputModalities: string[];
+};
+
+export type ModelContextLimit = {
+  modelId: string;
+  minimumContextLimit: number;
+  maximumContextLimit: number;
+  configuredContextLimit?: number | null;
+  effectiveContextLimit: number;
+  adjustable: boolean;
+};
+
+export type ContextUsageSnapshot = {
+  modelId: string;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens: number;
 };
 
 type SessionEventBase<TType extends SessionEventType, TPayload> = {
@@ -58,11 +99,38 @@ export type AssistantMessagePayload = {
   text: string;
   errorMessage?: string;
   durationMs?: number;
+  contextUsage?: ContextUsageSnapshot | null;
 };
 
 export type AssistantMessageDeltaPayload = {
   messageId: string;
   text: string;
+};
+
+export type ContextUsageUpdatedPayload = ContextUsageSnapshot & {
+  messageId: string;
+};
+
+export type ContextCompressionTrigger = "auto" | "manual";
+export type ContextCompressionState = "started" | "completed" | "failed" | "skipped";
+
+export type ContextCompressionPayload = {
+  compressionId: string;
+  trigger: ContextCompressionTrigger;
+  state: ContextCompressionState;
+  modelId?: string | null;
+  previousUsage?: ContextUsageSnapshot | null;
+  previousContextLimit?: number | null;
+  summarizedTurnCount?: number | null;
+  retainedTurnCount?: number | null;
+  compactedToolCallCount?: number | null;
+  beforeMessageCount?: number | null;
+  afterMessageCount?: number | null;
+  beforeEstimatedTokens?: number | null;
+  afterEstimatedTokens?: number | null;
+  durationMs?: number | null;
+  skipReason?: string | null;
+  errorMessage?: string | null;
 };
 
 export type ToolCallStartedPayload = {
@@ -118,9 +186,11 @@ export type SessionEventPayload =
   | UserMessagePayload
   | AssistantMessagePayload
   | AssistantMessageDeltaPayload
+  | ContextUsageUpdatedPayload
   | ToolCallStartedPayload
   | ToolApprovalRequiredPayload
   | ToolCallEndedPayload
+  | ContextCompressionPayload
   | ErrorPayload
   | CancelledPayload;
 
@@ -130,6 +200,8 @@ export type SessionEvent =
   | SessionEventBase<"TOOL_CALL_STARTED", ToolCallStartedPayload>
   | SessionEventBase<"TOOL_APPROVAL_REQUIRED", ToolApprovalRequiredPayload>
   | SessionEventBase<"TOOL_CALL_ENDED", ToolCallEndedPayload>
+  | SessionEventBase<"CONTEXT_COMPRESSION", ContextCompressionPayload>
   | SessionEventBase<"ERROR", ErrorPayload>
   | SessionEventBase<"CANCELLED", CancelledPayload>
-  | SessionEventBase<"ASSISTANT_MESSAGE_DELTA", AssistantMessageDeltaPayload>;
+  | SessionEventBase<"ASSISTANT_MESSAGE_DELTA", AssistantMessageDeltaPayload>
+  | SessionEventBase<"CONTEXT_USAGE_UPDATED", ContextUsageUpdatedPayload>;

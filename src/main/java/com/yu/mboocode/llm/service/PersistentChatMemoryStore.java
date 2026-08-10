@@ -34,11 +34,8 @@ public class PersistentChatMemoryStore implements ChatMemoryStore {
     @Override
     public void updateMessages(Object memoryId, List<ChatMessage> messages) {
         String id = (String) memoryId;
-
-        ChatMemory chatMemory = new ChatMemory();
-        chatMemory.setMemoryId(id);
-        chatMemory.setMessagesJson(ChatMessageSerializer.messagesToJson(messages));
-        chatMemoryService.saveOrUpdate(chatMemory);
+        // 定向更新消息字段，避免实体 saveOrUpdate 的空字段语义意外覆盖摘要和上下文状态
+        chatMemoryService.upsertMessagesJson(id, ChatMessageSerializer.messagesToJson(messages));
         log.debug("更新会话记忆，memoryId: {}，消息数量: {}", id, messages.size());
     }
 

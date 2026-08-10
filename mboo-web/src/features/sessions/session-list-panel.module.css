@@ -128,6 +128,257 @@
   transform: translateY(1px);
 }
 
+.workspaceSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #e6e6e1;
+  border-radius: 10px;
+  background: #f8f8f6;
+}
+
+.workspaceHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workspaceTitle,
+.workspaceHint,
+.workspaceEmpty,
+.workspaceConfirmTitle,
+.workspaceConfirmText {
+  margin: 0;
+}
+
+.workspaceTitle {
+  color: #35352c;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.workspaceHint {
+  margin-top: 1px;
+  color: #9b9b92;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.workspaceRefresh,
+.workspaceDelete {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #9b9b92;
+  cursor: pointer;
+}
+
+.workspaceRefresh {
+  width: 24px;
+  height: 24px;
+}
+
+.workspaceRefresh:hover:not(:disabled),
+.workspaceDelete:hover:not(:disabled) {
+  background: #ecece8;
+  color: #5c15e0;
+}
+
+.workspaceRefresh:disabled,
+.workspaceDelete:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.workspaceSaveCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border: 1px solid rgb(128 100 238 / 24%);
+  border-radius: 7px;
+  background: #f0edff;
+}
+
+.workspaceSaveCopy,
+.workspaceCopy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.workspaceSaveLabel {
+  color: #7567d9;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.workspacePath,
+.workspaceName,
+.workspaceMeta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspacePath,
+.workspaceName {
+  color: #35352c;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.workspaceSaveButton {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid #8064ee;
+  border-radius: 999px;
+  background: #8064ee;
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workspaceSaveButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workspaceList {
+  display: flex;
+  max-height: 168px;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.workspaceItem {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: 7px;
+}
+
+.workspaceOpen {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspaceOpen:hover:not(:disabled) {
+  background: #ecece8;
+}
+
+.workspaceOpen:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workspaceDot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
+.workspaceDotAvailable {
+  background: #5d9b72;
+}
+
+.workspaceDotMissing {
+  background: #c9973d;
+}
+
+.workspaceMeta {
+  margin-top: 1px;
+  color: #9b9b92;
+  font-size: 10px;
+  line-height: 13px;
+}
+
+.workspaceDelete {
+  width: 24px;
+  height: 24px;
+  margin: 2px 2px 2px auto;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.workspaceError,
+.workspaceConfirm {
+  padding: 7px;
+  border-radius: 7px;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.workspaceError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid rgb(188 74 74 / 24%);
+  background: #fff0f0;
+  color: #bc4a4a;
+}
+
+.workspaceError button,
+.workspaceConfirmActions button {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.workspaceConfirm {
+  width: 100%;
+  border: 1px solid rgb(188 74 74 / 24%);
+  background: #fff0f0;
+}
+
+.workspaceConfirmTitle {
+  color: #8f343d;
+  font-weight: 600;
+}
+
+.workspaceConfirmText {
+  margin-top: 3px;
+  color: #bc4a4a;
+}
+
+.workspaceConfirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.workspaceConfirmDanger {
+  font-weight: 600;
+}
+
 .primaryButton:disabled,
 .secondaryButton:disabled,
 .smallButton:disabled {

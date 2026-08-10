@@ -57,7 +57,68 @@ public class SessionEventStore {
     /**
      * 追加一条完整事件
      */
+    /**
+     * 按 eventId 幂等追加一条完整事件；JSONL 已存在相同 eventId 时直接返回，不重复写入。
+     */
+    public SessionEvent appendSessionIdempotent(String transcriptUri, SessionEvent sessionEvent) {
+        Lock lock = fileLocks.get(transcriptUri);
+        lock.lock();
+        try {
+            if (containsEventIdLocked(transcriptUri, sessionEvent.getEventId())) {
+                return sessionEvent;
+            }
+        } finally {
+            lock.unlock();
+        }
+        return appendSession(transcriptUri, sessionEvent);
+    }
+
+    /**
+     * 判断 JSONL 中是否已存在指定 eventId 的事件。
+     */
+    public boolean containsEventId(String transcriptUri, String eventId) {
+        Lock lock = fileLocks.get(transcriptUri);
+        lock.lock();
+        try {
+            return containsEventIdLocked(transcriptUri, eventId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private boolean containsEventIdLocked(String transcriptUri, String eventId) {
+        if (eventId == null || eventId.isBlank()) {
+            return false;
+        }
+        Path path = resolveTranscriptPath(transcriptUri);
+        if (Files.notExists(path)) {
+            return false;
+        }
+        try {
+            for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                try {
+                    if (eventId.equals(JSON.parseObject(line).getString("eventId"))) {
+                        return true;
+                    }
+                } catch (JSONException ignored) {
+                    // 损坏行无法提供 eventId，跳过即可；写入路径另有修复逻辑
+                }
+            }
+            return false;
+        } catch (IOException e) {
+            log.error("读取会话事件失败 path:{}", path, e);
+            throw new ServiceException("读取会话失败");
+        }
+    }
+
+    /**
+     * 追加一条完整事件
+     */
     public SessionEvent appendSession(String transcriptUri, SessionEvent sessionEvent) {
+        if (!sessionEvent.getType().isPersistent()) throw new IllegalArgumentException("运行时事件不能写入 JSONL: " + sessionEvent.getType());
         Lock lock = fileLocks.get(transcriptUri);
         lock.lock();
         try {
@@ -154,6 +215,10 @@ public class SessionEventStore {
     /**
      * 先读取事件类型，再用类型绑定的 payload 类反序列化事件主体。
      */
+    public SessionEvent parseEvent(String line) {
+        return parseEventLine(line);
+    }
+
     @SuppressWarnings("unchecked")
     private SessionEvent parseEventLine(String line) {
         JSONObject json = JSON.parseObject(line);

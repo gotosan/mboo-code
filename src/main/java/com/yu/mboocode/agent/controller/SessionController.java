@@ -3,14 +3,21 @@ package com.yu.mboocode.agent.controller;
 import com.yu.mboocode.common.dto.R;
 import com.yu.mboocode.common.enums.SSEEvent;
 import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.agent.dto.ContextCompressReq;
 import com.yu.mboocode.agent.dto.ToolApprovalReq;
 import com.yu.mboocode.agent.dto.ToolResultDetailResp;
+import com.yu.mboocode.agent.enums.TurnOperationType;
 import com.yu.mboocode.llm.LLMUtil;
+import com.yu.mboocode.llm.context.ContextManagementService;
+import cn.hutool.core.util.StrUtil;
 import com.yu.mboocode.agent.dto.ChatReq;
+import com.yu.mboocode.agent.dto.SessionPermissionModeReq;
 import com.yu.mboocode.agent.dto.SessionUpdateReq;
 import com.yu.mboocode.agent.model.SessionEvent;
+import com.yu.mboocode.agent.model.ModelInfo;
 import com.yu.mboocode.agent.model.Sessions;
 import com.yu.mboocode.agent.service.SessionService;
+import com.yu.mboocode.agent.service.ModelOptionService;
 import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.service.TurnService;
 import com.yu.mboocode.agent.service.ToolResultStore;
@@ -31,12 +38,14 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import dev.langchain4j.model.chat.request.ChatRequestParameters;
 
 import java.time.Duration;
 import java.util.List;
@@ -55,6 +64,10 @@ public class SessionController {
     private ToolApprovalService toolApprovalService;
     @Resource
     private ToolResultStore toolResultStore;
+    @Resource
+    private ModelOptionService modelOptionService;
+    @Resource
+    private ContextManagementService contextManagementService;
 
     @Operation(summary = "活跃会话列表")
     @GetMapping("/list")
@@ -130,6 +143,12 @@ public class SessionController {
         return R.ok();
     }
 
+    @Operation(summary = "修改会话权限模式")
+    @PutMapping("/{sessionId}/permission-mode")
+    public R<Sessions> updatePermissionMode(@PathVariable String sessionId, @Valid @RequestBody SessionPermissionModeReq req) {
+        return R.ok(sessionService.updatePermissionMode(sessionId, req.mode()));
+    }
+
     @Operation(summary = "处理工具授权")
     @PostMapping("/{sessionId}/approvals/{approvalId}")
     public R<Void> resolveToolApproval(@PathVariable String sessionId, @PathVariable String approvalId, @Valid @RequestBody ToolApprovalReq req) {
@@ -140,8 +159,31 @@ public class SessionController {
     @Operation(summary = "聊天")
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<@NonNull ServerSentEvent<@NonNull SessionEvent>> chat(@Valid @RequestBody ChatReq req) {
+        ModelInfo modelInfo = modelOptionService.requireModelInfo(req.modelName());
+        String reasoningEffort = modelOptionService.validateReasoningEffort(modelInfo, req.reasoningEffort());
+        ChatRequestParameters requestParameters = LLMUtil.buildChatReq(modelInfo.modelId(), reasoningEffort);
         Sinks.One<Void> streamEnded = Sinks.one();
-        Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(req.sessionId(), req.workspacePath(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), LLMUtil.buildChatReq(req.modelName(), req.reasoningEffort())))
+        Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(req.sessionId(), req.workspacePath(), req.permissionMode(), sessionTurn -> turnService.chatStream(sessionTurn, req.userMessage(), requestParameters))
+                .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build())
+                .doFinally(_ -> streamEnded.tryEmitEmpty());
+        Flux<ServerSentEvent<SessionEvent>> heartbeatEvents = Flux.interval(SSE_HEARTBEAT_INTERVAL)
+                .map(_ -> ServerSentEvent.<SessionEvent>builder().comment("keep-alive").build())
+                .takeUntilOther(streamEnded.asMono());
+
+        return Flux.merge(sessionEvents, heartbeatEvents);
+    }
+
+    @Operation(summary = "主动压缩上下文")
+    @PostMapping(value = "/{sessionId}/context/compress", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<@NonNull ServerSentEvent<@NonNull SessionEvent>> compressContext(@PathVariable String sessionId, @RequestBody(required = false) ContextCompressReq req) {
+        // 只允许已存在且活跃的会话；不存在或已归档时在创建执行 turn 前拒绝
+        sessionService.getActiveSession(sessionId);
+        String modelName = req == null ? null : StrUtil.trimToNull(req.modelName());
+        if (modelName != null) {
+            modelOptionService.requireModelInfo(modelName);
+        }
+        Sinks.One<Void> streamEnded = Sinks.one();
+        Flux<ServerSentEvent<SessionEvent>> sessionEvents = turnService.turn(sessionId, null, TurnOperationType.CONTEXT_COMPRESSION, sessionTurn -> contextManagementService.manualCompress(sessionTurn, modelName))
                 .map(e -> ServerSentEvent.<SessionEvent>builder().event(SSEEvent.SESSION.getCode()).data(e).build())
                 .doFinally(_ -> streamEnded.tryEmitEmpty());
         Flux<ServerSentEvent<SessionEvent>> heartbeatEvents = Flux.interval(SSE_HEARTBEAT_INTERVAL)

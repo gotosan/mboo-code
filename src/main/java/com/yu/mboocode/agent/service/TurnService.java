@@ -5,6 +5,9 @@ import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSON;
 import com.yu.mboocode.agent.dto.ActiveTurnRuntime;
 import com.yu.mboocode.agent.dto.ActiveTurnRuntime.TurnTerminalState;
+import com.yu.mboocode.agent.enums.TurnOperationType;
+import com.yu.mboocode.agent.model.ContextUsageSnapshot;
+import com.yu.mboocode.agent.model.ModelInfo;
 import com.yu.mboocode.agent.model.payload.*;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.llm.AiCodeService;
@@ -18,6 +21,9 @@ import com.yu.mboocode.agent.model.ToolResultArtifact;
 import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.tool.event.ToolEventFormatterRegistry;
 import com.yu.mboocode.common.util.DateTimeUtil;
+import com.yu.mboocode.agent.tool.permission.PermissionMode;
+import com.yu.mboocode.llm.context.ContextManagementService;
+import com.yu.mboocode.llm.service.ChatMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
@@ -56,11 +62,35 @@ public class TurnService {
     private ToolEventFormatterRegistry toolEventFormatterRegistry;
     @Resource
     private ToolResultStore toolResultStore;
+    @Resource
+    private ModelUsageTracker modelUsageTracker;
+    @Resource
+    private ModelOptionService modelOptionService;
+    @Resource
+    private ModelContextPreferenceService modelContextPreferenceService;
+    @Resource
+    private ContextManagementService contextManagementService;
+    @Resource
+    private ChatMemoryService chatMemoryService;
+    @Resource
+    private WorkspaceService workspaceService;
 
     private final Map<String, ActiveTurnRuntime> activeTurnRuntime = new ConcurrentHashMap<>();
 
     public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, TurnProcess turnProcess) {
-        ActiveTurnRuntime runtime = startTurn(sessionId, workspacePath);
+        return turn(sessionId, workspacePath, null, TurnOperationType.CHAT, turnProcess);
+    }
+
+    public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, PermissionMode permissionMode, TurnProcess turnProcess) {
+        return turn(sessionId, workspacePath, permissionMode, TurnOperationType.CHAT, turnProcess);
+    }
+
+    public Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, TurnOperationType operationType, TurnProcess turnProcess) {
+        return turn(sessionId, workspacePath, null, operationType, turnProcess);
+    }
+
+    private Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, PermissionMode permissionMode, TurnOperationType operationType, TurnProcess turnProcess) {
+        ActiveTurnRuntime runtime = startTurn(sessionId, workspacePath, permissionMode, operationType);
         SessionTurn sessionTurn = runtime.getSessionTurn();
         return Flux.defer(() -> {
             if (!runtime.markRunning()) {
@@ -104,10 +134,14 @@ public class TurnService {
         });
     }
 
-    private ActiveTurnRuntime startTurn(String sessionId, String workspacePath) {
-        Sessions session = sessionService.getActiveOrCreateSession(sessionId, workspacePath);
+    private ActiveTurnRuntime startTurn(String sessionId, String workspacePath, PermissionMode permissionMode, TurnOperationType operationType) {
+        Sessions session = sessionService.getActiveOrCreateSession(sessionId, workspacePath, permissionMode);
+        return workspaceService.withOperationLock(session.getWorkspaceId(), () -> startTurn(session, operationType));
+    }
+
+    private ActiveTurnRuntime startTurn(Sessions session, TurnOperationType operationType) {
         String turnId = IdUtil.getSnowflakeNextIdStr();
-        ActiveTurnRuntime runtime = new ActiveTurnRuntime(new SessionTurn(session.getId(), session.getTranscriptUri(), turnId, System.nanoTime()));
+        ActiveTurnRuntime runtime = new ActiveTurnRuntime(new SessionTurn(session.getId(), session.getTranscriptUri(), turnId, System.nanoTime(), operationType));
 
         while (true) {
             ActiveTurnRuntime existing = activeTurnRuntime.putIfAbsent(session.getId(), runtime);
@@ -140,6 +174,14 @@ public class TurnService {
 
     public Flux<@NonNull SessionEvent> chatStream(SessionTurn sessionTurn, String userMessage, ChatRequestParameters params) {
         ActiveTurnRuntime runtime = getActiveRuntime(sessionTurn);
+        ModelInfo currentModel = modelOptionService.requireModelInfo(params.modelName());
+        long currentContextLimit = modelContextPreferenceService.getEffectiveContextLimit(currentModel);
+        // 自动压缩和硬预算检查必须在写入 USER_MESSAGE 前完成；压缩失败时只推送压缩事件并正常结束
+        ContextManagementService.ChatPreparation preparation = contextManagementService.prepareChatTurn(sessionTurn, params.modelName(), currentContextLimit, userMessage);
+        Flux<@NonNull SessionEvent> preludeFlux = Flux.fromIterable(preparation.events());
+        if (!preparation.proceed()) {
+            return preludeFlux;
+        }
         String userMessageId = IdUtil.getSnowflakeNextIdStr();
         Flux<@NonNull SessionEvent> userMessageFlux = Flux.just(sessionEventStore.appendSession(
                 sessionTurn.transcriptUri(),
@@ -157,6 +199,23 @@ public class TurnService {
         String assistantMessageId = IdUtil.getSnowflakeNextIdStr();
         StringBuffer finalText = new StringBuffer();
         Flux<@NonNull SessionEvent> assistantMessageFlux = Flux.create(sink -> {
+            runtime.configureModelUsage(params.modelName(), currentContextLimit, assistantMessageId, usage -> emitEvent(sink, () -> SessionEvent.builder()
+                    .eventId(IdUtil.getSnowflakeNextIdStr())
+                    .sessionId(sessionTurn.sessionId())
+                    .turnId(sessionTurn.turnId())
+                    .type(SessionEventType.CONTEXT_USAGE_UPDATED)
+                    .source(SessionEventSource.SYSTEM)
+                    .createdAt(DateTimeUtil.now())
+                    .payload(ContextUsageUpdatedPayload.builder()
+                            .messageId(assistantMessageId)
+                            .modelId(usage.modelId())
+                            .inputTokens(usage.inputTokens())
+                            .outputTokens(usage.outputTokens())
+                            .totalTokens(usage.totalTokens())
+                            .build())
+                    .meta(Collections.emptyMap())
+                    .build()));
+            modelUsageTracker.register(runtime);
             // 注册流取消处理器
             sink.onCancel(() -> {
                 runtime.cancelStreaming();
@@ -179,6 +238,7 @@ public class TurnService {
                                     .state(AssistantMessagePayload.AssistantMessageState.CANCEL)
                                     .text(text)
                                     .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
+                                    .contextUsage(runtime.getLatestContextUsage())
                                     .build())
                             .meta(Collections.emptyMap())
                             .build());
@@ -279,6 +339,7 @@ public class TurnService {
                                         .state(AssistantMessagePayload.AssistantMessageState.COMPLETE)
                                         .text(chatResponse.aiMessage().text())
                                         .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
+                                        .contextUsage(runtime.getLatestContextUsage())
                                         .build())
                                 .meta(Collections.emptyMap())
                                 .build()));
@@ -303,6 +364,7 @@ public class TurnService {
                                             .text(text)
                                             .errorMessage(error.getMessage())
                                             .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
+                                            .contextUsage(runtime.getLatestContextUsage())
                                             .build())
                                     .meta(Collections.emptyMap())
                                     .build()));
@@ -312,7 +374,7 @@ public class TurnService {
                     })
                     .start();
         }, FluxSink.OverflowStrategy.BUFFER);
-        return userMessageFlux.concatWith(assistantMessageFlux);
+        return preludeFlux.concatWith(userMessageFlux).concatWith(assistantMessageFlux);
     }
 
     private boolean cancelHandle(FluxSink<@NonNull SessionEvent> sink, StreamingHandle streamingHandle, ActiveTurnRuntime runtime) {
@@ -335,10 +397,17 @@ public class TurnService {
 
     private void finishTurn(ActiveTurnRuntime runtime) {
         SessionTurn sessionTurn = runtime.getSessionTurn();
+        modelUsageTracker.unregister(runtime);
         try {
             toolApprovalService.cancelTurn(sessionTurn.sessionId(), sessionTurn.turnId());
         } catch (Exception e) {
             log.error("清理 turn 授权请求失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
+        }
+        if (sessionTurn.operationType() == TurnOperationType.CHAT) {
+            // 持久化本轮最后一次有效主模型 usage，供下一轮 70% 触发判断和摘要模型选择
+            persistLastUsage(runtime);
+            // 固定的工具压薄：同步、尽力，必须在释放执行锁前完成
+            contextManagementService.thinOldToolInteractions(sessionTurn.sessionId());
         }
         try {
             sessionService.clearActiveTurn(sessionTurn.sessionId(), sessionTurn.turnId());
@@ -347,6 +416,18 @@ public class TurnService {
         } finally {
             runtime.finish();
             activeTurnRuntime.remove(sessionTurn.sessionId(), runtime);
+        }
+    }
+
+    private void persistLastUsage(ActiveTurnRuntime runtime) {
+        try {
+            ContextUsageSnapshot usage = runtime.getLatestContextUsage();
+            if (usage == null || usage.totalTokens() == null || usage.totalTokens() <= 0) {
+                return;
+            }
+            chatMemoryService.saveLastUsage(runtime.getSessionTurn().sessionId(), usage.modelId(), JSON.toJSONString(usage), runtime.getContextLimit());
+        } catch (Exception e) {
+            log.error("持久化上下文用量失败 sessionId:{} turnId:{}", runtime.getSessionTurn().sessionId(), runtime.getSessionTurn().turnId(), e);
         }
     }
 
