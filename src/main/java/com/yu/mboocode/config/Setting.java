@@ -22,6 +22,14 @@ public class Setting {
     @JSONField(name = "base_url")
     private String baseUrl;
 
+    @Schema(description = "Exa 网络搜索 API Key，为空时使用公共托管 MCP 端点")
+    @JSONField(name = "web_search_exa_api_key")
+    private String webSearchExaApiKey;
+
+    @Schema(description = "是否启用网页抓取私有网络能力")
+    @JSONField(name = "web_fetch_private_network_enabled")
+    private Boolean webFetchPrivateNetworkEnabled;
+
     @Schema(description = "全局忽略文件规则")
     @JSONField(name = "ignored_file_patterns")
     private List<String> ignoredFilePatterns;
@@ -39,6 +47,8 @@ public class Setting {
     private static final Setting DEFAULT_SETTING = Setting.builder()
             .apiKey("")
             .baseUrl("")
+            .webSearchExaApiKey("")
+            .webFetchPrivateNetworkEnabled(false)
             .ignoredFilePatterns(DEFAULT_IGNORED_FILE_PATTERNS)
             .ignoredFilePatternExceptions(DEFAULT_IGNORED_FILE_PATTERN_EXCEPTIONS)
             .build();

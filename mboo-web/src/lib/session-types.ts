@@ -18,7 +18,7 @@ export type ToolCallStatus = "waiting_approval" | "submitting" | "started" | "co
 
 export type ToolApprovalDecision = "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY";
 
-export type ToolPermissionType = "NONE" | "TOOL" | "READ" | "WRITE" | "COMMAND";
+export type ToolPermissionType = "NONE" | "TOOL" | "READ" | "WRITE" | "COMMAND" | "NETWORK";
 
 export type PermissionMode = "DEFAULT" | "FULL_ACCESS";
 
@@ -150,6 +150,7 @@ export type ToolApprovalRequiredPayload = {
   description: string;
   permissionType?: ToolPermissionType | null;
   grantPath?: string | null;
+  grantOrigin?: string | null;
   approvalIndex?: number;
   approvalCount?: number;
 };

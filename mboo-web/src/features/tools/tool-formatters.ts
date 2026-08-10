@@ -7,6 +7,8 @@ const TOOL_LABELS: Record<string, string> = {
   edit_file: "编辑文件",
   write_file: "写入文件",
   run_command: "执行命令",
+  web_search: "网络搜索",
+  web_fetch: "网页抓取",
 };
 
 export function getToolLabel(toolName: string) {

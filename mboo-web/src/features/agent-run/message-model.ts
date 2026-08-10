@@ -28,6 +28,7 @@ export type ToolCallView = {
   approvalDescription?: string;
   permissionType?: ToolPermissionType;
   grantPath?: string;
+  grantOrigin?: string;
   approvalIndex?: number;
   approvalCount?: number;
 };

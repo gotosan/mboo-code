@@ -40,6 +40,9 @@ dependencies {
 
     implementation("cn.hutool:hutool-all:5.8.46")
     implementation 'io.github.java-diff-utils:java-diff-utils:4.15'
+    implementation 'org.apache.httpcomponents.client5:httpclient5'
+    implementation 'org.jsoup:jsoup:1.21.1'
+    implementation 'com.vladsch.flexmark:flexmark-html2md-converter:0.64.8'
 }
 
 tasks.named('test') {

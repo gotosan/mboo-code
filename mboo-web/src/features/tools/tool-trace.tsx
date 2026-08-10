@@ -2,6 +2,7 @@
 
 import { ChevronDown, ChevronRight, Copy, LoaderCircle, RefreshCw, Wrench } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import AssistantMarkdown from "@/components/assistant-markdown";
 import type { ToolCallView, ToolResultLoader } from "@/features/agent-run/message-model";
 import {
   getToolLabel,
@@ -158,7 +159,7 @@ const ToolTraceItem = memo(function ToolTraceItem({
             <p className={styles.unavailable}>工具结果不可用</p>
           ) : null}
           {resultState === "loaded" && resultDetail?.resultPreview ? (
-            <ToolResultPreview toolName={toolCall.toolName} text={resultDetail.resultPreview} />
+            <ToolResultPreview messageId={toolCall.id} toolName={toolCall.toolName} parsedArguments={toolCall.parsedArguments} text={resultDetail.resultPreview} />
           ) : null}
           {resultState === "error" ? (
             <div className={styles.resultError}>
@@ -212,7 +213,19 @@ const CopyableToolText = memo(function CopyableToolText({ text, ariaLabel }: { t
   );
 });
 
-const ToolResultPreview = memo(function ToolResultPreview({ toolName, text }: { toolName: string; text: string }) {
+const ToolResultPreview = memo(function ToolResultPreview({
+  toolName,
+  messageId,
+  parsedArguments,
+  text,
+}: {
+  toolName: string;
+  messageId: string;
+  parsedArguments?: Record<string, unknown>;
+  text: string;
+}) {
+  const useMarkdown = toolName === "web_search" || toolName === "web_fetch" && parsedArguments?.format !== "text";
+  if (useMarkdown) return <AssistantMarkdown content={text} messageId={`tool-preview-${messageId}`} />;
   if (!shouldShowDiff(toolName, text)) return <CopyableToolText ariaLabel="复制工具结果" text={text} />;
 
   return (
