@@ -37,9 +37,11 @@
 | `TOOL_CALL_STARTED` | `ToolCallStartedPayload` | `ASSISTANT` | 是 | 工具调用开始 |
 | `TOOL_CALL_ENDED` | `ToolCallEndedPayload` | `SYSTEM` | 是 | 工具调用结束，成功或失败由 `status` 区分 |
 | `TOOL_APPROVAL_REQUIRED` | `ToolApprovalRequiredPayload` | `SYSTEM` | 是 | 工具执行前等待用户授权 |
+| `CONTEXT_COMPRESSION` | `ContextCompressionPayload` | `SYSTEM` | 是 | 上下文压缩状态，同一压缩按 `compressionId` 归并 |
 | `ERROR` | `ErrorPayload` | `SYSTEM` | 是 | 当前 turn 执行错误 |
 | `CANCELLED` | `CancelledPayload` | `SYSTEM` | 是 | SSE 取消导致当前 turn 结束 |
 | `ASSISTANT_MESSAGE_DELTA` | `AssistantMessageDeltaPayload` | `ASSISTANT` | 否 | 助手文本增量，仅通过 SSE 推送 |
+| `CONTEXT_USAGE_UPDATED` | `ContextUsageUpdatedPayload` | `SYSTEM` | 否 | 最后一次有效模型调用的上下文用量，仅通过 SSE 推送 |
 
 表中的来源是当前后端生成事件时使用的值。前端为即时更新 UI 而本地构造的 `CANCELLED` 来源为 `USER`，且不会写入 JSONL。
 
@@ -64,6 +66,18 @@
 
 前端按到达顺序追加同一 `messageId` 的 delta。消息进入 `complete`、`cancel` 或 `error` 后，迟到 delta 必须忽略。
 
+### `CONTEXT_USAGE_UPDATED`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `messageId` | `String` | 是 | 与当前助手消息及其终态快照相同的消息 ID |
+| `modelId` | `String` | 是 | 本次底层模型请求实际使用的模型 ID |
+| `inputTokens` | `Long` | 否 | 供应商返回的输入 Token 数 |
+| `outputTokens` | `Long` | 否 | 供应商返回的输出 Token 数 |
+| `totalTokens` | `Long` | 是 | 供应商返回的总 Token 数，缺失时由有效输入与输出相加 |
+
+该事件只用于运行时更新，不写入 JSONL。工具循环产生多次有效 usage 时会发送多次，后一次覆盖前一次；usage 缺失、无效、迟到或模型不匹配时不发送。
+
 ### `ASSISTANT_MESSAGE`
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -73,6 +87,7 @@
 | `text` | `String` | 是 | 完整回复，或取消、错误前累计的部分回复 |
 | `errorMessage` | `String` | 否 | `state=error` 时的模型错误信息 |
 | `durationMs` | `Long` | 否 | 本轮耗时，单位毫秒 |
+| `contextUsage` | `ContextUsageSnapshot` | 否 | 本轮最后一次有效底层模型调用的上下文用量 |
 
 状态含义：
 
@@ -83,6 +98,8 @@
 状态枚举通过 `CodeEnum` 序列化为以上小写 code，不使用 Java 枚举名 `COMPLETE`、`CANCEL`、`ERROR`。
 
 最终 `ASSISTANT_MESSAGE` 是权威快照。前端按 `messageId` 使用其 `text` 覆盖累计 delta，同时保留已经归并的工具调用信息。当前代码在取消或错误时仅当累计文本非空才写入该事件；没有累计文本时不会生成对应的助手终态快照。
+
+`ContextUsageSnapshot` 包含 `modelId`、可空的 `inputTokens`、可空的 `outputTokens` 和必填的 `totalTokens`。它不保存占用百分比，前端使用当前模型详情中的 `limit.context` 计算；旧 JSONL 缺少该字段时按暂无上下文用量兼容。
 
 ## 4. 错误与取消事件
 
@@ -108,7 +125,35 @@
 - 仅当取消前已累计非空助手文本时，助手流才写入 `ASSISTANT_MESSAGE(state=cancel)`。
 - 当前页面通过来源为 `USER`、`meta.local=true` 的本地 `CANCELLED` 事件即时更新 UI。
 
-## 5. 工具事件
+## 5. 上下文压缩事件
+
+### `CONTEXT_COMPRESSION`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `compressionId` | `String` | 是 | 压缩 ID，同一次压缩的多条状态事件共用 |
+| `trigger` | `String` | 是 | 触发方式：`auto` 自动、`manual` 主动 |
+| `state` | `String` | 是 | 压缩状态：`started`、`completed`、`failed`、`skipped` |
+| `modelId` | `String` | 否 | 实际选择的摘要模型 ID |
+| `previousUsage` | `ContextUsageSnapshot` | 否 | 压缩前已存在的真实对话 usage，不保存摘要模型 usage |
+| `previousContextLimit` | `Long` | 否 | 产生 `previousUsage` 时模型的上下文窗口 |
+| `summarizedTurnCount` | `Integer` | 否 | 本次并入摘要的历史对话 turn 数 |
+| `retainedTurnCount` | `Integer` | 否 | 本次压缩后完整保留的历史对话 turn 数 |
+| `compactedToolCallCount` | `Integer` | 否 | 本次改写为结论版的工具调用数 |
+| `beforeMessageCount` | `Integer` | 否 | 压缩前 ChatMemory 消息数 |
+| `afterMessageCount` | `Integer` | 否 | 压缩后 ChatMemory 消息数 |
+| `beforeEstimatedTokens` | `Long` | 否 | 压缩前内部 Token 估算，仅用于诊断 |
+| `afterEstimatedTokens` | `Long` | 否 | 压缩后内部 Token 估算，仅用于诊断 |
+| `durationMs` | `Long` | 否 | 压缩耗时，单位毫秒 |
+| `skipReason` | `String` | 否 | 跳过原因，仅 `skipped` 时填写 |
+| `errorMessage` | `String` | 否 | 适合用户展示的安全错误信息，仅 `failed` 时填写 |
+
+- `turnId` 始终是执行 turn ID：自动压缩使用当前聊天执行 turn，主动压缩使用主动压缩执行 turn。
+- Payload 不保存摘要正文、原始历史消息、工具输出或 diff；Token 估算字段只用于协议、诊断和未来能力，不进入默认界面。
+- 前端按 `compressionId` 归并状态事件；只有 `started` 的历史压缩回放为已中断。
+- `completed` 使此前的上下文用量失效；`failed`、`skipped` 不清空旧 usage。
+
+## 6. 工具事件
 
 工具相关事件通过 `messageId` 归属到助手消息，通过 `toolCallId` 关联同一次工具调用。
 
@@ -180,13 +225,14 @@ Content-Type: application/json
 
 `GET /session/{sessionId}/tool-results/{resultId}` 返回展示摘要和大小等元数据；`GET /session/{sessionId}/tool-results/{resultId}/content?source=result|raw` 分别返回完整模型结果或命令原始输出。接口按会话校验结果归属，不返回服务器绝对路径。
 
-## 6. 典型顺序
+## 7. 典型顺序
 
 正常完成且无需等待授权：
 
 ```text
 USER_MESSAGE
 ASSISTANT_MESSAGE_DELTA（0 到多次，仅 SSE）
+CONTEXT_USAGE_UPDATED（底层模型每次返回有效 usage 时，仅 SSE）
 TOOL_CALL_STARTED / TOOL_CALL_ENDED（0 到多次）
 ASSISTANT_MESSAGE state=complete
 SSE 完成
@@ -242,8 +288,9 @@ CANCELLED / ASSISTANT_MESSAGE state=cancel（助手事件仅已有非空文本�
 
 当前实现由外层 turn 和助手流分别处理取消，前端回放不应依赖 `CANCELLED` 与 `ASSISTANT_MESSAGE state=cancel` 的文件先后顺序。取消前已经发送的 delta 不写入 JSONL，其累计结果仅在非空时通过 `ASSISTANT_MESSAGE.text` 保存。取消终态不会再通过已经断开的原 SSE 返回。
 
-## 7. 兼容性
+## 8. 兼容性
 
 - 旧 JSONL 中的 turn 生命周期事件，以及旧的助手状态 `completed`、`interrupted`，均不再兼容。
 - `TOOL_APPROVAL_REQUIRED.permissionType`、`approvalIndex` 和 `approvalCount` 为后续新增字段；前端对缺失权限类型按 `TOOL`、缺失阶段字段按单阶段兼容。
+- `ASSISTANT_MESSAGE.contextUsage` 为后续新增字段；旧事件缺失时正常回放并显示空用量圆环。
 - JSONL 解析依赖已知的事件类型和来源。未知枚举值会被视为格式错误。
