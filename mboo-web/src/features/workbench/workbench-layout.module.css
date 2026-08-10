@@ -108,3 +108,10 @@
     max-width: none;
   }
 }
+
+@media (max-width: 899px) {
+  /* 侧栏在 900px 以下由抽屉承载，主区必须接管完整画布宽度。 */
+  .gridSidebarVisible {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
