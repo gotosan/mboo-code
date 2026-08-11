@@ -56,6 +56,9 @@ export const MessageList = memo(function MessageList({
     estimateSize: estimateMessageSize,
     overscan: 4,
     // 虚拟器只负责估高、实测和定位；滚动跟随由下面独立的 hook 负责。
+    // 关闭 useFlushSync：避免在渲染周期内（layout effect 测量等）触发
+    // "flushSync was called from inside a lifecycle method" 警告。
+    useFlushSync: false,
   });
 
   const loadToolResult = useCallback<ToolResultLoader>(async (resultId, force = false) => {

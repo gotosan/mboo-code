@@ -66,6 +66,7 @@ export const WorkbenchHeader = memo(function WorkbenchHeader({
         <button
           className={`${styles.action} ${styles.dangerAction}`}
           type="button"
+          hidden
           aria-label="重置布局：展开侧栏并退出全屏"
           title="重置布局（不会关闭标签页）"
           onClick={onResetLayout}

@@ -505,6 +505,7 @@
 }
 
 .sessionScroller {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -514,6 +515,13 @@
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #d2d2d2 transparent;
+}
+
+.sessionRuntimeCanvas {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  pointer-events: none;
 }
 
 .emptyBox {
@@ -545,11 +553,17 @@
 }
 
 .sessionItem {
+  position: relative;
+  z-index: 2;
   min-height: 46px;
   padding: 7px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
+}
+
+.sessionItemRunning {
+  background: #fbf9ff;
 }
 
 .sessionItemNested {
@@ -674,6 +688,25 @@
   white-space: nowrap;
 }
 
+.sessionRunningStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #5c15e0;
+  font-weight: 500;
+}
+
+.sessionRunningDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #996af1;
+  box-shadow: 0 0 0 3px rgb(153 106 241 / 12%);
+  animation: session-runtime-pulse 1.4s ease-in-out infinite;
+}
+
 .sessionMenu {
   position: fixed;
   z-index: 100;
@@ -720,6 +753,18 @@
   opacity: 0.55;
 }
 
+@keyframes session-runtime-pulse {
+  0%, 100% {
+    opacity: 0.58;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.16);
+  }
+}
+
 @keyframes session-menu-arrive {
   from {
     opacity: 0;
@@ -733,6 +778,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .sessionRunningDot,
   .sessionMenu {
     animation: none;
   }

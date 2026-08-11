@@ -13,8 +13,9 @@ import {
   Trash2,
 } from "lucide-react";
 import styles from "./session-list-panel.module.css";
-import { memo, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { useSessionRuntimeStore } from "@/lib/session-runtime-store";
 import type {
   SessionConfirmAction,
   SessionInfo,
@@ -32,7 +33,6 @@ type SessionListPanelProps = {
   sessionQuery: string;
   isLoadingSessions: boolean;
   sessionListError: string;
-  isRunning: boolean;
   isSelectingWorkspace: boolean;
   isLoadingWorkspaces: boolean;
   deletingWorkspaceId: string | null;
@@ -71,7 +71,6 @@ export const SessionListPanel = memo(function SessionListPanel({
   sessionQuery,
   isLoadingSessions,
   sessionListError,
-  isRunning,
   isSelectingWorkspace,
   isLoadingWorkspaces,
   deletingWorkspaceId,
@@ -99,10 +98,22 @@ export const SessionListPanel = memo(function SessionListPanel({
   onDelete,
   onConfirmActionChange,
 }: SessionListPanelProps) {
+  const sessionRuntimes = useSessionRuntimeStore((state) => state.sessions);
+  const runningSessionIds = new Set(
+    Object.entries(sessionRuntimes)
+      .filter(([, runtime]) => runtime.status === "running")
+      .map(([sessionId]) => sessionId),
+  );
+  const visibleRunningSessionIds = new Set(
+    visibleSessions
+      .filter((session) => runningSessionIds.has(session.id))
+      .map((session) => session.id),
+  );
   const isArchivedView = sessionListTab === "archived";
   const actionDisabled = isSessionSwitching || isSelectingWorkspace;
   const [confirmingWorkspaceId, setConfirmingWorkspaceId] = useState<string | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>({});
+  const sessionScrollerRef = useRef<HTMLDivElement>(null);
   const normalizedQuery = sessionQuery.trim().toLocaleLowerCase();
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
   const workspaceGroups = workspaces.map((workspace) => {
@@ -132,7 +143,7 @@ export const SessionListPanel = memo(function SessionListPanel({
       titleDraft={titleDraft}
       confirmingAction={confirmingAction}
       actionDisabled={actionDisabled}
-      isCurrentSessionRunning={isCurrentSessionRunning}
+      isCurrentSessionRunning={runningSessionIds.has(session.id)}
       nested={nested}
       onOpen={() => onOpenSession(session)}
       onBeginRename={() => onBeginRename(session)}
@@ -162,7 +173,7 @@ export const SessionListPanel = memo(function SessionListPanel({
       <div className={styles.actionRow}>
         <button
           className={styles.primaryButton}
-          disabled={isRunning || isSelectingWorkspace}
+          disabled={isSelectingWorkspace}
           type="button"
           onClick={onCreateSession}
         >
@@ -212,7 +223,7 @@ export const SessionListPanel = memo(function SessionListPanel({
             <button
               className={styles.smallPrimaryButton}
               type="button"
-              disabled={isRunning || isSelectingWorkspace}
+              disabled={isSelectingWorkspace}
               onClick={onCreateSession}
             >
               新建任务
@@ -221,7 +232,11 @@ export const SessionListPanel = memo(function SessionListPanel({
         </div>
       ) : null}
 
-      <div className={styles.sessionScroller}>
+      <div ref={sessionScrollerRef} className={styles.sessionScroller}>
+        <SessionRuntimeCanvas
+          scrollerRef={sessionScrollerRef}
+          runningSessionIds={visibleRunningSessionIds}
+        />
         <div className={styles.workspaceListHeader}>
           <div className={styles.workspaceListTitle}>
             <Folder className={styles.workspaceListIcon} aria-hidden />
@@ -318,6 +333,116 @@ export const SessionListPanel = memo(function SessionListPanel({
       </div>
     </>
   );
+});
+
+type SessionRuntimeCanvasProps = {
+  scrollerRef: RefObject<HTMLDivElement | null>;
+  runningSessionIds: Set<string>;
+};
+
+const SessionRuntimeCanvas = memo(function SessionRuntimeCanvas({
+  scrollerRef,
+  runningSessionIds,
+}: SessionRuntimeCanvasProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const hasRunningSession = runningSessionIds.size > 0;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const scroller = scrollerRef.current;
+    if (!canvas || !scroller || !hasRunningSession) return;
+
+    const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let frameId: number | null = null;
+    let isVisible = document.visibilityState === "visible";
+    let size = { width: 0, height: 0, dpr: 1 };
+
+    const resizeCanvas = () => {
+      const rect = scroller.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      size = { width: rect.width, height: rect.height, dpr };
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+    };
+
+    const draw = (timestamp: number) => {
+      const context = canvas.getContext("2d");
+      if (!context || !isVisible || size.width === 0 || size.height === 0) return;
+      context.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
+      context.clearRect(0, 0, size.width, size.height);
+
+      const scrollerRect = scroller.getBoundingClientRect();
+      const phase = reducedMotionQuery.matches ? 0 : (timestamp % 1600) / 1600;
+      const runningItems = scroller.querySelectorAll<HTMLElement>('[data-session-running="true"]');
+
+      runningItems.forEach((item, index) => {
+        const status = item.querySelector<HTMLElement>("[data-session-status]");
+        if (!status) return;
+        const rect = status.getBoundingClientRect();
+        if (rect.bottom < scrollerRect.top || rect.top > scrollerRect.bottom) return;
+        const baseX = Math.min(rect.right - scrollerRect.left + 8, size.width - 14);
+        const baseY = rect.top - scrollerRect.top + rect.height / 2;
+
+        for (let dot = 0; dot < 3; dot += 1) {
+          const offset = reducedMotionQuery.matches ? dot * 4 : (phase * 18 + dot * 6 + index * 2) % 18;
+          const progress = offset / 18;
+          context.beginPath();
+          context.arc(baseX + offset, baseY, 1.5 - progress * 0.55, 0, Math.PI * 2);
+          context.fillStyle = `rgba(153, 106, 241, ${0.38 - progress * 0.25})`;
+          context.fill();
+        }
+
+        if (reducedMotionQuery.matches) return;
+        const pulseAt = Number(item.dataset.sessionPulseAt ?? "");
+        if (!Number.isFinite(pulseAt)) return;
+        const pulseAge = timestamp - pulseAt;
+        if (pulseAge < 0 || pulseAge > 260) return;
+        const pulseProgress = pulseAge / 260;
+        context.beginPath();
+        context.arc(baseX + 3, baseY, 3 + pulseProgress * 13, 0, Math.PI * 2);
+        context.strokeStyle = `rgba(153, 106, 241, ${0.4 * (1 - pulseProgress)})`;
+        context.lineWidth = 1.5;
+        context.stroke();
+      });
+
+      if (!reducedMotionQuery.matches) frameId = window.requestAnimationFrame(draw);
+    };
+
+    const render = () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(draw);
+    };
+    const handleVisibilityChange = () => {
+      isVisible = document.visibilityState === "visible";
+      if (isVisible) render();
+    };
+    const resizeObserver = new ResizeObserver(() => {
+      resizeCanvas();
+      render();
+    });
+
+    resizeCanvas();
+    render();
+    resizeObserver.observe(scroller);
+    scroller.addEventListener("scroll", render, { passive: true });
+    window.addEventListener("resize", resizeCanvas);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    reducedMotionQuery.addEventListener("change", render);
+
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      resizeObserver.disconnect();
+      scroller.removeEventListener("scroll", render);
+      window.removeEventListener("resize", resizeCanvas);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      reducedMotionQuery.removeEventListener("change", render);
+    };
+  }, [runningSessionIds.size, scrollerRef]);
+
+  if (!hasRunningSession) return null;
+  return <canvas ref={canvasRef} aria-hidden className={styles.sessionRuntimeCanvas} />;
 });
 
 type SessionRowProps = {
@@ -433,7 +558,11 @@ const SessionRow = memo(function SessionRow({
   };
 
   return (
-    <div className={`${styles.sessionItem} ${nested ? styles.sessionItemNested : ""} ${selected ? styles.sessionItemSelected : ""}`}>
+    <div
+      className={`${styles.sessionItem} ${nested ? styles.sessionItemNested : ""} ${selected ? styles.sessionItemSelected : ""} ${isCurrentSessionRunning ? styles.sessionItemRunning : ""}`}
+      data-session-id={session.id}
+      data-session-running={isCurrentSessionRunning ? "true" : undefined}
+    >
       {editing && !archived ? (
         <div>
           <label>
@@ -448,11 +577,22 @@ const SessionRow = memo(function SessionRow({
       ) : (
         <>
           <div className={styles.sessionMainRow}>
-            <button className={styles.sessionOpenButton} disabled={actionDisabled} type="button" onClick={onOpen}>
+            <button
+              aria-label={`${sessionListTitle(session, preview)}${isCurrentSessionRunning ? "，正在处理" : ""}`}
+              className={styles.sessionOpenButton}
+              disabled={actionDisabled}
+              type="button"
+              onClick={onOpen}
+            >
               <span className={styles.sessionCopy}>
                 <span className={styles.sessionTitle}>{sessionListTitle(session, preview)}</span>
                 <span className={styles.sessionMeta}>
-                  {session.workspacePath ? <span className={styles.sessionMetaWorkspace} title={session.workspacePath}>{workspaceBasename(session.workspacePath)}</span> : "未设置工作区"}
+                  {isCurrentSessionRunning ? (
+                    <span className={styles.sessionRunningStatus} data-session-status aria-live="polite">
+                      <span className={styles.sessionRunningDot} aria-hidden />
+                      正在处理
+                    </span>
+                  ) : session.workspacePath ? <span className={styles.sessionMetaWorkspace} title={session.workspacePath}>{workspaceBasename(session.workspacePath)}</span> : "未设置工作区"}
                 </span>
               </span>
               <span className={styles.sessionMetaTime}>{formatSessionTime(archived ? session.archivedAt || session.updatedAt : session.updatedAt)}</span>
@@ -492,7 +632,7 @@ const SessionRow = memo(function SessionRow({
                 ) : (
                   <>
                     <button className={styles.menuItem} disabled={actionDisabled} role="menuitem" type="button" onClick={() => { onBeginRename(); closeMenu(); }}>重命名</button>
-                    <button className={styles.menuItem} disabled={actionDisabled || (selected && isCurrentSessionRunning)} role="menuitem" type="button" onClick={handleArchiveClick}>
+                    <button className={styles.menuItem} disabled={actionDisabled || isCurrentSessionRunning} role="menuitem" type="button" onClick={handleArchiveClick}>
                       <Archive className={styles.menuItemIcon} aria-hidden />{confirmingArchive ? "确认归档？" : "归档"}
                     </button>
                   </>
