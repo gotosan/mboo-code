@@ -34,9 +34,9 @@
   justify-content: space-between;
   gap: 10px;
   padding: 6px 10px;
-  border: 1px solid rgb(153 106 241 / 30%);
+  border: 1px solid #e6defa;
   border-radius: 8px;
-  background: rgb(153 106 241 / 10%);
+  background: #f5f1ff;
 }
 
 .runningContent {

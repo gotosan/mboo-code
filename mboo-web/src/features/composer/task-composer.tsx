@@ -7,17 +7,25 @@ import type {
   ContextCompressionState,
   ContextUsageSnapshot,
   ModelContextLimit,
+  PermissionMode,
 } from "@/lib/session-types";
 import styles from "./task-composer.module.css";
 
 export const MANUAL_MODEL_VALUE = "__manual__";
 
-export const REASONING_OPTIONS = [
-  { value: "", label: "默认" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-];
+export const DEFAULT_REASONING_OPTION = { value: "", label: "默认" };
+
+function reasoningOptionLabel(value: string) {
+  const labels: Record<string, string> = {
+    none: "无",
+    minimal: "极低",
+    low: "低",
+    medium: "中",
+    high: "高",
+    max: "最高",
+  };
+  return labels[value.toLowerCase()] || value;
+}
 
 function workspaceBasename(path?: string | null) {
   if (!path) return "";
@@ -44,7 +52,10 @@ export type TaskComposerProps = {
   isLoadingModelOptions: boolean;
   modelContextLimit: ModelContextLimit | null;
   reasoningEffort: string;
+  reasoningOptions: string[];
   onReasoningChange: (value: string) => void;
+  permissionMode: PermissionMode;
+  onPermissionModeChange: (value: PermissionMode) => void;
   workspacePath: string;
   workspaceStatusText: string;
   canSelectWorkspace: boolean;
@@ -78,7 +89,10 @@ export const TaskComposer = memo(function TaskComposer({
   isLoadingModelOptions,
   modelContextLimit,
   reasoningEffort,
+  reasoningOptions,
   onReasoningChange,
+  permissionMode,
+  onPermissionModeChange,
   workspacePath,
   workspaceStatusText,
   canSelectWorkspace,
@@ -148,7 +162,15 @@ export const TaskComposer = memo(function TaskComposer({
       window.removeEventListener("scroll", updateContextPopoverPosition, true);
     };
   }, [contextOpen]);
-  const canSend = Boolean(input.trim() && modelName.trim() && !isRunning && !isCompressing && !isSessionSwitching && !isSelectingWorkspace);
+
+  const controlsDisabled = isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace;
+
+  useEffect(() => {
+    if (controlsDisabled) {
+      setContextOpen(false);
+    }
+  }, [controlsDisabled]);
+  const canSend = Boolean(input.trim() && modelName.trim() && !controlsDisabled);
 
   const submit = () => {
     if (!canSend) return;
@@ -161,30 +183,30 @@ export const TaskComposer = memo(function TaskComposer({
       {!modelName.trim() ? (
         <div className={styles.warning} role="status">
           <span>请先填写模型名称后再发送</span>
-          <button className={styles.warningAction} type="button" onClick={onFocusModelInput}>去填写</button>
+          <button className={styles.warningAction} disabled={controlsDisabled} type="button" onClick={onFocusModelInput}>去填写</button>
         </div>
       ) : null}
 
-      {!isRunning ? (
-        <>
+      <>
           <button
             className={styles.mobileSettingsToggle}
             type="button"
+            disabled={controlsDisabled}
             aria-expanded={isComposerSettingsOpen || !modelName.trim()}
             onClick={onToggleSettings}
           >
             <span className={styles.mobileSettingsLabel}>任务设置 · {modelName.trim() || "未填模型"} · {workspaceLabel}</span>
             <ChevronDown className={`${styles.mobileChevron} ${isComposerSettingsOpen || !modelName.trim() ? "" : styles.mobileChevronCollapsed}`} aria-hidden />
           </button>
-          <div className={`${styles.configBar} ${isComposerSettingsOpen || !modelName.trim() ? "" : styles.configBarClosed}`}>
+          <div className={`${styles.configBar} ${isComposerSettingsOpen || !modelName.trim() || controlsDisabled ? "" : styles.configBarClosed}`}>
             <div className={styles.configGroup}>
               <label className={styles.configLabel} htmlFor="model-select">模型</label>
-              <select className={styles.configSelect} id="model-select" value={isManualModel ? MANUAL_MODEL_VALUE : modelName} onChange={(event) => onModelChange(event.target.value, event.target.value === MANUAL_MODEL_VALUE)}>
+              <select className={styles.configSelect} id="model-select" disabled={controlsDisabled} value={isManualModel ? MANUAL_MODEL_VALUE : modelName} onChange={(event) => onModelChange(event.target.value, event.target.value === MANUAL_MODEL_VALUE)}>
                 {modelOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                 <option value={MANUAL_MODEL_VALUE}>手动输入</option>
               </select>
               {isManualModel ? (
-                <input className={styles.manualModelInput} id="model-input" aria-label="手动模型名称" autoComplete="off" placeholder="例如 gpt-4.1" value={modelName} onChange={(event) => onModelChange(event.target.value, true)} />
+                <input className={styles.manualModelInput} id="model-input" aria-label="手动模型名称" autoComplete="off" disabled={controlsDisabled} placeholder="例如 gpt-4.1" value={modelName} onChange={(event) => onModelChange(event.target.value, true)} />
               ) : null}
               <span className={`${styles.configHint} ${modelOptionsError ? styles.configHintError : ""}`} title={modelOptionsError}>
                 {isLoadingModelOptions ? "加载中" : modelOptionsError ? "候选失败，可手动填写" : modelOptions.length ? `${modelOptions.length} 个候选` : "暂无候选"}
@@ -193,30 +215,32 @@ export const TaskComposer = memo(function TaskComposer({
             <span className={styles.divider} aria-hidden />
             <div className={styles.configGroup}>
               <label className={styles.configLabel} htmlFor="reasoning-select">推理</label>
-              <select className={styles.configSelect} id="reasoning-select" value={reasoningEffort} onChange={(event) => onReasoningChange(event.target.value)}>
-                {REASONING_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
-              </select>
+              {reasoningOptions.length ? (
+                <select className={styles.configSelect} id="reasoning-select" disabled={controlsDisabled} value={reasoningEffort} onChange={(event) => onReasoningChange(event.target.value)}>
+                  <option value={DEFAULT_REASONING_OPTION.value}>{DEFAULT_REASONING_OPTION.label}</option>
+                  {reasoningOptions.map((option) => <option key={option} value={option}>{reasoningOptionLabel(option)}</option>)}
+                </select>
+              ) : <span className={styles.configHint}>不支持</span>}
             </div>
             <span className={styles.spacer} aria-hidden />
             <div className={styles.workspaceGroup}>
               <span className={styles.workspaceLabel}>工作区</span>
               <span className={styles.workspacePath} title={workspacePath || workspaceStatusText}>{workspaceLabel}</span>
               {canSelectWorkspace ? (
-                <button className={styles.composerButton} disabled={isSelectingWorkspace} type="button" onClick={onSelectWorkspace}>
+                <button className={styles.composerButton} disabled={controlsDisabled} type="button" onClick={onSelectWorkspace}>
                   {isSelectingWorkspace ? <LoaderCircle className={styles.icon} aria-hidden /> : <FolderOpen className={styles.icon} aria-hidden />}选择目录
                 </button>
               ) : null}
               {canClearWorkspace ? (
-                <button className={styles.composerButton} type="button" onClick={onClearWorkspace}><X className={styles.icon} aria-hidden />清除</button>
+                <button className={styles.composerButton} disabled={controlsDisabled} type="button" onClick={onClearWorkspace}><X className={styles.icon} aria-hidden />清除</button>
               ) : null}
             </div>
           </div>
-        </>
-      ) : null}
+      </>
 
       <div className={styles.composer}>
         <div className={styles.toolbar}>
-          <button className={`${styles.composerButton} ${styles.toolbarButton}`} type="button" disabled={!input.trim() || isRunning} onClick={() => onInputChange("")}>清空</button>
+          <button className={`${styles.composerButton} ${styles.toolbarButton}`} type="button" disabled={!input.trim() || controlsDisabled} onClick={() => onInputChange("")}>清空</button>
           <span className={styles.toolbarHint}>{isRunning ? "生成中，Esc 可停止" : isCompressing ? "上下文压缩中" : "Enter 发送 · Shift+Enter 换行"}</span>
         </div>
         <label className="sr-only" htmlFor="task-input">任务输入</label>
@@ -224,7 +248,7 @@ export const TaskComposer = memo(function TaskComposer({
           <textarea
             className={styles.textarea}
             id="task-input"
-            disabled={isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace}
+            disabled={controlsDisabled}
             placeholder="写下任务目标…"
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
@@ -240,10 +264,19 @@ export const TaskComposer = memo(function TaskComposer({
         <div className={styles.statusbar}>
           <span className={styles.statusText}>{workspaceLabel}{modelName.trim() ? ` · ${modelName.trim()}` : ""}</span>
           <div className={styles.statusActions}>
-            {isRunning ? (
-              <button className={`${styles.composerButton} ${styles.stopButton}`} type="button" onClick={onStop}><Square className={styles.icon} aria-hidden />停止</button>
-            ) : (
-              <>
+            <label className={styles.permissionSelect}>
+                  <span className="sr-only">文件访问权限</span>
+                  <select
+                    aria-label="文件访问权限"
+                    disabled={controlsDisabled}
+                    value={permissionMode}
+                    onChange={(event) => onPermissionModeChange(event.target.value as PermissionMode)}
+                  >
+                    <option value="DEFAULT">默认权限</option>
+                    <option value="FULL_ACCESS">文件完全访问</option>
+                  </select>
+                  <ChevronDown className={styles.permissionSelectIcon} aria-hidden />
+                </label>
                 <button
                   ref={contextTriggerRef}
                   className={`${styles.contextTrigger} ${contextOpen ? styles.contextTriggerOpen : ""}`}
@@ -251,6 +284,7 @@ export const TaskComposer = memo(function TaskComposer({
                   aria-label="查看上下文用量"
                   aria-expanded={contextOpen}
                   aria-haspopup="dialog"
+                  disabled={controlsDisabled}
                   onClick={() => setContextOpen((current) => !current)}
                 >
                   <span
@@ -307,11 +341,15 @@ export const TaskComposer = memo(function TaskComposer({
                   </div>,
                   document.body,
                 ) : null}
-                <button className={`${styles.primaryButton} ${!canSend ? styles.lockedButton : ""}`} disabled={!canSend} type="submit" title={!modelName.trim() ? "请先填写模型名称" : !input.trim() ? "请先输入任务" : "发送（Enter）"}>
-                  <Send className={styles.icon} aria-hidden />发送
-                </button>
-              </>
-            )}
+                {isRunning ? (
+                  <button className={`${styles.primaryButton} ${styles.stopButton}`} type="button" onClick={onStop} title="停止生成">
+                    <Square className={styles.icon} aria-hidden />停止
+                  </button>
+                ) : (
+                  <button className={`${styles.primaryButton} ${!canSend ? styles.lockedButton : ""}`} disabled={!canSend} type="submit" title={!modelName.trim() ? "请先填写模型名称" : !input.trim() ? "请先输入任务" : "发送（Enter）"}>
+                    <Send className={styles.icon} aria-hidden />发送
+                  </button>
+                )}
           </div>
         </div>
       </div>

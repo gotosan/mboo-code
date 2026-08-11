@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   ChevronRight,
@@ -20,10 +21,12 @@ import sidebarStyles from "@/features/sessions/session-sidebar.module.css";
 import type { SessionConfirmAction, SessionInfo as FeatureSessionInfo, SessionListTab as FeatureSessionListTab, WorkspaceInfo as FeatureWorkspaceInfo } from "@/features/sessions/session-types";
 import { ToolApprovalCard } from "@/features/tools/tool-approval-card";
 import { readSessionEventStream } from "@/lib/session-stream";
+import { getSessionRuntime, sessionRuntimeStore, useSessionRuntimeStore } from "@/lib/session-runtime-store";
 import type {
   AssistantMessageState,
   ChatReq,
   ModelContextLimit,
+  ModelInfo,
   ContextCompressionPayload,
   ContextCompressionState,
   ContextUsageSnapshot,
@@ -177,6 +180,7 @@ export default function Home() {
   const [isManualModel, setIsManualModel] = useState(true);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
   const [modelContextLimit, setModelContextLimit] = useState<ModelContextLimit | null>(null);
+  const [reasoningOptions, setReasoningOptions] = useState<string[]>([]);
   const [contextUsage, setContextUsage] = useState<ContextUsageSnapshot | null>(null);
   const [compressionState, setCompressionState] = useState<ContextCompressionState | null>(null);
   const [compressionMessage, setCompressionMessage] = useState("");
@@ -184,8 +188,11 @@ export default function Home() {
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("idle");
+  const runtimeKey = sessionId || PENDING_SESSION_KEY;
+  const runtimeStatus = useSessionRuntimeStore((state) =>
+    state.sessions[runtimeKey]?.status ?? "idle",
+  );
   const [errorMessage, setErrorMessage] = useState("");
-  const [sessionMessage, setSessionMessage] = useState("");
   // 列表加载失败单独成态：避免与重命名/归档提示混用，并支持就近重试
   const [sessionListError, setSessionListError] = useState("");
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
@@ -201,11 +208,9 @@ export default function Home() {
     useState<SessionStatus | null>(null);
   const [workspaces, setWorkspaces] = useState<FeatureWorkspaceInfo[]>([]);
   const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(true);
-  const [isSavingWorkspace, setIsSavingWorkspace] = useState(false);
   const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
   const [pendingWorkspacePath, setPendingWorkspacePath] = useState("");
-  const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [isSelectingWorkspace, setIsSelectingWorkspace] = useState(false);
   // 移动端会话抽屉与列表过滤（T1/T6）
   const [isSessionDrawerOpen, setIsSessionDrawerOpen] = useState(false);
@@ -247,7 +252,12 @@ export default function Home() {
   const messagesBySessionRef = useRef<Record<string, ChatMessage[]>>({});
   // 当前 SSE 归属的会话键（新建时先为 pending）
   const streamSessionKeyRef = useRef<string>(PENDING_SESSION_KEY);
-  const pendingLocalUserIdRef = useRef<string | null>(null);
+  const pendingLocalUserIdBySessionRef = useRef<Record<string, string | null>>({});
+  // 会话列表最新快照：新增会话 diff 插入时避免闭包拿到旧 list
+  const sessionsRef = useRef<SessionInfo[]>([]);
+  const archivedSessionsRef = useRef<SessionInfo[]>([]);
+  // 用 ref 解耦 bindStreamSessionId 与 syncNewSessionIntoList 的 TDZ 顺序问题
+  const syncNewSessionIntoListRef = useRef<(id: string) => void>(() => {});
   // 会话历史加载代数：快速切换时丢弃过期响应，避免 loading/内容来回闪
   const historyLoadVersionRef = useRef(0);
   // 移动抽屉 a11y：焦点陷阱与关闭后归还焦点
@@ -259,9 +269,18 @@ export default function Home() {
   const modelNameRef = useRef("");
   const contextUsageBySessionRef = useRef<Record<string, ContextUsageSnapshot | null>>({});
   const compressionAbortControllerRef = useRef<AbortController | null>(null);
-  const isRunning = connectionState === "running";
+  const isRunning = runtimeStatus === "running" || (!sessionId && connectionState === "running");
+  const queryClient = useQueryClient();
   const highlightedSessionId = openingSessionId || sessionId;
   const isSessionSwitching = Boolean(openingSessionId) || isLoadingHistory;
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
+    archivedSessionsRef.current = archivedSessions;
+  }, [archivedSessions]);
 
   const applyModelName = useCallback((value: string, manual?: boolean) => {
     const nextValue = value.trim();
@@ -334,29 +353,38 @@ export default function Home() {
     const targetModel = modelName.trim();
     if (!targetModel) {
       setModelContextLimit(null);
+      setReasoningOptions([]);
+      setReasoningEffort("");
       setContextUsage(null);
       return;
     }
 
     let cancelled = false;
     setModelContextLimit(null);
+    setReasoningOptions([]);
     setContextUsage((current) => current?.modelId === targetModel ? current : null);
 
-    const loadContextLimit = async () => {
-      try {
-        const contextLimit = await fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, { cache: "no-store" })
-          .then((response) => readApiData<ModelContextLimit>(response));
-        if (!cancelled && contextLimit?.modelId === targetModel) {
-          setModelContextLimit(contextLimit);
-        }
-      } catch {
-        if (!cancelled) {
-          setModelContextLimit(null);
-        }
+    const loadModelCapabilities = async () => {
+      const [contextLimitResult, modelInfoResult] = await Promise.allSettled([
+        fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, { cache: "no-store" })
+          .then((response) => readApiData<ModelContextLimit>(response)),
+        fetch(`/api/model/${encodeURIComponent(targetModel)}`, { cache: "no-store" })
+          .then((response) => readApiData<ModelInfo>(response)),
+      ]);
+      if (cancelled) return;
+
+      if (contextLimitResult.status === "fulfilled" && contextLimitResult.value?.modelId === targetModel) {
+        setModelContextLimit(contextLimitResult.value);
       }
+
+      const availableReasoningOptions = modelInfoResult.status === "fulfilled" && modelInfoResult.value?.modelId === targetModel
+        ? extractReasoningEffortOptions(modelInfoResult.value.reasoningOptions)
+        : [];
+      setReasoningOptions(availableReasoningOptions);
+      setReasoningEffort((current) => availableReasoningOptions.includes(current) ? current : "");
     };
 
-    void loadContextLimit();
+    void loadModelCapabilities();
     return () => {
       cancelled = true;
     };
@@ -379,10 +407,9 @@ export default function Home() {
       if (updated) {
         setSessions((current) => upsertSession(current, updated));
       }
-      setSessionMessage(nextMode === "FULL_ACCESS" ? "当前会话已切换为完全访问" : "当前会话已恢复默认权限");
     } catch (error) {
       setPermissionMode(previousMode);
-      setSessionMessage(`权限模式切换失败：${toErrorMessage(error)}`);
+      void error;
     }
   }, [permissionMode]);
 
@@ -562,8 +589,28 @@ export default function Home() {
       return;
     }
 
+    // 只有“当前视图正在等待的流”才允许把视图绑定到真实会话：
+    // - 正在观看已有会话：其流式事件应归属该会话；
+    // - 新建会话：流回写真实 sessionId 前，streamSessionKeyRef 仍是 PENDING；
+    // 其它后台会话的事件（如正在运行中的旧会话）不得 hijack 视图。
+    const viewingKey = currentSessionIdRef.current;
+    const streamKey = streamSessionKeyRef.current;
+    const belongsToView =
+      (viewingKey && nextSessionId === viewingKey) ||
+      (!viewingKey && streamKey === PENDING_SESSION_KEY);
+    if (!belongsToView) {
+      return;
+    }
+
     const previousKey = streamSessionKeyRef.current;
-    if (previousKey === PENDING_SESSION_KEY) {
+    const isNewSessionBind = previousKey === PENDING_SESSION_KEY;
+    if (isNewSessionBind) {
+      sessionRuntimeStore.getState().move(PENDING_SESSION_KEY, nextSessionId);
+      const pendingLocalUserId = pendingLocalUserIdBySessionRef.current[PENDING_SESSION_KEY];
+      if (pendingLocalUserId) {
+        pendingLocalUserIdBySessionRef.current[nextSessionId] = pendingLocalUserId;
+        delete pendingLocalUserIdBySessionRef.current[PENDING_SESSION_KEY];
+      }
       const pendingMessages = messagesBySessionRef.current[PENDING_SESSION_KEY] ?? [];
       if (pendingMessages.length > 0) {
         const existing = messagesBySessionRef.current[nextSessionId] ?? [];
@@ -593,6 +640,11 @@ export default function Home() {
       saveSessionPreviewMap(next);
       return next;
     });
+
+    // 新建会话拿到真实 id：先拉后台最新列表，对比后插入
+    if (isNewSessionBind) {
+      syncNewSessionIntoListRef.current(nextSessionId);
+    }
   }, []);
 
   const addSystemMessage = useCallback(
@@ -885,6 +937,11 @@ export default function Home() {
 
       if (eventSessionId) {
         bindStreamSessionId(eventSessionId);
+        sessionRuntimeStore.getState().ensure(eventSessionId);
+        sessionRuntimeStore.getState().markEvent(eventSessionId, event.createdAt);
+        if (event.turnId) {
+          sessionRuntimeStore.getState().setTurn(eventSessionId, event.turnId);
+        }
       }
 
       // 事件始终写入所属会话，而不是只写入“当前正在看的会话”
@@ -896,6 +953,9 @@ export default function Home() {
 
       if (event.turnId && isViewingSessionKey(targetKey)) {
         setActiveTurnId(event.turnId);
+      }
+      if (isViewingSessionKey(targetKey)) {
+        sessionRuntimeStore.getState().markRead(targetKey);
       }
 
       if (event.type !== "ERROR" && isViewingSessionKey(targetKey)) {
@@ -913,8 +973,8 @@ export default function Home() {
       }
 
       if (event.type === "USER_MESSAGE") {
-        const localUserId = pendingLocalUserIdRef.current;
-        pendingLocalUserIdRef.current = null;
+        const localUserId = pendingLocalUserIdBySessionRef.current[targetKey];
+        pendingLocalUserIdBySessionRef.current[targetKey] = null;
         commitSessionMessages(targetKey, (current) => {
           const withoutOptimistic = localUserId
             ? current.filter((message) => message.id !== localUserId)
@@ -994,14 +1054,18 @@ export default function Home() {
           return;
         }
         if (event.payload.state === "complete") {
+          sessionRuntimeStore.getState().setStatus(targetKey, "completed");
           setConnectionState("idle");
           setActiveTurnId(null);
         } else if (event.payload.state === "cancel") {
+          sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
           setConnectionState("idle");
           setActiveTurnId(null);
         } else if (event.payload.state === "error") {
+          const message = event.payload.errorMessage || "本轮会话执行失败";
+          sessionRuntimeStore.getState().setStatus(targetKey, "error", message);
           setConnectionState("error");
-          setErrorMessage(event.payload.errorMessage || "本轮会话执行失败");
+          setErrorMessage(message);
           setActiveTurnId(null);
         }
         return;
@@ -1009,6 +1073,7 @@ export default function Home() {
 
       if (event.type === "CANCELLED") {
         markStreamingMessagesCancelled(targetKey, event.turnId);
+        sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
         if (isViewingSessionKey(targetKey)) {
           setConnectionState("idle");
           setActiveTurnId(null);
@@ -1019,6 +1084,7 @@ export default function Home() {
 
       if (event.type === "ERROR") {
         const message = event.payload.errorMessage || "本轮会话执行失败";
+        sessionRuntimeStore.getState().setStatus(targetKey, "error", message);
         if (isViewingSessionKey(targetKey)) {
           setConnectionState("error");
           setErrorMessage(message);
@@ -1046,6 +1112,8 @@ export default function Home() {
 
   const clearCurrentSession = useCallback(() => {
     pendingAutoTitleRef.current = null;
+    const visibleRuntimeKey = currentSessionIdRef.current || streamSessionKeyRef.current || PENDING_SESSION_KEY;
+    sessionRuntimeStore.getState().stop(visibleRuntimeKey);
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     compressionAbortControllerRef.current?.abort();
@@ -1055,7 +1123,7 @@ export default function Home() {
     shouldLoadSessionRef.current = false;
     currentSessionIdRef.current = "";
     streamSessionKeyRef.current = PENDING_SESSION_KEY;
-    pendingLocalUserIdRef.current = null;
+    pendingLocalUserIdBySessionRef.current = {};
     delete messagesBySessionRef.current[PENDING_SESSION_KEY];
     setMessages([]);
     setInput("");
@@ -1073,28 +1141,35 @@ export default function Home() {
     setCompressionMessage("");
     setIsCompressing(false);
     setPendingWorkspacePath("");
-    setWorkspaceMessage("");
     setIsSelectingWorkspace(false);
     setConnectionState("idle");
     applyModelName(preferredModelName());
     localStorage.removeItem(STORAGE_KEYS.sessionId);
   }, [applyModelName, preferredModelName]);
 
-  const refreshSessions = useCallback(async () => {
-    setIsLoadingSessions(true);
-    try {
-      const [activeResponse, archivedResponse] = await Promise.all([
-        fetch("/api/session/list", { cache: "no-store" }),
-        fetch("/api/session/list/archived", { cache: "no-store" }),
-      ]);
-      const activeData = await readApiData<SessionInfo[]>(activeResponse);
-      const archivedData = await readApiData<SessionInfo[]>(archivedResponse);
-      const nextActive = activeData ?? [];
-      const nextArchived = archivedData ?? [];
-      setSessions(nextActive);
-      setArchivedSessions(nextArchived);
+  const applySessionListSnapshot = useCallback(
+    (
+      nextActive: SessionInfo[],
+      nextArchived: SessionInfo[],
+      options?: { mode?: "replace" | "diff-insert" },
+    ) => {
+      const mode = options?.mode ?? "replace";
+      const mergedActive =
+        mode === "diff-insert"
+          ? diffInsertSessions(sessionsRef.current, nextActive)
+          : nextActive;
+      const mergedArchived =
+        mode === "diff-insert"
+          ? diffInsertSessions(archivedSessionsRef.current, nextArchived)
+          : nextArchived;
+
+      sessionsRef.current = mergedActive;
+      archivedSessionsRef.current = mergedArchived;
+      setSessions(mergedActive);
+      setArchivedSessions(mergedArchived);
+      queryClient.setQueryData(["sessions", "active"], mergedActive);
+      queryClient.setQueryData(["sessions", "archived"], mergedArchived);
       setSessionListError("");
-      setSessionMessage("");
 
       const currentId = currentSessionIdRef.current;
       if (!currentId) {
@@ -1102,13 +1177,13 @@ export default function Home() {
         return;
       }
 
-      const activeSession = nextActive.find((session) => session.id === currentId);
+      const activeSession = mergedActive.find((session) => session.id === currentId);
       if (activeSession) {
         setViewingSessionStatus("active");
         return;
       }
 
-      const archivedSession = nextArchived.find(
+      const archivedSession = mergedArchived.find(
         (session) => session.id === currentId,
       );
       if (archivedSession) {
@@ -1123,16 +1198,101 @@ export default function Home() {
 
       // 会话已被硬删除或不存在时，切回未选中。
       // 流式进行中列表可能短暂不一致，避免清空正在渲染的会话。
-      if (connectionStateRef.current === "running") {
+      if (getSessionRuntime(currentId).status === "running") {
         return;
       }
       clearCurrentSession();
+    },
+    [clearCurrentSession, queryClient],
+  );
+
+  const refreshSessions = useCallback(async (options?: {
+    mode?: "replace" | "diff-insert";
+    quiet?: boolean;
+  }) => {
+    const mode = options?.mode ?? "replace";
+    const quiet = options?.quiet === true;
+    if (!quiet) {
+      setIsLoadingSessions(true);
+    }
+    try {
+      const [activeResponse, archivedResponse] = await Promise.all([
+        fetch("/api/session/list", { cache: "no-store" }),
+        fetch("/api/session/list/archived", { cache: "no-store" }),
+      ]);
+      const activeData = await readApiData<SessionInfo[]>(activeResponse);
+      const archivedData = await readApiData<SessionInfo[]>(archivedResponse);
+      applySessionListSnapshot(activeData ?? [], archivedData ?? [], { mode });
     } catch (error) {
       setSessionListError(humanizeSessionListError(error));
     } finally {
-      setIsLoadingSessions(false);
+      if (!quiet) {
+        setIsLoadingSessions(false);
+      }
     }
-  }, [clearCurrentSession]);
+  }, [applySessionListSnapshot]);
+
+  /**
+   * 新增会话落库后：先拉后台最新列表，与本地对比后插入新项；
+   * 若竞态下远端尚无该 id，再拉详情补插。
+   */
+  const syncNewSessionIntoList = useCallback(
+    async (nextSessionId: string) => {
+      if (!nextSessionId) {
+        return;
+      }
+      try {
+        await refreshSessions({ mode: "diff-insert", quiet: true });
+        if (sessionsRef.current.some((session) => session.id === nextSessionId)) {
+          return;
+        }
+        if (archivedSessionsRef.current.some((session) => session.id === nextSessionId)) {
+          return;
+        }
+
+        const detailResponse = await fetch(
+          `/api/session/${encodeURIComponent(nextSessionId)}`,
+          { cache: "no-store" },
+        );
+        const detail = await readApiData<SessionInfo>(detailResponse);
+        if (!detail) {
+          return;
+        }
+        const normalized = normalizeSessionInfo(detail);
+        if (normalized.status === "archived") {
+          const nextArchived = upsertSession(archivedSessionsRef.current, normalized);
+          archivedSessionsRef.current = nextArchived;
+          setArchivedSessions(nextArchived);
+          queryClient.setQueryData(["sessions", "archived"], nextArchived);
+          setSessions((current) => {
+            const filtered = current.filter((session) => session.id !== normalized.id);
+            sessionsRef.current = filtered;
+            queryClient.setQueryData(["sessions", "active"], filtered);
+            return filtered;
+          });
+        } else {
+          const nextActive = upsertSession(sessionsRef.current, normalized);
+          sessionsRef.current = nextActive;
+          setSessions(nextActive);
+          queryClient.setQueryData(["sessions", "active"], nextActive);
+          setArchivedSessions((current) => {
+            const filtered = current.filter((session) => session.id !== normalized.id);
+            archivedSessionsRef.current = filtered;
+            queryClient.setQueryData(["sessions", "archived"], filtered);
+            return filtered;
+          });
+          setViewingSessionStatus("active");
+        }
+        queryClient.setQueryData(["session", nextSessionId], normalized);
+      } catch {
+        // 列表同步失败不打断主对话流
+      }
+    },
+    [queryClient, refreshSessions],
+  );
+
+  // 解耦 bindStreamSessionId 与 syncNewSessionIntoList 的定义顺序
+  syncNewSessionIntoListRef.current = syncNewSessionIntoList;
 
   const refreshWorkspaces = useCallback(async () => {
     setIsLoadingWorkspaces(true);
@@ -1140,13 +1300,14 @@ export default function Home() {
       const response = await fetch("/api/workspace/list", { cache: "no-store" });
       const data = await readApiData<FeatureWorkspaceInfo[]>(response);
       setWorkspaces(data ?? []);
+      queryClient.setQueryData(["workspaces"], data ?? []);
       setWorkspaceError("");
     } catch (error) {
       setWorkspaceError(toErrorMessage(error));
     } finally {
       setIsLoadingWorkspaces(false);
     }
-  }, []);
+  }, [queryClient]);
 
   const loadSessionEvents = useCallback(async (
     nextSessionId: string,
@@ -1177,6 +1338,8 @@ export default function Home() {
       ]);
       const detail = await readApiData<SessionInfo>(detailResponse);
       const events = await readApiData<SessionEvent[]>(eventsResponse);
+      if (detail) queryClient.setQueryData(["session", nextSessionId], detail);
+      queryClient.setQueryData(["session-events", nextSessionId], events ?? []);
 
       // 用户已切走：丢弃过期结果，防止旧 loading/内容回跳
       if (loadVersion !== historyLoadVersionRef.current) {
@@ -1201,9 +1364,7 @@ export default function Home() {
         }
       }
 
-      const streamingThisSession =
-        connectionStateRef.current === "running" &&
-        streamSessionKeyRef.current === nextSessionId;
+      const streamingThisSession = getSessionRuntime(nextSessionId).status === "running";
       const historyMessages = reduceSessionEventsToMessages(events ?? []);
       const historyUsage = findLastContextUsage(events ?? []);
       contextUsageBySessionRef.current[nextSessionId] = historyUsage;
@@ -1240,10 +1401,15 @@ export default function Home() {
       if (!quiet) {
         setInput("");
         setErrorMessage("");
-        setSessionMessage("");
         setEditingSessionId(null);
-        setConnectionState((current) => (current === "running" ? current : "idle"));
-        if (connectionStateRef.current !== "running") {
+        setConnectionState((current) =>
+          getSessionRuntime(nextSessionId).status === "running"
+            ? "running"
+            : current === "running"
+              ? current
+              : "idle",
+        );
+        if (getSessionRuntime(nextSessionId).status !== "running") {
           setActiveTurnId(null);
         }
       }
@@ -1251,15 +1417,14 @@ export default function Home() {
       if (loadVersion !== historyLoadVersionRef.current) {
         return;
       }
-      // 失败时保留当前画面，不把线程清空成 loading/空壳
-      setSessionMessage(toErrorMessage(error));
+      void error;
     } finally {
       if (loadVersion === historyLoadVersionRef.current) {
         setIsLoadingHistory(false);
         setOpeningSessionId((current) => (current === nextSessionId ? null : current));
       }
     }
-  }, [applyModelName, preferredModelName, rememberSessionPreview]);
+  }, [applyModelName, preferredModelName, queryClient, rememberSessionPreview]);
 
   useEffect(() => {
     void refreshSessions();
@@ -1311,20 +1476,15 @@ export default function Home() {
       shouldLoadSessionRef.current = false;
       workspaceSelectionVersionRef.current += 1;
       setPendingWorkspacePath("");
-      setWorkspaceMessage("");
       setIsSelectingWorkspace(false);
       setContextUsage(null);
       setCompressionState(null);
       setCompressionMessage("");
       setIsSessionDrawerOpen(false);
-      setSessionMessage("");
       setEditingSessionId(null);
 
       // 该会话正在流式输出：直接展示本地流式缓存，避免历史快照盖掉未落盘 delta
-      if (
-        connectionStateRef.current === "running" &&
-        streamSessionKeyRef.current === nextSessionId
-      ) {
+      if (getSessionRuntime(nextSessionId).status === "running") {
         historyLoadVersionRef.current += 1;
         currentSessionIdRef.current = nextSessionId;
         setSessionId(nextSessionId);
@@ -1370,7 +1530,6 @@ export default function Home() {
   const beginRenameSession = useCallback((session: SessionInfo) => {
     setEditingSessionId(session.id);
     setTitleDraft(session.title || "新会话");
-    setSessionMessage("");
   }, []);
 
   const submitRenameSession = useCallback(async () => {
@@ -1380,7 +1539,6 @@ export default function Home() {
       return;
     }
     if (!title) {
-      setSessionMessage("会话标题不能为空");
       return;
     }
 
@@ -1403,9 +1561,8 @@ export default function Home() {
       );
       setEditingSessionId(null);
       setTitleDraft("");
-      setSessionMessage("");
     } catch (error) {
-      setSessionMessage(toErrorMessage(error));
+      void error;
     }
   }, [editingSessionId, titleDraft]);
 
@@ -1420,10 +1577,9 @@ export default function Home() {
         if (currentSessionIdRef.current === target.id) {
           clearCurrentSession();
         }
-        setSessionMessage("");
         await refreshSessions();
       } catch (error) {
-        setSessionMessage(toErrorMessage(error));
+        void error;
       }
     },
     [clearCurrentSession, refreshSessions],
@@ -1440,10 +1596,9 @@ export default function Home() {
         if (currentSessionIdRef.current === target.id) {
           setViewingSessionStatus("active");
         }
-        setSessionMessage("");
         await refreshSessions();
       } catch (error) {
-        setSessionMessage(toErrorMessage(error));
+        void error;
       }
     },
     [refreshSessions],
@@ -1474,10 +1629,9 @@ export default function Home() {
           saveSessionPreviewMap(next);
           return next;
         });
-        setSessionMessage("");
         await refreshSessions();
       } catch (error) {
-        setSessionMessage(toErrorMessage(error));
+        void error;
       }
     },
     [clearCurrentSession, refreshSessions, sessionPreviews],
@@ -1491,7 +1645,6 @@ export default function Home() {
     const requestVersion = workspaceSelectionVersionRef.current + 1;
     workspaceSelectionVersionRef.current = requestVersion;
     setIsSelectingWorkspace(true);
-    setWorkspaceMessage("");
 
     try {
       const response = await fetch("/api/workspace/select-directory", {
@@ -1507,7 +1660,7 @@ export default function Home() {
       }
     } catch (error) {
       if (workspaceSelectionVersionRef.current === requestVersion) {
-        setWorkspaceMessage(toErrorMessage(error));
+        void error;
       }
     } finally {
       if (workspaceSelectionVersionRef.current === requestVersion) {
@@ -1522,40 +1675,13 @@ export default function Home() {
     }
     workspaceSelectionVersionRef.current += 1;
     setPendingWorkspacePath(workspace.path);
-    setWorkspaceMessage(`已选择工作区：${workspace.name}`);
   }, [isRunning, isSelectingWorkspace]);
-
-  const saveWorkspace = useCallback(async () => {
-    const path = pendingWorkspacePath.trim();
-    if (!path || currentSessionIdRef.current || isSavingWorkspace) {
-      return;
-    }
-    setIsSavingWorkspace(true);
-    setWorkspaceMessage("");
-    try {
-      const response = await fetch("/api/workspace", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
-      });
-      const saved = await readApiData<FeatureWorkspaceInfo>(response);
-      if (saved) {
-        setWorkspaces((current) => upsertWorkspace(current, saved));
-        setWorkspaceMessage(`工作区“${saved.name}”已保存`);
-      }
-    } catch (error) {
-      setWorkspaceMessage(toErrorMessage(error));
-    } finally {
-      setIsSavingWorkspace(false);
-    }
-  }, [isSavingWorkspace, pendingWorkspacePath]);
 
   const deleteWorkspace = useCallback(async (workspace: FeatureWorkspaceInfo) => {
     if (deletingWorkspaceId) {
       return;
     }
     setDeletingWorkspaceId(workspace.id);
-    setWorkspaceMessage("");
     try {
       const response = await fetch(`/api/workspace/${encodeURIComponent(workspace.id)}`, {
         method: "DELETE",
@@ -1571,10 +1697,9 @@ export default function Home() {
       if (currentSessionBelongsToWorkspace) {
         clearCurrentSession();
       }
-      setWorkspaceMessage(`工作区“${workspace.name}”已移除，磁盘目录未删除`);
       await refreshSessions();
     } catch (error) {
-      setWorkspaceMessage(toErrorMessage(error));
+      void error;
     } finally {
       setDeletingWorkspaceId(null);
     }
@@ -1586,7 +1711,6 @@ export default function Home() {
     }
     workspaceSelectionVersionRef.current += 1;
     setPendingWorkspacePath("");
-    setWorkspaceMessage("");
   }, [isSelectingWorkspace]);
 
   const sendMessage = useCallback(
@@ -1611,6 +1735,8 @@ export default function Home() {
       }
 
       const controller = new AbortController();
+      const targetRuntimeKey = sessionId || PENDING_SESSION_KEY;
+      sessionRuntimeStore.getState().start(targetRuntimeKey, controller);
       lastSentModelRef.current = selectedModelName;
       saveLocalValue(STORAGE_KEYS.modelName, selectedModelName);
       applyModelName(selectedModelName);
@@ -1647,7 +1773,7 @@ export default function Home() {
 
       // 乐观插入用户消息，避免等首个 SSE 才出现内容
       const localUserId = createLocalId("local_user");
-      pendingLocalUserIdRef.current = localUserId;
+      pendingLocalUserIdBySessionRef.current[streamKey] = localUserId;
       commitSessionMessages(streamKey, (current) => [
         ...current,
         {
@@ -1686,10 +1812,7 @@ export default function Home() {
         await readSessionEventStream(
           response,
           (sessionEvent) => {
-            if (
-              abortControllerRef.current !== controller ||
-              controller.signal.aborted
-            ) {
+            if (controller.signal.aborted) {
               return;
             }
             handleSessionEvent(sessionEvent);
@@ -1706,6 +1829,7 @@ export default function Home() {
         }
 
         const message = toErrorMessage(error);
+        sessionRuntimeStore.getState().setStatus(targetRuntimeKey, "error", message);
         setConnectionState("error");
         setErrorMessage(message);
         setLastFailedInput(userMessage);
@@ -1713,6 +1837,10 @@ export default function Home() {
         addSystemMessage(message, "error");
       } finally {
         void refreshSessions();
+        const runtime = getSessionRuntime(targetRuntimeKey);
+        if (runtime.abortController === controller) {
+          sessionRuntimeStore.getState().setStatus(targetRuntimeKey, "idle");
+        }
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
           setActiveTurnId(null);
@@ -1787,6 +1915,8 @@ export default function Home() {
   }, [addSystemMessage, handleSessionEvent, isCompressing, isRunning, modelName, viewingSessionStatus]);
 
   const stopCurrentRun = useCallback(() => {
+    const currentRuntimeKey = currentSessionIdRef.current || streamSessionKeyRef.current || PENDING_SESSION_KEY;
+    sessionRuntimeStore.getState().stop(currentRuntimeKey);
     if (compressionAbortControllerRef.current) {
       compressionAbortControllerRef.current.abort();
       compressionAbortControllerRef.current = null;
@@ -1814,12 +1944,45 @@ export default function Home() {
   }, [activeTurnId, addSystemMessage, handleSessionEvent, refreshSessions]);
 
   const startNewSession = useCallback(() => {
-    clearCurrentSession();
-    setSessionMessage("");
+    // 切换至新会话不能中断其他会话的 SSE；仅重置可见编辑上下文。
+    pendingAutoTitleRef.current = null;
+    workspaceSelectionVersionRef.current += 1;
+    historyLoadVersionRef.current += 1;
+    shouldLoadSessionRef.current = false;
+    currentSessionIdRef.current = "";
+    streamSessionKeyRef.current = PENDING_SESSION_KEY;
+    setMessages([]);
+    setInput("");
+    setSessionId("");
+    setOpeningSessionId(null);
+    setIsLoadingHistory(false);
+    setErrorMessage("");
+    setActiveTurnId(null);
+    setEditingSessionId(null);
+    setTitleDraft("");
+    setViewingSessionStatus(null);
+    setPermissionMode("DEFAULT");
+    setContextUsage(null);
+    setCompressionState(null);
+    setCompressionMessage("");
+    setPendingWorkspacePath("");
+    setIsSelectingWorkspace(false);
+    setConnectionState("idle");
+    applyModelName(preferredModelName());
+    localStorage.removeItem(STORAGE_KEYS.sessionId);
     setSessionListTab("active");
     setIsSessionDrawerOpen(false);
     void refreshSessions();
-  }, [clearCurrentSession, refreshSessions]);
+  }, [applyModelName, preferredModelName, refreshSessions]);
+
+  // 菜单"在此空间新建会话"：清当前会话并把该工作区 path 设为待用，
+  // 用户发首条消息时走 /session/chat 创建并绑定
+  const createSessionInWorkspace = useCallback((workspace: FeatureWorkspaceInfo) => {
+    startNewSession();
+    setPendingWorkspacePath(workspace.path);
+    setSessionListTab("active");
+    setIsSessionDrawerOpen(false);
+  }, [startNewSession]);
 
   // 快捷键：Esc 关抽屉或停止；⌘/Ctrl+Enter 发送（T6）
   useEffect(() => {
@@ -1829,7 +1992,7 @@ export default function Home() {
           setIsSessionDrawerOpen(false);
           return;
         }
-        if (connectionStateRef.current === "running") {
+        if (getSessionRuntime(currentSessionIdRef.current || PENDING_SESSION_KEY).status === "running") {
           event.preventDefault();
           stopCurrentRun();
         }
@@ -1848,8 +2011,8 @@ export default function Home() {
   }, [isSessionDrawerOpen, sendMessage, stopCurrentRun]);
 
   const status = useMemo(
-    () => getStatusView(connectionState, activeTurnId),
-    [activeTurnId, connectionState],
+    () => getStatusView(runtimeStatus === "running" ? "running" : connectionState, activeTurnId),
+    [activeTurnId, connectionState, runtimeStatus],
   );
   const currentSession = useMemo(() => {
     if (!sessionId) {
@@ -1912,7 +2075,7 @@ export default function Home() {
       }
       await document.documentElement.requestFullscreen();
     } catch {
-      setSessionMessage("浏览器未允许切换全屏");
+      // 浏览器拒绝时保持原布局
     }
   }, []);
 
@@ -1996,9 +2159,8 @@ export default function Home() {
     if (!errorMessage) return;
     try {
       await navigator.clipboard.writeText(errorMessage);
-      setSessionMessage("错误信息已复制");
     } catch {
-      setSessionMessage("复制失败，请手动选择文本");
+      // 剪贴板被拒绝时静默降级
     }
   }, [errorMessage]);
 
@@ -2020,14 +2182,10 @@ export default function Home() {
       sessionQuery={sessionQuery}
       isLoadingSessions={isLoadingSessions}
       sessionListError={sessionListError}
-      sessionMessage={workspaceMessage || sessionMessage}
-      isRunning={isRunning}
       isSelectingWorkspace={isSelectingWorkspace}
       isLoadingWorkspaces={isLoadingWorkspaces}
-      isSavingWorkspace={isSavingWorkspace}
       deletingWorkspaceId={deletingWorkspaceId}
       workspaceError={workspaceError}
-      pendingWorkspacePath={pendingWorkspacePath}
       isSessionSwitching={isSessionSwitching}
       isCurrentSessionRunning={isRunning && sessionId === highlightedSessionId}
       editingSessionId={editingSessionId}
@@ -2035,9 +2193,9 @@ export default function Home() {
       confirmingAction={confirmingAction as SessionConfirmAction}
       onQueryChange={setSessionQuery}
       onCreateSession={startNewSession}
+      onCreateSessionInWorkspace={createSessionInWorkspace}
       onRefreshWorkspaces={() => void refreshWorkspaces()}
       onSelectWorkspace={selectSavedWorkspace}
-      onSaveWorkspace={() => void saveWorkspace()}
       onDeleteWorkspace={(workspace) => void deleteWorkspace(workspace)}
       onRefresh={() => void refreshSessions()}
       onTabChange={(tab) => {
@@ -2173,11 +2331,13 @@ export default function Home() {
             <div className={layoutStyles.threadHost}>
               {/* 空态与消息态共享同一个线程宿主，避免切会话时重置垂直布局。 */}
               {messages.length === 0 ? (
-                <div className={layoutStyles.threadScroller}>
+                <div
+                  className={`${layoutStyles.threadScroller} ${layoutStyles.threadScrollerEmpty}`}
+                >
                   {isSessionSwitching ? (
                     <ConversationLoadingState />
                   ) : (
-                    <div className="mx-auto max-w-[46rem] rounded-[var(--radius-md)] border border-line bg-panel px-4 py-5 shadow-panel sm:px-5 sm:py-6">
+                    <div className={`${layoutStyles.emptyStatePanel} mx-auto w-full max-w-[46rem] px-4 py-5 sm:px-5 sm:py-6`}>
                       {/* 设计决策：缺模型只在输入器保留一个主阻断；空态只给下一步与示例 */}
                       <div className="flex items-center gap-3">
                         <span aria-hidden className="mboo-avatar-m size-12 rounded-[12px] border border-line text-xl">
@@ -2326,7 +2486,10 @@ export default function Home() {
                   isLoadingModelOptions={isLoadingModelOptions}
                   modelContextLimit={modelContextLimit}
                   reasoningEffort={reasoningEffort}
+                  reasoningOptions={reasoningOptions}
                   onReasoningChange={setReasoningEffort}
+                  permissionMode={permissionMode}
+                  onPermissionModeChange={(mode) => void changePermissionMode(mode)}
                   workspacePath={displayedWorkspacePath}
                   workspaceStatusText={workspaceStatusText}
                   canSelectWorkspace={!sessionId && !isSessionSwitching && !isArchivedView}
@@ -2361,6 +2524,19 @@ export default function Home() {
       </div>
     </main>
   );
+}
+
+function extractReasoningEffortOptions(options: Record<string, unknown>[]) {
+  const values: string[] = [];
+  for (const option of options) {
+    if (option.type !== "effort" || !Array.isArray(option.values)) continue;
+    for (const value of option.values) {
+      if (typeof value === "string" && value.trim() && !values.includes(value.trim())) {
+        values.push(value.trim());
+      }
+    }
+  }
+  return values;
 }
 
 function getStatusView(state: ConnectionState, activeTurnId: string | null) {
@@ -3065,14 +3241,28 @@ function upsertSession(list: SessionInfo[], session: SessionInfo) {
   return next;
 }
 
-function upsertWorkspace(list: FeatureWorkspaceInfo[], workspace: FeatureWorkspaceInfo) {
-  const index = list.findIndex((item) => item.id === workspace.id);
-  if (index < 0) {
-    return [workspace, ...list];
-  }
-  const next = list.slice();
-  next[index] = workspace;
-  return next;
+/**
+ * 对比本地列表与远端最新列表，返回合并后的结果：
+ * - 远端有的项：更新覆盖本地字段
+ * - 远端没有的项：保留本地项（后台可能尚未落库，如刚创建的新会话）
+ * - 远端新增项：插入列表顶部
+ */
+function diffInsertSessions(local: SessionInfo[], remote: SessionInfo[]): SessionInfo[] {
+  const remoteIds = new Set(remote.map((s) => s.id));
+  const remoteMap = new Map(remote.map((s) => [s.id, s]));
+  const localMap = new Map(local.map((s) => [s.id, s]));
+
+  // 保留本地独有的项（后台尚未返回的创建中会话）
+  const localOnly = local.filter((s) => !remoteIds.has(s.id));
+
+  // 远端项合并本地已有字段后按 arrival 顺序排列
+  const merged: SessionInfo[] = remote.map((s) => {
+    const existing = localMap.get(s.id);
+    return existing ? { ...existing, ...s } : s;
+  });
+
+  // 本地独有的项追加到末尾（通常是 pending 或刚创建的会话）
+  return [...merged, ...localOnly];
 }
 
 async function readApiData<T>(response: Response) {

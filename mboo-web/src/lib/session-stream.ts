@@ -1,17 +1,9 @@
+import { createParser } from "eventsource-parser";
 import type { SessionEvent } from "@/lib/session-types";
 
-const SESSION_EVENT_NAMES = new Set(["session"]);
-
-type SseBoundary = {
-  index: number;
-  length: number;
-};
+const SESSION_EVENT_NAME = "session";
 
 export type SessionStreamOptions = {
-  /**
-   * 同一网络分片内可能含多个 SSE 事件。按动画帧让出主线程，
-   * 让 React 有机会中间渲染，形成打字机效果。
-   */
   paceWithAnimationFrame?: boolean;
   signal?: AbortSignal;
 };
@@ -34,7 +26,30 @@ export async function readSessionEventStream(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  let eventChain = Promise.resolve();
+  let parseError: SessionStreamError | null = null;
+  const parser = createParser({
+    onEvent: (message) => {
+      if (message.event !== SESSION_EVENT_NAME || !message.data) return;
+      let event: SessionEvent;
+      try {
+        event = JSON.parse(message.data) as SessionEvent;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "未知错误";
+        parseError = new SessionStreamError(`无法解析后端会话事件：${detail}`);
+        return;
+      }
+      eventChain = eventChain.then(async () => {
+        await onEvent(event);
+        if (options.paceWithAnimationFrame) {
+          await waitAnimationFrame(options.signal);
+        }
+      });
+    },
+    onError: (error) => {
+      parseError = new SessionStreamError(`无法解析后端会话事件：${error.message}`);
+    },
+  });
 
   try {
     while (true) {
@@ -44,85 +59,20 @@ export async function readSessionEventStream(
       }
 
       const { done, value } = await reader.read();
-
       if (done) {
-        buffer += decoder.decode();
+        parser.feed(decoder.decode());
+        parser.reset({ consume: true });
         break;
       }
 
-      buffer += decoder.decode(value, { stream: true });
-      buffer = await consumeBufferedMessages(buffer, onEvent, options);
+      parser.feed(decoder.decode(value, { stream: true }));
+      if (parseError) throw parseError;
     }
 
-    const remaining = buffer.trim();
-    if (remaining.length > 0) {
-      await handleSseMessage(remaining, onEvent, options);
-    }
+    await eventChain;
+    if (parseError) throw parseError;
   } finally {
     reader.releaseLock?.();
-  }
-}
-
-async function consumeBufferedMessages(
-  buffer: string,
-  onEvent: (event: SessionEvent) => void | Promise<void>,
-  options: SessionStreamOptions,
-) {
-  let nextBuffer = buffer;
-  let boundary = findSseBoundary(nextBuffer);
-
-  while (boundary) {
-    if (options.signal?.aborted) {
-      return nextBuffer;
-    }
-
-    const rawMessage = nextBuffer.slice(0, boundary.index);
-    nextBuffer = nextBuffer.slice(boundary.index + boundary.length);
-    await handleSseMessage(rawMessage, onEvent, options);
-    boundary = findSseBoundary(nextBuffer);
-  }
-
-  return nextBuffer;
-}
-
-function findSseBoundary(buffer: string): SseBoundary | null {
-  const boundaries = ["\r\n\r\n", "\n\n", "\r\r"]
-    .map((delimiter) => ({
-      index: buffer.indexOf(delimiter),
-      length: delimiter.length,
-    }))
-    .filter((boundary) => boundary.index >= 0)
-    .sort((left, right) => left.index - right.index);
-
-  return boundaries[0] ?? null;
-}
-
-async function handleSseMessage(
-  rawMessage: string,
-  onEvent: (event: SessionEvent) => void | Promise<void>,
-  options: SessionStreamOptions,
-) {
-  if (!rawMessage.trim()) {
-    return;
-  }
-
-  const { eventName, data } = parseSseMessage(rawMessage);
-  if (!SESSION_EVENT_NAMES.has(eventName) || data.length === 0) {
-    return;
-  }
-
-  let event: SessionEvent;
-  try {
-    event = JSON.parse(data) as SessionEvent;
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "未知错误";
-    throw new SessionStreamError(`无法解析后端会话事件：${detail}`);
-  }
-
-  await onEvent(event);
-
-  if (options.paceWithAnimationFrame) {
-    await waitAnimationFrame(options.signal);
   }
 }
 
@@ -139,9 +89,7 @@ function waitAnimationFrame(signal?: AbortSignal) {
     }
 
     const frame = requestAnimationFrame(() => resolve());
-    if (!signal) {
-      return;
-    }
+    if (!signal) return;
 
     const onAbort = () => {
       cancelAnimationFrame(frame);
@@ -149,36 +97,4 @@ function waitAnimationFrame(signal?: AbortSignal) {
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-function parseSseMessage(rawMessage: string) {
-  let eventName = "";
-  const dataLines: string[] = [];
-
-  for (const line of rawMessage.split(/\r\n|\n|\r/)) {
-    if (line.startsWith(":")) {
-      continue;
-    }
-
-    const separatorIndex = line.indexOf(":");
-    const field = separatorIndex >= 0 ? line.slice(0, separatorIndex) : line;
-    let value = separatorIndex >= 0 ? line.slice(separatorIndex + 1) : "";
-
-    if (value.startsWith(" ")) {
-      value = value.slice(1);
-    }
-
-    if (field === "event") {
-      eventName = value;
-    }
-
-    if (field === "data") {
-      dataLines.push(value);
-    }
-  }
-
-  return {
-    eventName,
-    data: dataLines.join("\n"),
-  };
 }

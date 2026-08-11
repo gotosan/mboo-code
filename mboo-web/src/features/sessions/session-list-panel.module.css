@@ -196,17 +196,6 @@
   opacity: 0.5;
 }
 
-.workspaceSaveCard {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px;
-  border: 1px solid rgb(128 100 238 / 24%);
-  border-radius: 7px;
-  background: #f0edff;
-}
-
-.workspaceSaveCopy,
 .workspaceCopy {
   display: flex;
   min-width: 0;
@@ -214,13 +203,6 @@
   flex-direction: column;
 }
 
-.workspaceSaveLabel {
-  color: #7567d9;
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.workspacePath,
 .workspaceName,
 .workspaceMeta {
   min-width: 0;
@@ -229,29 +211,11 @@
   white-space: nowrap;
 }
 
-.workspacePath,
 .workspaceName {
   color: #35352c;
   font-size: 11px;
   font-weight: 600;
   line-height: 15px;
-}
-
-.workspaceSaveButton {
-  flex: 0 0 auto;
-  min-height: 26px;
-  padding: 0 9px;
-  border: 1px solid #8064ee;
-  border-radius: 999px;
-  background: #8064ee;
-  color: #fff;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.workspaceSaveButton:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .workspaceTree {
@@ -373,6 +337,38 @@
   line-height: 1;
 }
 
+.workspaceMenuTrigger {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin: 2px 2px 2px auto;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8b8b84;
+  cursor: pointer;
+}
+
+.workspaceMenuTrigger:hover:not(:disabled),
+.workspaceMenuTrigger[aria-expanded="true"] {
+  background: #e6e6e6;
+  color: #35352c;
+}
+
+.workspaceMenuTrigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workspaceMenuTrigger:focus-visible {
+  outline: 2px solid #5c15e0;
+  outline-offset: 1px;
+}
+
 .workspaceError,
 .workspaceConfirm {
   padding: 7px;
@@ -474,20 +470,10 @@
   color: #5c15e0;
 }
 
-.feedback,
 .errorBox,
 .emptyBox {
   margin-top: 8px;
   border-radius: 6px;
-}
-
-.feedback {
-  padding: 8px 10px;
-  border: 1px solid rgb(235 86 86 / 30%);
-  background: rgb(235 86 86 / 10%);
-  color: #eb5656;
-  font-size: 12px;
-  line-height: 20px;
 }
 
 .errorBox {
@@ -519,6 +505,7 @@
 }
 
 .sessionScroller {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -528,6 +515,13 @@
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #d2d2d2 transparent;
+}
+
+.sessionRuntimeCanvas {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  pointer-events: none;
 }
 
 .emptyBox {
@@ -559,11 +553,17 @@
 }
 
 .sessionItem {
+  position: relative;
+  z-index: 2;
   min-height: 46px;
   padding: 7px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
+}
+
+.sessionItemRunning {
+  background: #fbf9ff;
 }
 
 .sessionItemNested {
@@ -688,6 +688,25 @@
   white-space: nowrap;
 }
 
+.sessionRunningStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #5c15e0;
+  font-weight: 500;
+}
+
+.sessionRunningDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #996af1;
+  box-shadow: 0 0 0 3px rgb(153 106 241 / 12%);
+  animation: session-runtime-pulse 1.4s ease-in-out infinite;
+}
+
 .sessionMenu {
   position: fixed;
   z-index: 100;
@@ -734,6 +753,18 @@
   opacity: 0.55;
 }
 
+@keyframes session-runtime-pulse {
+  0%, 100% {
+    opacity: 0.58;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.16);
+  }
+}
+
 @keyframes session-menu-arrive {
   from {
     opacity: 0;
@@ -747,6 +778,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .sessionRunningDot,
   .sessionMenu {
     animation: none;
   }
