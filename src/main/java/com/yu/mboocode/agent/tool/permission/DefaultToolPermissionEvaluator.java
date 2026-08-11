@@ -20,7 +20,8 @@ public class DefaultToolPermissionEvaluator implements ToolPermissionEvaluator {
 
     @Override
     public boolean supports(ToolPermissionSpec spec) {
-        return spec.permissionType() != ToolPermissionType.COMMAND;
+        return spec.permissionType() == ToolPermissionType.NONE || spec.permissionType() == ToolPermissionType.TOOL
+                || spec.permissionType() == ToolPermissionType.READ || spec.permissionType() == ToolPermissionType.WRITE;
     }
 
     @Override

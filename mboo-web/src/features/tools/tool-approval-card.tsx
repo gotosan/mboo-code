@@ -70,6 +70,12 @@ export const ToolApprovalCard = memo(function ToolApprovalCard({
             <p className={styles.pathNote}>包含其子目录</p>
           </div>
         ) : null}
+        {toolCall.grantOrigin && toolCall.permissionType === "NETWORK" ? (
+          <div className={styles.valueBox}>
+            <p className={styles.valueText}>{toolCall.grantOrigin}</p>
+            <p className={styles.pathNote}>只授权该协议、主机和端口，不包含其他来源</p>
+          </div>
+        ) : null}
         {toolCall.errorMessage ? <p className={styles.error}>{toolCall.errorMessage}</p> : null}
       </div>
 
@@ -112,6 +118,7 @@ function approvalTargetLabel(toolCall: ToolCallView) {
   }
   if (toolCall.permissionType === "READ") return `读取目录 · ${toolCall.grantPath || toolCall.pathText || toolLabel(toolCall)}`;
   if (toolCall.permissionType === "WRITE") return `读写目录 · ${toolCall.grantPath || toolCall.pathText || toolLabel(toolCall)}`;
+  if (toolCall.permissionType === "NETWORK") return `私有网络来源 · ${toolCall.grantOrigin || toolCall.pathText || toolLabel(toolCall)}`;
   return toolCall.pathText ? `${toolLabel(toolCall)} · ${toolCall.pathText}` : toolLabel(toolCall);
 }
 
@@ -131,5 +138,6 @@ function sessionAllowLabel(permissionType?: ToolCallView["permissionType"]) {
   if (permissionType === "READ") return "本会话允许读取此目录";
   if (permissionType === "WRITE") return "本会话允许读写此目录";
   if (permissionType === "COMMAND") return "本会话允许此命令";
+  if (permissionType === "NETWORK") return "本会话允许访问此网络来源";
   return "本会话始终允许此工具";
 }

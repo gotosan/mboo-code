@@ -31,6 +31,8 @@ GET {base_url}/models
 {
   "api_key": "",
   "base_url": "",
+  "web_search_exa_api_key": "",
+  "web_fetch_private_network_enabled": false,
   "ignored_file_patterns": [
     ".env",
     ".env.*",
@@ -63,6 +65,8 @@ GET {base_url}/models
 | --- | --- |
 | `api_key` | OpenAI Responses API 的访问密钥 |
 | `base_url` | OpenAI Responses API 的基础地址，通常包含 `/v1` |
+| `web_search_exa_api_key` | 可选 Exa API Key；为空时使用公共托管 MCP 端点 |
+| `web_fetch_private_network_enabled` | 私有网络抓取能力总闸，默认关闭；开启后仍需会话精确来源授权 |
 | `ignored_file_patterns` | 文件工具全局忽略规则 |
 | `ignored_file_pattern_exceptions` | 文件工具全局忽略规则的例外 |
 

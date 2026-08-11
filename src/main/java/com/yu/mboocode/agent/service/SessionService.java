@@ -313,6 +313,16 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         });
     }
 
+    @Transactional
+    public void grantNetworkOrigin(String sessionId, String origin) {
+        if (StrUtil.isBlank(origin)) return;
+        updatePermissions(sessionId, permissions -> {
+            LinkedHashSet<String> origins = new LinkedHashSet<>(CollUtil.emptyIfNull(permissions.getAllowedNetworkOrigins()));
+            origins.add(origin);
+            permissions.setAllowedNetworkOrigins(new ArrayList<>(origins));
+        });
+    }
+
     private static final String PERMISSIONS_KEY = "permissions"; // metadataJson 中权限字段名
     private static final String PERMISSION_MODE_KEY = "permissionMode"; // metadataJson 中权限模式字段名
     /**
@@ -389,6 +399,9 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
         }
         if (permissions.getAllowedCommands() == null) {
             permissions.setAllowedCommands(new ArrayList<>());
+        }
+        if (permissions.getAllowedNetworkOrigins() == null) {
+            permissions.setAllowedNetworkOrigins(new ArrayList<>());
         }
         return permissions;
     }

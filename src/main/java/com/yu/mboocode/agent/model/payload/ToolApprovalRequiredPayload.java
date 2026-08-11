@@ -43,6 +43,9 @@ public class ToolApprovalRequiredPayload implements SessionEventPayload {
     @Schema(description = "申请授权的规范化绝对目录，仅 READ/WRITE 使用")
     private String grantPath;
 
+    @Schema(description = "申请授权的规范化网络来源，仅 NETWORK 使用")
+    private String grantOrigin;
+
     @Schema(description = "当前授权阶段，从 1 开始")
     private Integer approvalIndex;
 

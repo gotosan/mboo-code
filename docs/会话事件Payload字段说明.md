@@ -179,8 +179,9 @@
 | `arguments` | `String` | 是 | 工具参数 JSON 字符串；与对应开始事件使用同一份安全参数摘要 |
 | `title` | `String` | 是 | 授权卡片标题 |
 | `description` | `String` | 是 | 授权卡片说明 |
-| `permissionType` | `String` | 是 | 当前为 `TOOL`、`READ`、`WRITE` 或 `COMMAND`；`NONE` 不会触发授权事件 |
+| `permissionType` | `String` | 是 | 当前为 `TOOL`、`READ`、`WRITE`、`COMMAND` 或 `NETWORK`；`NONE` 不会触发授权事件 |
 | `grantPath` | `String` | 否 | `READ`、`WRITE` 对应的规范化绝对授权目录；`TOOL` 时为空 |
+| `grantOrigin` | `String` | 否 | `NETWORK` 对应的规范化私有网络来源，格式为 `scheme://host:effectivePort` |
 | `approvalIndex` | `Integer` | 否 | 当前授权阶段，从 1 开始；历史缺失时按单阶段兼容 |
 | `approvalCount` | `Integer` | 否 | 本次实际需要用户处理的授权阶段总数 |
 
@@ -200,7 +201,7 @@ Content-Type: application/json
 `decision` 取值：
 
 - `ALLOW_ONCE`：只允许本次工具调用，不持久化会话权限。
-- `ALLOW_SESSION`：允许当前阶段，并按权限类型将工具名、只读目录、读写目录或命令精确指纹写入会话权限配置。
+- `ALLOW_SESSION`：允许当前阶段，并按权限类型将工具名、只读目录、读写目录、命令精确指纹或私有网络来源写入会话权限配置。
 - `DENY`：拒绝本次调用。
 
 待授权请求只保存在当前应用进程内，最长等待 10 分钟。`TOOL_APPROVAL_REQUIRED` 虽然会持久化，但历史中的 `approvalId` 不代表请求仍可处理；前端历史回放会将未结束的授权卡片标记为“授权请求已失效”。当前没有单独的“授权已允许/已拒绝”事件。
@@ -259,6 +260,17 @@ TOOL_CALL_ENDED
 ASSISTANT_MESSAGE state=complete
 ```
 
+私有网页抓取需要两阶段授权：
+
+```text
+USER_MESSAGE
+TOOL_APPROVAL_REQUIRED TOOL 1/2
+TOOL_APPROVAL_REQUIRED NETWORK 2/2
+TOOL_CALL_STARTED
+TOOL_CALL_ENDED
+ASSISTANT_MESSAGE state=complete
+```
+
 工具授权被拒绝、超时或校验失败：
 
 ```text
@@ -291,6 +303,6 @@ CANCELLED / ASSISTANT_MESSAGE state=cancel（助手事件仅已有非空文本�
 ## 8. 兼容性
 
 - 旧 JSONL 中的 turn 生命周期事件，以及旧的助手状态 `completed`、`interrupted`，均不再兼容。
-- `TOOL_APPROVAL_REQUIRED.permissionType`、`approvalIndex` 和 `approvalCount` 为后续新增字段；前端对缺失权限类型按 `TOOL`、缺失阶段字段按单阶段兼容。
+- `TOOL_APPROVAL_REQUIRED.permissionType`、`grantOrigin`、`approvalIndex` 和 `approvalCount` 为后续新增字段；前端对缺失权限类型按 `TOOL`、缺失阶段字段按单阶段兼容。
 - `ASSISTANT_MESSAGE.contextUsage` 为后续新增字段；旧事件缺失时正常回放并显示空用量圆环。
 - JSONL 解析依赖已知的事件类型和来源。未知枚举值会被视为格式错误。

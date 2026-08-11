@@ -5,6 +5,7 @@ import dev.langchain4j.service.MemoryId;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.UserMessage;
+import dev.langchain4j.service.V;
 import dev.langchain4j.service.memory.ChatMemoryAccess;
 
 /**
@@ -15,5 +16,6 @@ import dev.langchain4j.service.memory.ChatMemoryAccess;
  */
 public interface AiCodeService extends ChatMemoryAccess {
     @SystemMessage(fromResource = "prompt/system-prompt.txt")
-    TokenStream chatStream(@MemoryId String memoryId, @UserMessage String message, ChatRequestParameters params);
+    TokenStream chatStream(@MemoryId String memoryId, @UserMessage String message, @V("runtimeEnvironment") String runtimeEnvironment,
+                           @V("workspaceInstructions") String workspaceInstructions, ChatRequestParameters params);
 }

@@ -53,6 +53,8 @@ const TOOL_LABELS: Record<string, string> = {
   edit_file: "编辑文件",
   write_file: "写入文件",
   run_command: "执行命令",
+  web_search: "网络搜索",
+  web_fetch: "网页抓取",
 };
 
 const FILE_TOOL_NAMES = new Set([
@@ -90,6 +92,7 @@ type ToolCallView = {
   approvalDescription?: string;
   permissionType?: ToolPermissionType;
   grantPath?: string;
+  grantOrigin?: string;
   approvalIndex?: number;
   approvalCount?: number;
 };
@@ -2415,12 +2418,29 @@ function parseToolArguments(toolName: string, value: unknown) {
     pathText:
       FILE_TOOL_NAMES.has(toolName) && typeof parsedArguments.path === "string"
         ? parsedArguments.path
+        : toolName === "web_search" && typeof parsedArguments.query === "string"
+          ? truncatePathText(parsedArguments.query, 120)
+          : toolName === "web_fetch" && typeof parsedArguments.url === "string"
+            ? networkUrlPath(parsedArguments.url)
         : toolName === "run_command" && typeof parsedArguments.workdir === "string"
           ? parsedArguments.workdir
           : toolName === "run_command"
             ? "."
             : undefined,
   };
+}
+
+function truncatePathText(value: string, maxLength: number) {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
+}
+
+function networkUrlPath(value: string) {
+  try {
+    const url = new URL(value);
+    return truncatePathText(`${url.host}${url.pathname || "/"}`, 160);
+  } catch {
+    return truncatePathText(value, 160);
+  }
 }
 
 function sanitizeToolArguments(toolName: string, argumentsObject: Record<string, unknown>) {
@@ -2589,6 +2609,7 @@ function upsertAssistantToolPart(
         toolCall.approvalDescription ?? existing.toolCall.approvalDescription,
       permissionType: toolCall.permissionType ?? existing.toolCall.permissionType,
       grantPath: toolCall.grantPath ?? existing.toolCall.grantPath,
+      grantOrigin: toolCall.grantOrigin ?? existing.toolCall.grantOrigin,
       approvalIndex: toolCall.approvalIndex ?? existing.toolCall.approvalIndex,
       approvalCount: toolCall.approvalCount ?? existing.toolCall.approvalCount,
     },
@@ -2681,6 +2702,7 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
       approvalDescription: event.payload.description,
       permissionType: event.payload.permissionType || "TOOL",
       grantPath: event.payload.grantPath || undefined,
+      grantOrigin: event.payload.grantOrigin || undefined,
       approvalIndex: event.payload.approvalIndex,
       approvalCount: event.payload.approvalCount,
     };
@@ -2718,6 +2740,9 @@ function sessionAllowLabel(permissionType?: ToolPermissionType) {
   }
   if (permissionType === "COMMAND") {
     return "本会话允许此命令";
+  }
+  if (permissionType === "NETWORK") {
+    return "本会话允许访问此网络来源";
   }
   return "本会话始终允许此工具";
 }

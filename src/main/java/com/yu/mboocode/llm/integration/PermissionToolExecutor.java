@@ -52,7 +52,7 @@ public class PermissionToolExecutor implements ToolExecutor {
             return toErrorResult(authorization);
         }
 
-        ToolInvocationContext.set(sessionId, toolApprovalService.turnId(sessionId, request.id()), request.id());
+        ToolInvocationContext.set(sessionId, toolApprovalService.turnId(sessionId, request.id()), request.id(), toolApprovalService.networkOrigin(sessionId, request.id()));
         try {
             return delegate.executeWithContext(request, context);
         } finally {

@@ -17,23 +17,23 @@ import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.common.util.DateTimeUtil;
 import com.yu.mboocode.llm.AiCodeService;
 import com.yu.mboocode.llm.model.ChatMemory;
+import com.yu.mboocode.llm.prompt.SystemPromptService;
+import com.yu.mboocode.llm.prompt.SystemPromptSnapshot;
 import com.yu.mboocode.llm.service.ChatMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.ChatMessageDeserializer;
 import dev.langchain4j.data.message.ChatMessageSerializer;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -52,6 +52,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Service
 @Slf4j
 public class ContextManagementService {
+    /**
+     * 工具压薄触发阈值：上一轮实际 usage 占上下文窗口比例。
+     */
+    private static final double TOOL_THIN_TRIGGER_RATIO = 0.50;
+
+    /**
+     * 普通工具压薄最小收益的下限、上限和上下文窗口比例。
+     */
+    private static final long MIN_TOOL_THIN_SAVINGS_TOKENS = 4096;
+    private static final long MAX_TOOL_THIN_SAVINGS_TOKENS = 32768;
+    private static final double TOOL_THIN_SAVINGS_RATIO = 0.05;
+    private static final long TOOL_THIN_SAVINGS_ROUNDING_TOKENS = 1024;
+
     /**
      * 自动压缩触发阈值：上一轮实际 usage 占上下文窗口比例。
      */
@@ -98,38 +111,16 @@ public class ContextManagementService {
     private ModelContextPreferenceService modelContextPreferenceService;
     @Resource
     private SessionEventStore sessionEventStore;
-
-    private volatile String systemPromptText;
-
-    /**
-     * 每个 CHAT 执行 turn 结束时的固定工具压薄：同步、尽力、不影响聊天终态。
-     */
-    public void thinOldToolInteractions(String sessionId) {
-        try {
-            ChatMemory row = chatMemoryService.getById(sessionId);
-            List<ChatMessage> messages = deserializeMessages(row);
-            if (messages.isEmpty()) {
-                return;
-            }
-            ThinResult result = thinParsed(ChatMemoryTurnParser.parse(messages), RETAINED_RAW_TURNS);
-            if (!result.changed()) {
-                return;
-            }
-            chatMemoryService.upsertMessagesJson(sessionId, serializeMessages(result.messages()));
-            aiCodeService.evictChatMemory(sessionId);
-            log.info("工具压薄完成 sessionId:{} 压薄工具调用数:{}", sessionId, result.compactedToolCallCount());
-        } catch (Exception e) {
-            // 压薄失败只记录日志，不能把已经完成的助手回复改成失败
-            log.error("工具压薄失败 sessionId:{}", sessionId, e);
-        }
-    }
+    @Resource
+    private SystemPromptService systemPromptService;
 
     /**
-     * 聊天执行 turn 的前置上下文处理：pending 恢复、内存压薄、70% 自动压缩、新消息硬预算检查。
+     * 聊天执行 turn 的前置上下文处理：pending 恢复、阈值工具压薄、70% 自动压缩、新消息硬预算检查。
      *
      * @return 需要先于 USER_MESSAGE 推送的压缩事件和是否继续发送用户消息
      */
-    public ChatPreparation prepareChatTurn(SessionTurn sessionTurn, String currentModelId, long currentContextLimit, String newUserMessage) {
+    public ChatPreparation prepareChatTurn(SessionTurn sessionTurn, String currentModelId, long currentContextLimit, String newUserMessage,
+                                           SystemPromptSnapshot systemPromptSnapshot) {
         restorePendingCompressionEvent(sessionTurn.sessionId(), sessionTurn.transcriptUri());
 
         ChatMemory row = chatMemoryService.getById(sessionTurn.sessionId());
@@ -141,7 +132,22 @@ public class ContextManagementService {
         ThinResult thinned = thinParsed(parsed, RETAINED_RAW_TURNS);
 
         ContextUsageSnapshot lastUsage = parseLastUsage(row);
-        if (lastUsage != null && turnsBeyondRetain(parsed) && reachTriggerRatio(lastUsage, row.getLastContextLimit(), currentContextLimit)) {
+        long estimatedSavings = estimateThinSavings(currentModelId, messages, thinned.messages());
+        long requiredSavings = minimumToolThinSavings(currentContextLimit);
+        boolean forcedThin = thinned.changed() && exceedsNewMessageBudget(currentModel, currentContextLimit,
+                row == null ? null : row.getSummaryText(), messages, newUserMessage, systemPromptSnapshot);
+        boolean thresholdThin = thinned.changed() && lastUsage != null
+                && reachTriggerRatio(lastUsage.totalTokens(), row.getLastContextLimit(), currentContextLimit, TOOL_THIN_TRIGGER_RATIO)
+                && estimatedSavings >= requiredSavings;
+        boolean applyThin = forcedThin || thresholdThin;
+        long adjustedUsageTokens = lastUsage == null ? 0 : lastUsage.totalTokens();
+        if (applyThin) {
+            long triggerSavings = estimateTriggerSavings(lastUsage, currentModelId, messages, thinned.messages(), estimatedSavings);
+            adjustedUsageTokens = Math.max(0, adjustedUsageTokens - triggerSavings);
+        }
+
+        if (lastUsage != null && turnsBeyondRetain(parsed)
+                && reachTriggerRatio(adjustedUsageTokens, row.getLastContextLimit(), currentContextLimit, AUTO_TRIGGER_RATIO)) {
             String compressionId = IdUtil.getSnowflakeNextIdStr();
             long startNano = System.nanoTime();
             SessionEvent startedEvent = buildCompressionEvent(sessionTurn, compressionId, ContextCompressionPayload.Trigger.AUTO,
@@ -150,7 +156,7 @@ public class ContextManagementService {
             events.add(startedEvent);
             try {
                 SessionEvent completedEvent = executeCompression(sessionTurn, row, parsed, thinned, currentModel, null,
-                        ContextCompressionPayload.Trigger.AUTO, compressionId, startNano, lastUsage, null);
+                        ContextCompressionPayload.Trigger.AUTO, compressionId, startNano, lastUsage, null, systemPromptSnapshot);
                 events.add(completedEvent);
                 // 压缩成功后以提交后的上下文状态继续做硬预算检查
                 row = chatMemoryService.getById(sessionTurn.sessionId());
@@ -163,14 +169,15 @@ public class ContextManagementService {
                 log.warn("自动上下文压缩失败 sessionId:{} compressionId:{} 原因:{}", sessionTurn.sessionId(), compressionId, e.getMessage());
                 return new ChatPreparation(events, false);
             }
-        } else if (thinned.changed()) {
-            // 未达到摘要阈值时只提交确定性压薄，属于独立维护操作
-            chatMemoryService.upsertMessagesJson(sessionTurn.sessionId(), serializeMessages(thinned.messages()));
+        } else if (applyThin) {
+            chatMemoryService.commitToolThinning(sessionTurn.sessionId(), serializeMessages(thinned.messages()));
             aiCodeService.evictChatMemory(sessionTurn.sessionId());
             messages = thinned.messages();
+            log.info("工具压薄完成 sessionId:{} trigger:{} 预计节省Token:{} 要求节省Token:{} 压薄工具调用数:{}", sessionTurn.sessionId(),
+                    forcedThin ? "HARD_BUDGET" : "USAGE_THRESHOLD", estimatedSavings, requiredSavings, thinned.compactedToolCallCount());
         }
 
-        checkNewMessageBudget(currentModel, currentContextLimit, row == null ? null : row.getSummaryText(), messages, newUserMessage);
+        checkNewMessageBudget(currentModel, currentContextLimit, row == null ? null : row.getSummaryText(), messages, newUserMessage, systemPromptSnapshot);
         return new ChatPreparation(events, true);
     }
 
@@ -190,11 +197,21 @@ public class ContextManagementService {
 
             String compressionId = IdUtil.getSnowflakeNextIdStr();
             long startNano = System.nanoTime();
+            SystemPromptSnapshot systemPromptSnapshot;
+            try {
+                systemPromptSnapshot = systemPromptService.capture(sessionTurn.sessionId(), sessionTurn.workspacePath());
+            } catch (ServiceException e) {
+                SessionEvent failedEvent = buildCompressionEvent(sessionTurn, compressionId, ContextCompressionPayload.Trigger.MANUAL,
+                        ContextCompressionPayload.State.FAILED, null, lastUsage, row == null ? null : row.getLastContextLimit(),
+                        DateTimeUtil.durationMs(startNano), e.getMessage());
+                log.warn("主动上下文压缩加载系统提示词失败 sessionId:{} compressionId:{} 原因:{}", sessionTurn.sessionId(), compressionId, e.getMessage());
+                return Flux.just(sessionEventStore.appendSession(sessionTurn.transcriptUri(), failedEvent));
+            }
 
-            // 无可压缩内容时不调用模型；遗漏的确定性压薄仍然允许提交
+            // 无可压缩内容时不调用模型；主动压缩仍然允许提交确定性工具压薄
             if (!turnsBeyondRetain(parsed) && !hasOversizedTurn(row, fallbackModelName, parsed)) {
                 if (thinned.changed()) {
-                    chatMemoryService.upsertMessagesJson(sessionTurn.sessionId(), serializeMessages(thinned.messages()));
+                    chatMemoryService.commitToolThinning(sessionTurn.sessionId(), serializeMessages(thinned.messages()));
                     aiCodeService.evictChatMemory(sessionTurn.sessionId());
                 }
                 SessionEvent skippedEvent = buildCompressionEvent(sessionTurn, compressionId, ContextCompressionPayload.Trigger.MANUAL,
@@ -213,7 +230,7 @@ public class ContextManagementService {
             Mono<SessionEvent> terminal = Mono.fromCallable(() -> {
                         try {
                             return executeCompression(sessionTurn, finalRow, parsed, thinned, null, fallbackModelName,
-                                    ContextCompressionPayload.Trigger.MANUAL, compressionId, startNano, lastUsage, cancelled);
+                                    ContextCompressionPayload.Trigger.MANUAL, compressionId, startNano, lastUsage, cancelled, systemPromptSnapshot);
                         } catch (ServiceException e) {
                             if (cancelled.get()) {
                                 return null;
@@ -242,7 +259,7 @@ public class ContextManagementService {
                                             ChatMemoryTurnParser.ParsedConversation parsed, ThinResult normalThinned,
                                             ModelInfo currentModel, String fallbackModelName,
                                             ContextCompressionPayload.Trigger trigger, String compressionId, long startNano,
-                                            ContextUsageSnapshot previousUsage, AtomicBoolean cancelled) {
+                                            ContextUsageSnapshot previousUsage, AtomicBoolean cancelled, SystemPromptSnapshot systemPromptSnapshot) {
         ModelInfo summaryModel = selectSummaryModel(row == null ? null : row.getLastModelId(), currentModel, fallbackModelName);
         if (summaryModel == null) {
             throw new ServiceException("没有可用的摘要模型");
@@ -251,13 +268,12 @@ public class ContextManagementService {
         String estimateModelId = summaryModel.modelId();
 
         String existingSummary = row == null ? null : row.getSummaryText();
-        long systemTokens = ContextEstimateUtil.estimateTextTokens(estimateModelId, systemPromptText());
-        long summaryTokens = ContextEstimateUtil.estimateTextTokens(estimateModelId, existingSummary);
+        long systemTokens = ContextEstimateUtil.estimateTextTokens(estimateModelId, systemPromptService.compose(systemPromptSnapshot, existingSummary));
 
         // 降级顺序：先按 6 个保留（最近 4 个原始）；不足时压薄全部工具交互；再按 6、4、2、1 降低保留数量
         List<ConversationTurn> retainedTurns;
         int retainedCount;
-        if (fitsBudget(contextLimit, estimateModelId, systemTokens, summaryTokens, retainedTurnsOf(normalThinned.turns(), NORMAL_RETAINED_TURNS))) {
+        if (fitsBudget(contextLimit, estimateModelId, systemTokens, retainedTurnsOf(normalThinned.turns(), NORMAL_RETAINED_TURNS))) {
             retainedCount = Math.min(NORMAL_RETAINED_TURNS, normalThinned.turns().size());
             retainedTurns = retainedTurnsOf(normalThinned.turns(), retainedCount);
         } else {
@@ -267,7 +283,7 @@ public class ContextManagementService {
             for (int candidate : RETAINED_CANDIDATES) {
                 int candidateCount = Math.min(candidate, fullyThinned.turns().size());
                 List<ConversationTurn> candidateTurns = retainedTurnsOf(fullyThinned.turns(), candidateCount);
-                if (fitsBudget(contextLimit, estimateModelId, systemTokens, summaryTokens, candidateTurns)) {
+                if (fitsBudget(contextLimit, estimateModelId, systemTokens, candidateTurns)) {
                     retainedTurns = candidateTurns;
                     retainedCount = candidateCount;
                     break;
@@ -295,9 +311,8 @@ public class ContextManagementService {
             newMessages.addAll(turn.messages());
         }
 
-        long beforeEstimatedTokens = systemTokens + summaryTokens
-                + ContextEstimateUtil.estimateMessagesTokens(estimateModelId, flattenTurns(parsed.turns()));
-        long afterEstimatedTokens = systemTokens + ContextEstimateUtil.estimateTextTokens(estimateModelId, newSummary)
+        long beforeEstimatedTokens = systemTokens + ContextEstimateUtil.estimateMessagesTokens(estimateModelId, flattenTurns(parsed.turns()));
+        long afterEstimatedTokens = ContextEstimateUtil.estimateTextTokens(estimateModelId, systemPromptService.compose(systemPromptSnapshot, newSummary))
                 + ContextEstimateUtil.estimateMessagesTokens(estimateModelId, flattenTurns(retainedTurns));
 
         SessionEvent completedEvent = buildCompressionEvent(sessionTurn, compressionId, trigger,
@@ -343,40 +358,67 @@ public class ContextManagementService {
     /**
      * 新用户消息硬预算检查：不截断、不摘要、不改写用户原文，超预算直接拒绝。
      */
-    private void checkNewMessageBudget(ModelInfo currentModel, long contextLimit, String summaryText, List<ChatMessage> historyMessages, String newUserMessage) {
+    private void checkNewMessageBudget(ModelInfo currentModel, long contextLimit, String summaryText, List<ChatMessage> historyMessages,
+                                       String newUserMessage, SystemPromptSnapshot systemPromptSnapshot) {
+        if (exceedsNewMessageBudget(currentModel, contextLimit, summaryText, historyMessages, newUserMessage, systemPromptSnapshot)) {
+            throw new ServiceException("单条用户消息或剩余上下文超过输入预算，请压缩上下文或发起新会话");
+        }
+    }
+
+    private boolean exceedsNewMessageBudget(ModelInfo currentModel, long contextLimit, String summaryText, List<ChatMessage> historyMessages,
+                                            String newUserMessage, SystemPromptSnapshot systemPromptSnapshot) {
         long outputReserve = currentModel.limit().output() == null
                 ? MAX_OUTPUT_RESERVE_TOKENS
                 : Math.min(currentModel.limit().output(), MAX_OUTPUT_RESERVE_TOKENS);
         long available = contextLimit - outputReserve - TOOL_OVERHEAD_RESERVE_TOKENS;
         if (available <= 0) {
-            return;
+            return false;
         }
-        long estimated = ContextEstimateUtil.estimateTextTokens(currentModel.modelId(), systemPromptText())
-                + ContextEstimateUtil.estimateTextTokens(currentModel.modelId(), summaryText)
-                + ContextEstimateUtil.estimateMessagesTokens(currentModel.modelId(), historyMessages)
+        long estimated = ContextEstimateUtil.estimateTextTokens(currentModel.modelId(), systemPromptService.compose(systemPromptSnapshot, summaryText))
+                + ContextEstimateUtil.estimateMessagesTokens(currentModel.modelId(), withoutSystemMessages(historyMessages))
                 + ContextEstimateUtil.estimateTextTokens(currentModel.modelId(), newUserMessage);
-        if (estimated > available) {
-            throw new ServiceException("单条用户消息或剩余上下文超过输入预算，请压缩上下文或发起新会话");
-        }
+        return estimated > available;
     }
 
     /**
-     * 70% 触发判断：模型切换时取上一轮窗口和本次窗口的较大压力，对小窗口保持保守。
+     * 比例触发判断：模型切换时取上一轮窗口和本次窗口的较大压力，对小窗口保持保守。
      */
-    private boolean reachTriggerRatio(ContextUsageSnapshot lastUsage, Long previousContextLimit, long currentContextLimit) {
-        double currentRatio = (double) lastUsage.totalTokens() / currentContextLimit;
+    private boolean reachTriggerRatio(long totalTokens, Long previousContextLimit, long currentContextLimit, double triggerRatio) {
+        double currentRatio = (double) totalTokens / currentContextLimit;
         double ratio = currentRatio;
         if (previousContextLimit != null && previousContextLimit > 0) {
-            ratio = Math.max(ratio, (double) lastUsage.totalTokens() / previousContextLimit);
+            ratio = Math.max(ratio, (double) totalTokens / previousContextLimit);
         }
-        return ratio >= AUTO_TRIGGER_RATIO;
+        return ratio >= triggerRatio;
     }
 
-    private boolean fitsBudget(Long contextLimit, String modelId, long systemTokens, long summaryTokens, List<ConversationTurn> retainedTurns) {
+    private long estimateThinSavings(String modelId, List<ChatMessage> originalMessages, List<ChatMessage> thinnedMessages) {
+        long originalTokens = ContextEstimateUtil.estimateMessagesTokens(modelId, withoutSystemMessages(originalMessages));
+        long thinnedTokens = ContextEstimateUtil.estimateMessagesTokens(modelId, withoutSystemMessages(thinnedMessages));
+        return Math.max(0, originalTokens - thinnedTokens);
+    }
+
+    private long minimumToolThinSavings(long contextLimit) {
+        long ratioTokens = (long) Math.ceil(contextLimit * TOOL_THIN_SAVINGS_RATIO);
+        long roundedTokens = ((ratioTokens + TOOL_THIN_SAVINGS_ROUNDING_TOKENS - 1) / TOOL_THIN_SAVINGS_ROUNDING_TOKENS)
+                * TOOL_THIN_SAVINGS_ROUNDING_TOKENS;
+        return Math.max(MIN_TOOL_THIN_SAVINGS_TOKENS, Math.min(MAX_TOOL_THIN_SAVINGS_TOKENS, roundedTokens));
+    }
+
+    private long estimateTriggerSavings(ContextUsageSnapshot lastUsage, String currentModelId, List<ChatMessage> originalMessages,
+                                        List<ChatMessage> thinnedMessages, long currentModelSavings) {
+        if (lastUsage == null || StrUtil.isBlank(lastUsage.modelId()) || lastUsage.modelId().equals(currentModelId)) {
+            return currentModelSavings;
+        }
+        long previousModelSavings = estimateThinSavings(lastUsage.modelId(), originalMessages, thinnedMessages);
+        return Math.min(currentModelSavings, previousModelSavings);
+    }
+
+    private boolean fitsBudget(Long contextLimit, String modelId, long systemTokens, List<ConversationTurn> retainedTurns) {
         if (contextLimit == null || contextLimit <= 0) {
             return true;
         }
-        long estimated = systemTokens + summaryTokens + ContextEstimateUtil.estimateMessagesTokens(modelId, flattenTurns(retainedTurns));
+        long estimated = systemTokens + ContextEstimateUtil.estimateMessagesTokens(modelId, flattenTurns(retainedTurns));
         return estimated <= contextLimit * POST_COMPRESSION_TARGET_RATIO;
     }
 
@@ -563,6 +605,10 @@ public class ContextManagementService {
         return messages;
     }
 
+    private List<ChatMessage> withoutSystemMessages(List<ChatMessage> messages) {
+        return messages.stream().filter(message -> !(message instanceof SystemMessage)).toList();
+    }
+
     private SessionEvent buildCompressionEvent(SessionTurn sessionTurn, String compressionId, ContextCompressionPayload.Trigger trigger,
                                                ContextCompressionPayload.State state, String modelId, ContextUsageSnapshot previousUsage,
                                                Long previousContextLimit, Long durationMs, String errorMessage) {
@@ -612,25 +658,6 @@ public class ContextManagementService {
 
     private String serializeMessages(List<ChatMessage> messages) {
         return ChatMessageSerializer.messagesToJson(messages);
-    }
-
-    private String systemPromptText() {
-        String text = systemPromptText;
-        if (text == null) {
-            synchronized (this) {
-                text = systemPromptText;
-                if (text == null) {
-                    try {
-                        text = new ClassPathResource("prompt/system-prompt.txt").getContentAsString(StandardCharsets.UTF_8);
-                    } catch (IOException e) {
-                        log.error("读取系统提示词失败", e);
-                        text = "";
-                    }
-                    systemPromptText = text;
-                }
-            }
-        }
-        return text;
     }
 
     /**

@@ -13,6 +13,8 @@ import com.yu.mboocode.agent.service.SessionService;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.agent.tool.command.RunningCommandRegistry;
 import com.yu.mboocode.agent.tool.event.ToolEventFormatterRegistry;
+import com.yu.mboocode.agent.tool.network.NetworkToolErrorCode;
+import com.yu.mboocode.agent.tool.network.RunningNetworkCallRegistry;
 import com.yu.mboocode.agent.tool.permission.PermissionCheck;
 import com.yu.mboocode.agent.tool.permission.PermissionMode;
 import com.yu.mboocode.agent.tool.permission.PermissionRequirement;
@@ -58,6 +60,8 @@ public class ToolApprovalService {
     private ToolEventFormatterRegistry toolEventFormatterRegistry;
     @Resource
     private RunningCommandRegistry runningCommandRegistry;
+    @Resource
+    private RunningNetworkCallRegistry runningNetworkCallRegistry;
     private final Map<String, PendingApprovalStage> pendingByApprovalId = new ConcurrentHashMap<>();
     private final Map<String, PendingToolInvocation> invocationsByToolCall = new ConcurrentHashMap<>();
 
@@ -86,7 +90,8 @@ public class ToolApprovalService {
     public ToolAuthorizationResult awaitAuthorization(String sessionId, ToolExecutionRequest request) {
         String key = toolCallKey(sessionId, request.id());
         PendingToolInvocation invocation = invocationsByToolCall.get(key);
-        if (invocation == null || !invocation.chain.needsApproval()) return evaluateImmediate(sessionId, request);
+        if (invocation == null) return evaluateImmediate(sessionId, request);
+        if (!invocation.chain.needsApproval()) return verifyFinalPlan(sessionId, request, invocation);
 
         PermissionRequirement lastRequirement = null;
         try {
@@ -141,6 +146,7 @@ public class ToolApprovalService {
 
     public void cancelTurn(String sessionId, String turnId) {
         runningCommandRegistry.cancelTurn(sessionId, turnId);
+        runningNetworkCallRegistry.cancelTurn(sessionId, turnId);
         invocationsByToolCall.values().stream()
                 .filter(item -> item.sessionId.equals(sessionId) && item.turnId.equals(turnId))
                 .forEach(item -> {
@@ -152,6 +158,7 @@ public class ToolApprovalService {
 
     public void clearSession(String sessionId) {
         runningCommandRegistry.clearSession(sessionId);
+        runningNetworkCallRegistry.clearSession(sessionId);
         invocationsByToolCall.values().stream()
                 .filter(item -> item.sessionId.equals(sessionId))
                 .forEach(item -> {
@@ -164,6 +171,16 @@ public class ToolApprovalService {
     public String turnId(String sessionId, String toolCallId) {
         PendingToolInvocation invocation = invocationsByToolCall.get(toolCallKey(sessionId, toolCallId));
         return invocation == null ? null : invocation.turnId;
+    }
+
+    public String networkOrigin(String sessionId, String toolCallId) {
+        PendingToolInvocation invocation = invocationsByToolCall.get(toolCallKey(sessionId, toolCallId));
+        if (invocation == null) return null;
+        return invocation.chain.requirements().stream()
+                .filter(requirement -> requirement.permissionType() == ToolPermissionType.NETWORK)
+                .map(PermissionRequirement::grantValue)
+                .findFirst()
+                .orElse(null);
     }
 
     public void completeInvocation(String sessionId, String toolCallId) {
@@ -193,13 +210,27 @@ public class ToolApprovalService {
         } catch (RuntimeException e) {
             return ToolAuthorizationResult.error(ToolPermissionErrorCode.PERMISSION_REVOKED, "执行前权限复核失败", null, null);
         }
+        PermissionRequirement expectedNetwork = invocation.chain.requirements().stream()
+                .filter(requirement -> requirement.permissionType() == ToolPermissionType.NETWORK)
+                .findFirst()
+                .orElse(null);
+        PermissionRequirement currentNetwork = current.requirements().stream()
+                .filter(requirement -> requirement.permissionType() == ToolPermissionType.NETWORK)
+                .findFirst()
+                .orElse(null);
+        if (expectedNetwork != null && (currentNetwork == null || !expectedNetwork.sameScope(currentNetwork))) {
+            return ToolAuthorizationResult.error(NetworkToolErrorCode.NETWORK_TARGET_CHANGED, "执行前网络目标与授权时不一致", ToolPermissionType.NETWORK, null);
+        }
         for (PermissionRequirement requirement : current.requirements()) {
             if (requirement.check().status() == PermissionCheck.CheckStatus.ERROR) return error(requirement);
             if (requirement.check().status() == PermissionCheck.CheckStatus.ALLOWED) continue;
             boolean onceGranted = invocation.grantedRequirements.stream().anyMatch(granted -> granted.sameScope(requirement));
             if (!onceGranted) {
-                ToolPermissionErrorCode code = requirement.permissionType() == ToolPermissionType.COMMAND
-                        ? ToolPermissionErrorCode.COMMAND_PERMISSION_CHANGED : ToolPermissionErrorCode.PERMISSION_PATH_CHANGED;
+                ToolErrorCode code = switch (requirement.permissionType()) {
+                    case COMMAND -> ToolPermissionErrorCode.COMMAND_PERMISSION_CHANGED;
+                    case NETWORK -> NetworkToolErrorCode.NETWORK_TARGET_CHANGED;
+                    default -> ToolPermissionErrorCode.PERMISSION_PATH_CHANGED;
+                };
                 return ToolAuthorizationResult.error(code, "执行前权限范围与授权时不一致", requirement.permissionType(), requirement.grantPath());
             }
         }
@@ -226,6 +257,7 @@ public class ToolApprovalService {
                         .description(buildDescription(requirement, invocation.request.name()))
                         .permissionType(requirement.permissionType())
                         .grantPath(requirement.grantPath())
+                        .grantOrigin(requirement.permissionType() == ToolPermissionType.NETWORK ? requirement.grantValue() : null)
                         .approvalIndex(approvalIndex)
                         .approvalCount(approvalCount)
                         .build());
@@ -285,6 +317,7 @@ public class ToolApprovalService {
             case READ -> sessionService.grantReadPath(sessionId, requirement.grantPath());
             case WRITE -> sessionService.grantWritePath(sessionId, requirement.grantPath());
             case COMMAND -> sessionService.grantCommandPermission(sessionId, requirement.grantValue());
+            case NETWORK -> sessionService.grantNetworkOrigin(sessionId, requirement.grantValue());
             case NONE -> {
             }
         }
@@ -301,6 +334,7 @@ public class ToolApprovalService {
             case READ -> "允许读取目录？";
             case WRITE -> "允许写入目录？";
             case COMMAND -> "允许执行命令？";
+            case NETWORK -> "允许访问私有网络来源？";
             case NONE -> "需要授权";
         };
     }
@@ -310,6 +344,7 @@ public class ToolApprovalService {
         return switch (requirement.permissionType()) {
             case READ -> "将授权读取目录：" + requirement.grantPath() + "（包含其子目录）";
             case WRITE -> "将授权读写目录：" + requirement.grantPath() + "（包含其子目录）";
+            case NETWORK -> "将授权访问私有网络来源：" + requirement.grantValue() + "。只包含该协议、主机和端口。";
             default -> "工具 " + toolName + " 需要授权后才能继续。";
         };
     }

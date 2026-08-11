@@ -33,4 +33,8 @@ public class SessionPermissions {
     @Schema(description = "本会话已允许的精确命令指纹")
     @Builder.Default
     private List<String> allowedCommands = new ArrayList<>();
+
+    @Schema(description = "本会话已允许的精确私有网络来源")
+    @Builder.Default
+    private List<String> allowedNetworkOrigins = new ArrayList<>();
 }

@@ -28,7 +28,7 @@ public class ChatMemory {
     @Schema(description = "上一次聊天实际使用的模型 ID；usage 缺失时仍保留，供摘要模型选择")
     private String lastModelId;
 
-    @Schema(description = "最近一次有效主对话 ContextUsageSnapshot JSON；模型摘要成功后清空")
+    @Schema(description = "最近一次有效主对话 ContextUsageSnapshot JSON；上下文改写后清空")
     private String lastContextUsageJson;
 
     @Schema(description = "产生该 usage 时模型的上下文窗口")

@@ -9,8 +9,8 @@ public final class ToolInvocationContext {
     private ToolInvocationContext() {
     }
 
-    public static void set(String sessionId, String turnId, String toolCallId) {
-        CURRENT.set(new Value(sessionId, turnId, toolCallId));
+    public static void set(String sessionId, String turnId, String toolCallId, String networkOrigin) {
+        CURRENT.set(new Value(sessionId, turnId, toolCallId, networkOrigin));
     }
 
     public static Value current() {
@@ -21,6 +21,6 @@ public final class ToolInvocationContext {
         CURRENT.remove();
     }
 
-    public record Value(String sessionId, String turnId, String toolCallId) {
+    public record Value(String sessionId, String turnId, String toolCallId, String networkOrigin) {
     }
 }

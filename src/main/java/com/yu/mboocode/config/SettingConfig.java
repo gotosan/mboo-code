@@ -61,6 +61,8 @@ public class SettingConfig {
         return Setting.builder()
                 .apiKey(setting.getApiKey() == null ? defaults.getApiKey() : setting.getApiKey())
                 .baseUrl(setting.getBaseUrl() == null ? defaults.getBaseUrl() : setting.getBaseUrl())
+                .webSearchExaApiKey(setting.getWebSearchExaApiKey() == null ? defaults.getWebSearchExaApiKey() : setting.getWebSearchExaApiKey())
+                .webFetchPrivateNetworkEnabled(setting.getWebFetchPrivateNetworkEnabled() == null ? defaults.getWebFetchPrivateNetworkEnabled() : setting.getWebFetchPrivateNetworkEnabled())
                 .ignoredFilePatterns(ignoredPatterns)
                 .ignoredFilePatternExceptions(ignoredExceptions)
                 .build();

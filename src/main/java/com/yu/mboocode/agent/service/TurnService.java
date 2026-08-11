@@ -23,6 +23,8 @@ import com.yu.mboocode.agent.tool.event.ToolEventFormatterRegistry;
 import com.yu.mboocode.common.util.DateTimeUtil;
 import com.yu.mboocode.agent.tool.permission.PermissionMode;
 import com.yu.mboocode.llm.context.ContextManagementService;
+import com.yu.mboocode.llm.prompt.SystemPromptService;
+import com.yu.mboocode.llm.prompt.SystemPromptSnapshot;
 import com.yu.mboocode.llm.service.ChatMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
@@ -74,6 +76,8 @@ public class TurnService {
     private ChatMemoryService chatMemoryService;
     @Resource
     private WorkspaceService workspaceService;
+    @Resource
+    private SystemPromptService systemPromptService;
 
     private final Map<String, ActiveTurnRuntime> activeTurnRuntime = new ConcurrentHashMap<>();
 
@@ -141,7 +145,9 @@ public class TurnService {
 
     private ActiveTurnRuntime startTurn(Sessions session, TurnOperationType operationType) {
         String turnId = IdUtil.getSnowflakeNextIdStr();
-        ActiveTurnRuntime runtime = new ActiveTurnRuntime(new SessionTurn(session.getId(), session.getTranscriptUri(), turnId, System.nanoTime(), operationType));
+        SessionTurn sessionTurn = new SessionTurn(session.getId(), session.getTranscriptUri(), session.getWorkspacePath(), turnId,
+                System.nanoTime(), operationType);
+        ActiveTurnRuntime runtime = new ActiveTurnRuntime(sessionTurn);
 
         while (true) {
             ActiveTurnRuntime existing = activeTurnRuntime.putIfAbsent(session.getId(), runtime);
@@ -174,10 +180,12 @@ public class TurnService {
 
     public Flux<@NonNull SessionEvent> chatStream(SessionTurn sessionTurn, String userMessage, ChatRequestParameters params) {
         ActiveTurnRuntime runtime = getActiveRuntime(sessionTurn);
+        SystemPromptSnapshot systemPromptSnapshot = systemPromptService.capture(sessionTurn.sessionId(), sessionTurn.workspacePath());
         ModelInfo currentModel = modelOptionService.requireModelInfo(params.modelName());
         long currentContextLimit = modelContextPreferenceService.getEffectiveContextLimit(currentModel);
         // 自动压缩和硬预算检查必须在写入 USER_MESSAGE 前完成；压缩失败时只推送压缩事件并正常结束
-        ContextManagementService.ChatPreparation preparation = contextManagementService.prepareChatTurn(sessionTurn, params.modelName(), currentContextLimit, userMessage);
+        ContextManagementService.ChatPreparation preparation = contextManagementService.prepareChatTurn(sessionTurn, params.modelName(),
+                currentContextLimit, userMessage, systemPromptSnapshot);
         Flux<@NonNull SessionEvent> preludeFlux = Flux.fromIterable(preparation.events());
         if (!preparation.proceed()) {
             return preludeFlux;
@@ -246,7 +254,7 @@ public class TurnService {
                 }
             });
 
-            aiCodeService.chatStream(sessionTurn.sessionId(), userMessage, params)
+            aiCodeService.chatStream(sessionTurn.sessionId(), userMessage, systemPromptSnapshot.runtimeEnvironment(), systemPromptSnapshot.workspaceInstructions(), params)
                     .onPartialResponseWithContext((response, context) -> { // 助手回复
                         if (cancelHandle(sink, context.streamingHandle(), runtime)) {
                             return;
@@ -404,10 +412,8 @@ public class TurnService {
             log.error("清理 turn 授权请求失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
         }
         if (sessionTurn.operationType() == TurnOperationType.CHAT) {
-            // 持久化本轮最后一次有效主模型 usage，供下一轮 70% 触发判断和摘要模型选择
+            // 持久化本轮最后一次有效主模型 usage，供下一轮工具压薄、自动摘要和摘要模型选择
             persistLastUsage(runtime);
-            // 固定的工具压薄：同步、尽力，必须在释放执行锁前完成
-            contextManagementService.thinOldToolInteractions(sessionTurn.sessionId());
         }
         try {
             sessionService.clearActiveTurn(sessionTurn.sessionId(), sessionTurn.turnId());

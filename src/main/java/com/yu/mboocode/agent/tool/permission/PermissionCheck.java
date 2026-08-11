@@ -1,9 +1,11 @@
 package com.yu.mboocode.agent.tool.permission;
 
+import com.yu.mboocode.agent.tool.ToolErrorCode;
+
 /**
  * 单次工具权限评估结果：状态、错误码与错误信息。
  */
-public record PermissionCheck(CheckStatus status, ToolPermissionErrorCode errorCode, String message) {
+public record PermissionCheck(CheckStatus status, ToolErrorCode errorCode, String message) {
     /** 构造成功放行结果（无路径）。 */
     public static PermissionCheck allowed() {
         return new PermissionCheck(CheckStatus.ALLOWED, null, null);
@@ -15,7 +17,7 @@ public record PermissionCheck(CheckStatus status, ToolPermissionErrorCode errorC
     }
 
     /** 构造评估失败结果（参数/配置/路径等硬错误，不发起用户授权）。 */
-    public static PermissionCheck error(ToolPermissionErrorCode errorCode, String message) {
+    public static PermissionCheck error(ToolErrorCode errorCode, String message) {
         return new PermissionCheck(CheckStatus.ERROR, errorCode, message);
     }
 

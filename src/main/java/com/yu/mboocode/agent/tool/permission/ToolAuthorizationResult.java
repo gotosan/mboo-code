@@ -1,6 +1,7 @@
 package com.yu.mboocode.agent.tool.permission;
 
 import com.yu.mboocode.agent.enums.ToolApprovalDecision;
+import com.yu.mboocode.agent.tool.ToolErrorCode;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 /**
@@ -15,7 +16,7 @@ public record ToolAuthorizationResult(
         ToolApprovalDecision decision,
 
         @Schema(description = "错误码")
-        ToolPermissionErrorCode errorCode,
+        ToolErrorCode errorCode,
 
         @Schema(description = "错误说明")
         String message,
@@ -38,7 +39,7 @@ public record ToolAuthorizationResult(
         return error(ToolPermissionErrorCode.PERMISSION_TIMEOUT, "工具授权超时", permissionType, grantPath);
     }
 
-    public static ToolAuthorizationResult error(ToolPermissionErrorCode errorCode, String message, ToolPermissionType permissionType, String grantPath) {
+    public static ToolAuthorizationResult error(ToolErrorCode errorCode, String message, ToolPermissionType permissionType, String grantPath) {
         return new ToolAuthorizationResult(false, ToolApprovalDecision.DENY, errorCode, message, permissionType, grantPath);
     }
 }

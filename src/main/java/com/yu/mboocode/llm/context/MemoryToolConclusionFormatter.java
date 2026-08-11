@@ -3,6 +3,8 @@ package com.yu.mboocode.llm.context;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.yu.mboocode.agent.tool.ToolTextTruncator;
+import com.yu.mboocode.agent.tool.network.NetworkRequestValidator;
+import com.yu.mboocode.agent.tool.network.UrlRedactor;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
@@ -31,6 +33,10 @@ public class MemoryToolConclusionFormatter {
 
     @Resource
     private ToolTextTruncator toolTextTruncator;
+    @Resource
+    private NetworkRequestValidator networkRequestValidator;
+    @Resource
+    private UrlRedactor urlRedactor;
 
     /**
      * 判断文本是否已经是当前版本的记忆结论。
@@ -70,6 +76,18 @@ public class MemoryToolConclusionFormatter {
                 copy(arguments, safe, "path");
                 safe.put("contentLength", stringLength(arguments.get("content")));
                 copy(arguments, safe, "createParents");
+            }
+            case "web_search" -> copy(arguments, safe, "query", "maxResults");
+            case "web_fetch" -> {
+                Object url = arguments.get("url");
+                if (url instanceof String text) {
+                    try {
+                        safe.put("url", urlRedactor.redact(networkRequestValidator.normalizeUrl(text)));
+                    } catch (RuntimeException e) {
+                        safe.put("url", "[无效 URL，已隐藏原始值]");
+                    }
+                }
+                copy(arguments, safe, "format", "offset", "limit", "timeoutSeconds");
             }
             default -> {
                 return truncate(argumentsJson, UNKNOWN_ARGUMENTS_MAX_LENGTH);
@@ -137,6 +155,27 @@ public class MemoryToolConclusionFormatter {
                 case "glob_files" -> {
                     copy(data, body, "count", "truncated");
                     omitted.add("files");
+                }
+                case "web_search" -> {
+                    copy(data, body, "query", "provider", "structured", "resultCount", "truncated");
+                    var results = data.getJSONArray("results");
+                    if (results != null) {
+                        List<Map<String, Object>> sources = new java.util.ArrayList<>();
+                        for (int index = 0; index < Math.min(5, results.size()); index++) {
+                            JSONObject item = results.getJSONObject(index);
+                            Map<String, Object> source = new LinkedHashMap<>();
+                            copy(item, source, "title", "url");
+                            sources.add(source);
+                        }
+                        body.put("sources", sources);
+                    }
+                    omitted.add("snippet");
+                    omitted.add("providerContent");
+                }
+                case "web_fetch" -> {
+                    copy(data, body, "requestedUrl", "finalUrl", "format", "contentType", "startLine", "endLine", "totalLines",
+                            "truncated", "nextOffset", "redirectCount", "fetchedAt");
+                    omitted.add("content");
                 }
                 default -> {
                     body.put("result", truncate(JSON.toJSONString(data), UNKNOWN_RESULT_MAX_LENGTH));
