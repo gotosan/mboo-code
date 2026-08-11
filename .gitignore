@@ -37,3 +37,6 @@ out/
 
 ### VS Code ###
 .vscode/
+
+CONTEXT.md
+AGENTS.md
