@@ -54,6 +54,76 @@
   scrollbar-color: #d2d2d2 transparent;
 }
 
+.threadScrollerEmpty {
+  display: flex;
+  flex-direction: column;
+}
+
+.threadScrollerEmpty > .emptyStatePanel {
+  margin-block: auto;
+}
+
+.emptyStatePanel {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 46%, transparent);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 98%) 0%, rgb(255 255 255 / 92%) 100%),
+    var(--panel);
+  box-shadow:
+    0 1px 2px rgb(17 24 39 / 4%),
+    0 10px 28px rgb(17 24 39 / 6%);
+}
+
+.emptyStatePanel::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent) 68%, rgb(153 106 241 / 18%));
+  content: "";
+  pointer-events: none;
+}
+
+.emptyStatePanel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.emptyStatePanel :global(.mboo-avatar-m) {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  box-shadow: 0 4px 12px rgb(92 21 224 / 10%);
+}
+
+.emptyStatePanel :global(.border-t) {
+  border-color: color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.emptyStatePanel :global(button) {
+  transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
+}
+
+.emptyStatePanel :global(button:hover) {
+  transform: translateX(2px);
+}
+
+.emptyStatePanel :global(button:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .emptyStatePanel :global(button) {
+    transition: none;
+  }
+
+  .emptyStatePanel :global(button:hover) {
+    transform: none;
+  }
+}
+
 .composerDock {
   flex: 0 0 auto;
   min-height: 0;

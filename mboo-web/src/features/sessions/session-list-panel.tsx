@@ -7,6 +7,7 @@ import {
   Folder,
   FolderOpen,
   MoreHorizontal,
+  Plus,
   RefreshCw,
   Search,
   Trash2,
@@ -31,14 +32,11 @@ type SessionListPanelProps = {
   sessionQuery: string;
   isLoadingSessions: boolean;
   sessionListError: string;
-  sessionMessage: string;
   isRunning: boolean;
   isSelectingWorkspace: boolean;
   isLoadingWorkspaces: boolean;
-  isSavingWorkspace: boolean;
   deletingWorkspaceId: string | null;
   workspaceError: string;
-  pendingWorkspacePath: string;
   isSessionSwitching: boolean;
   isCurrentSessionRunning: boolean;
   editingSessionId: string | null;
@@ -46,9 +44,9 @@ type SessionListPanelProps = {
   confirmingAction: SessionConfirmAction;
   onQueryChange: (value: string) => void;
   onCreateSession: () => void;
+  onCreateSessionInWorkspace: (workspace: WorkspaceInfo) => void;
   onRefreshWorkspaces: () => void;
   onSelectWorkspace: (workspace: WorkspaceInfo) => void;
-  onSaveWorkspace: () => void;
   onDeleteWorkspace: (workspace: WorkspaceInfo) => void;
   onRefresh: () => void;
   onTabChange: (tab: SessionListTab) => void;
@@ -73,14 +71,11 @@ export const SessionListPanel = memo(function SessionListPanel({
   sessionQuery,
   isLoadingSessions,
   sessionListError,
-  sessionMessage,
   isRunning,
   isSelectingWorkspace,
   isLoadingWorkspaces,
-  isSavingWorkspace,
   deletingWorkspaceId,
   workspaceError,
-  pendingWorkspacePath,
   isSessionSwitching,
   isCurrentSessionRunning,
   editingSessionId,
@@ -88,9 +83,9 @@ export const SessionListPanel = memo(function SessionListPanel({
   confirmingAction,
   onQueryChange,
   onCreateSession,
+  onCreateSessionInWorkspace,
   onRefreshWorkspaces,
   onSelectWorkspace,
-  onSaveWorkspace,
   onDeleteWorkspace,
   onRefresh,
   onTabChange,
@@ -226,12 +221,6 @@ export const SessionListPanel = memo(function SessionListPanel({
         </div>
       ) : null}
 
-      {sessionMessage ? (
-        <p className={styles.feedback} role="status">
-          {sessionMessage}
-        </p>
-      ) : null}
-
       <div className={styles.sessionScroller}>
         <div className={styles.workspaceListHeader}>
           <div className={styles.workspaceListTitle}>
@@ -242,18 +231,6 @@ export const SessionListPanel = memo(function SessionListPanel({
             <RefreshCw className={`size-3 ${isLoadingWorkspaces ? "motion-safe:animate-spin" : ""}`} aria-hidden />
           </button>
         </div>
-
-        {pendingWorkspacePath ? (
-          <div className={styles.workspaceSaveCard}>
-            <div className={styles.workspaceSaveCopy}>
-              <span className={styles.workspaceSaveLabel}>当前待用目录</span>
-              <span className={styles.workspacePath} title={pendingWorkspacePath}>{workspaceBasename(pendingWorkspacePath)}</span>
-            </div>
-            <button className={styles.workspaceSaveButton} disabled={isSavingWorkspace || actionDisabled} type="button" onClick={onSaveWorkspace}>
-              {isSavingWorkspace ? "保存中" : "保存"}
-            </button>
-          </div>
-        ) : null}
 
         {workspaceError ? (
           <div className={styles.workspaceError} role="alert">
@@ -295,7 +272,13 @@ export const SessionListPanel = memo(function SessionListPanel({
                       <span className={styles.workspaceMeta} title={workspace.path}>{workspaceSessions.length} 个会话 · {workspace.available ? "可用" : "目录不可用"}</span>
                     </span>
                   </button>
-                  <button aria-label={`删除工作区 ${workspace.name}`} className={styles.workspaceDelete} disabled={actionDisabled || deleting} type="button" onClick={() => setConfirmingWorkspaceId(workspace.id)}>×</button>
+                  <WorkspaceMenu
+                    workspace={workspace}
+                    actionDisabled={actionDisabled}
+                    deleting={deleting}
+                    onCreateSession={() => onCreateSessionInWorkspace(workspace)}
+                    onRemove={() => setConfirmingWorkspaceId(workspace.id)}
+                  />
                 </div>
               )}
               {expanded && !confirming ? (
@@ -315,7 +298,7 @@ export const SessionListPanel = memo(function SessionListPanel({
               <span className={styles.workspaceTogglePlaceholder} aria-hidden />
               <div className={styles.workspaceOpenStatic}>
                 <Folder className={styles.workspaceFolderIcon} aria-hidden />
-                <span className={styles.workspaceCopy}><span className={styles.workspaceName}>未设置工作区</span><span className={styles.workspaceMeta}>{unassignedSessions.length} 个会话</span></span>
+                <span className={styles.workspaceCopy}><span className={styles.workspaceName}>默认工作区</span><span className={styles.workspaceMeta}>{unassignedSessions.length} 个会话</span></span>
               </div>
             </div>
             <div className={styles.workspaceChildren}>{unassignedSessions.map((session) => renderSessionRow(session, true))}</div>
@@ -521,6 +504,126 @@ const SessionRow = memo(function SessionRow({
         </>
       )}
     </div>
+  );
+});
+
+/* ——— 工作区三点菜单 ——— */
+type WorkspaceMenuProps = {
+  workspace: WorkspaceInfo;
+  actionDisabled: boolean;
+  deleting: boolean;
+  onCreateSession: () => void;
+  onRemove: () => void;
+};
+
+const WorkspaceMenu = memo(function WorkspaceMenu({
+  workspace,
+  actionDisabled,
+  deleting,
+  onCreateSession,
+  onRemove,
+}: WorkspaceMenuProps) {
+  const menuId = useId();
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+
+  const close = () => setIsOpen(false);
+  const updatePosition = () => {
+    const trigger = menuTriggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    setPosition({
+      top: Math.min(rect.bottom + 4, window.innerHeight - 128),
+      left: Math.max(8, rect.right - 164),
+    });
+  };
+  const toggle = () => {
+    if (isOpen) {
+      close();
+      return;
+    }
+    updatePosition();
+    setIsOpen(true);
+  };
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    close();
+    menuTriggerRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (menuRef.current?.contains(target) || menuTriggerRef.current?.contains(target)) return;
+      close();
+    };
+    const handleViewportChange = () => updatePosition();
+    document.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [isOpen]);
+
+  return (
+    <>
+      <button
+        ref={menuTriggerRef}
+        aria-controls={isOpen ? menuId : undefined}
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
+        aria-label={`${workspace.name}的更多操作`}
+        className={styles.workspaceMenuTrigger}
+        disabled={actionDisabled || deleting}
+        type="button"
+        onClick={toggle}
+      >
+        <MoreHorizontal aria-hidden className={styles.menuTriggerIcon} />
+      </button>
+      {isOpen && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={menuRef}
+              id={menuId}
+              aria-label={`${workspace.name}的操作菜单`}
+              className={styles.sessionMenu}
+              role="menu"
+              style={position}
+              onKeyDown={handleKeyDown}
+            >
+              <button
+                className={styles.menuItem}
+                disabled={actionDisabled}
+                role="menuitem"
+                type="button"
+                onClick={() => { onCreateSession(); close(); }}
+              >
+                <Plus className={styles.menuItemIcon} aria-hidden />
+                在此空间新建会话
+              </button>
+              <button
+                className={`${styles.menuItem} ${styles.menuItemDanger}`}
+                disabled={actionDisabled || deleting}
+                role="menuitem"
+                type="button"
+                onClick={() => { onRemove(); close(); }}
+              >
+                <Trash2 className={styles.menuItemIcon} aria-hidden />
+                移除空间
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 });
 
