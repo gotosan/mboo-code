@@ -1,0 +1,202 @@
+.panel {
+  flex: 0 0 auto;
+  contain: layout paint style;
+  border-bottom: 1px solid #e6e6e6;
+  background: #fff;
+  color: #080807;
+}
+
+.titleBar {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  border-bottom: 1px solid #f0f0ef;
+}
+
+.sessionMenuButton {
+  display: none;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #e1e1dc;
+  border-radius: 6px;
+  background: #fff;
+  color: #575547;
+  cursor: pointer;
+}
+
+.sessionMenuButton:hover {
+  background: #f4f4f5;
+}
+
+.sessionMenuButton:focus-visible,
+.errorAction:focus-visible {
+  outline: 2px solid #5c15e0;
+  outline-offset: 2px;
+}
+
+.menuIcon,
+.actionIcon {
+  width: 14px;
+  height: 14px;
+}
+
+.titleContent {
+  min-width: 0;
+  flex: 1;
+}
+
+.titleRow {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #080807;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archiveBadge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid #e1d8ff;
+  border-radius: 4px;
+  background: #f0edff;
+  color: #5c15e0;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.errorNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+}
+
+.errorAction {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid #e1e1dc;
+  border-radius: 6px;
+  background: #fff;
+  color: #575547;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.errorNotice {
+  flex-direction: column;
+  align-items: flex-start;
+  border-top: 1px solid #f3cccc;
+  background: #fff6f6;
+}
+
+.errorMessage {
+  width: 100%;
+  margin: 0;
+  color: #bc4a4a;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.errorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.errorAction:hover {
+  background: #f4f4f5;
+}
+
+.errorActionDanger {
+  border-color: #f3cccc;
+  color: #bc4a4a;
+}
+
+.errorActionDanger:hover {
+  background: #fff0f0;
+}
+
+.loadingState {
+  display: flex;
+  width: min(100%, 736px);
+  min-height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  margin: 0 auto;
+  padding: 64px 12px 12px;
+  color: #8b8b86;
+}
+
+.loadingIcon {
+  width: 20px;
+  height: 20px;
+  animation: loading-spin 900ms linear infinite;
+}
+
+.loadingText {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loadingIcon {
+    animation: none;
+  }
+}
+
+@media (max-width: 899px) {
+  .sessionMenuButton {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 599px) {
+  .titleBar,
+  .errorNotice {
+    padding-inline: 12px;
+  }
+
+  .titleBar {
+    min-height: 48px;
+    padding-block: 8px;
+  }
+}
+
+@media (max-height: 620px) {
+  .titleBar {
+    min-height: 40px;
+    padding-block: 6px;
+  }
+}

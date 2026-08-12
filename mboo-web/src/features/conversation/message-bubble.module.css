@@ -1,0 +1,183 @@
+.segment {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: message-segment-arrive 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.messageImpact {
+  position: relative;
+  isolation: isolate;
+  animation: message-impact-press 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 冲击波从头像一侧扩散；absolute + pointer-events:none 不会改变滚动几何。 */
+.impactBurst {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: -1;
+  width: 32px;
+  height: 32px;
+  border: 2px solid rgb(153 106 241 / 58%);
+  border-radius: 999px;
+  pointer-events: none;
+  animation: assistant-impact-burst 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.runningNotice {
+  display: flex;
+  min-width: 0;
+  align-self: stretch;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid #e6defa;
+  border-radius: 8px;
+  background: #f5f1ff;
+}
+
+.runningContent {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.runningDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #996af1;
+  box-shadow: 0 0 0 2px rgb(153 106 241 / 14%);
+}
+
+.runningMessage {
+  min-width: 0;
+  overflow: hidden;
+  color: #5c15e0;
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stopButton {
+  display: inline-flex;
+  height: 30px;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid rgb(153 106 241 / 30%);
+  border-radius: 999px;
+  background: #fff;
+  color: #5c15e0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out, transform 100ms ease-out;
+}
+
+.stopButton:hover {
+  border-color: rgb(153 106 241 / 48%);
+  background: #f0edff;
+}
+
+.stopButton:active {
+  transform: translateY(1px);
+}
+
+@keyframes message-impact-press {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+
+  18% {
+    transform: translateY(3px) scale(0.995);
+  }
+
+  52% {
+    transform: translateY(-1px) scale(1.004);
+  }
+
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes assistant-impact-burst {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.45);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(3.4);
+  }
+}
+
+@keyframes message-segment-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stopButton:focus-visible {
+  outline: 2px solid #5c15e0;
+  outline-offset: 2px;
+}
+
+.stopIcon {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segment,
+  .messageImpact,
+  .impactBurst {
+    animation: none;
+  }
+
+  .runningDot {
+    box-shadow: 0 0 0 2px rgb(153 106 241 / 14%);
+  }
+
+  .stopButton:active {
+    transform: none;
+  }
+}
+
+@media (max-width: 599px) {
+  /* 移动端保持原型的单行状态胶囊；只增加横向可用空间，不把 dock 变成第二张卡片。 */
+  .runningNotice {
+    gap: 8px;
+    padding-inline: 10px;
+  }
+
+  .runningMessage {
+    font-size: 11px;
+  }
+
+  .stopButton {
+    min-width: 62px;
+    padding-inline: 9px;
+  }
+}
