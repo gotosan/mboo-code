@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: mboo-code
+  datasource:
+    driver-class-name: org.sqlite.JDBC
+    url: jdbc:sqlite:${user.home}/.mboo/mboo_data.sqlite
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/sqlite/schema.sql
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+
+# springdoc-openapi项目配置
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /doc.html
+  group-configs:
+    - group: default
+      paths-to-match: /**
+      packages-to-scan: com.yu.mboocode

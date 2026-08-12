@@ -1,0 +1,484 @@
+.trace,
+.item {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #e1e1dc;
+  border-radius: 8px;
+  background: #fff;
+  color: #080807;
+}
+
+.progressLine {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  height: 2px;
+  pointer-events: none;
+  background: #e6e6e6;
+  transform-origin: left center;
+}
+
+.item[data-status="waiting_approval"] .progressLine,
+.item[data-status="submitting"] .progressLine {
+  background: #f2984a;
+  transform: scaleX(0.28);
+}
+
+.item[data-status="started"] .progressLine {
+  background: #996af1;
+  animation: tool-progress-flow 1.4s ease-in-out infinite;
+}
+
+.item[data-status="completed"] .progressLine {
+  background: #1e9e7c;
+  transform: scaleX(1);
+  /* 工具成功后让满线短暂确认，再淡出，避免完成态一直抢视觉焦点。 */
+  animation: tool-progress-complete-fade 560ms ease-out 180ms both;
+}
+
+.item[data-status="failed"] .progressLine {
+  background: #eb5656;
+  transform: scaleX(1);
+}
+
+.completionImpact {
+  animation: tool-completion-impact 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 完成扫光叠在卡片内部，不占空间；它只强调状态已经落定。 */
+.completionSweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -28%;
+  z-index: 2;
+  width: 18%;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgb(30 158 124 / 34%), transparent);
+  transform: skewX(-18deg);
+  animation: tool-completion-sweep 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.trace {
+  margin: 0;
+  transform-origin: top center;
+  animation: tool-trace-arrive 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.trigger,
+.itemTrigger {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  background: #f2f2f2;
+  color: #575547;
+  text-align: left;
+  cursor: pointer;
+}
+
+.itemTrigger {
+  padding-block: 6px;
+}
+
+.trigger:hover,
+.itemTrigger:hover {
+  background: #f4f4f5;
+}
+
+.trigger:focus-visible,
+.itemTrigger:focus-visible,
+.iconButton:focus-visible,
+.copyButton:focus-visible {
+  outline: 2px solid #5c15e0;
+  outline-offset: -2px;
+}
+
+.chevron,
+.traceIcon,
+.loadingIcon,
+.retryIcon,
+.copyIcon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.loadingIcon {
+  animation: trace-spin 900ms linear infinite;
+}
+
+.summary,
+.itemTitle,
+.path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary {
+  min-width: 0;
+  flex: 1;
+  color: #080807;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.waitingBadge,
+.status {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.waitingBadge,
+.statusWaiting,
+.statusSubmitting,
+.statusStarted {
+  background: rgb(242 152 74 / 12%);
+  color: #f2984a;
+}
+
+.statusCompleted {
+  background: rgb(87 219 180 / 16%);
+  color: #1e9e7c;
+}
+
+.statusFailed {
+  background: rgb(235 86 86 / 10%);
+  color: #eb5656;
+}
+
+.count,
+.duration,
+.toolName,
+.loadingText,
+.unavailable,
+.errorCode,
+.approvalNote {
+  flex: 0 0 auto;
+  color: #8b8b86;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.duration {
+  /* 固定耗时列，避免结果返回后数字出现/变化推动工具状态和路径横向跳动。 */
+  width: 50px;
+  min-width: 50px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count,
+.duration,
+.toolName,
+.errorCode {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.traceBody,
+.itemBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px;
+  border-top: 1px solid #e6e6e6;
+  background: #fff;
+}
+
+.itemBody {
+  padding: 8px;
+}
+
+.itemList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.itemTitle {
+  flex: 0 0 auto;
+  color: #080807;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.path {
+  min-width: 0;
+  flex: 1;
+  color: #8b8b86;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+.spacer {
+  min-width: 0;
+  flex: 1;
+}
+
+.resultLoading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #8b8b86;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.resultError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #f3cccc;
+  border-radius: 6px;
+  background: #fff6f6;
+}
+
+.errorText {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #bc4a4a;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.iconButton {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #e1e1dc;
+  border-radius: 6px;
+  background: #fff;
+  color: #575547;
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  background: #f4f4f5;
+}
+
+.detailError {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detailError p,
+.approvalNote {
+  margin: 0;
+}
+
+.detailErrorMessage {
+  overflow-wrap: anywhere;
+  color: #bc4a4a;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.approvalNote {
+  color: #5c15e0;
+  line-height: 20px;
+}
+
+.copyable,
+.diff {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #e1e1dc;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.copyButton {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid #e1e1dc;
+  border-radius: 5px;
+  background: #fff;
+  color: #8b8b86;
+  font-size: 11px;
+  line-height: 14px;
+  cursor: pointer;
+}
+
+.copyButton:hover {
+  color: #35352c;
+  background: #f4f4f5;
+}
+
+.code {
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 48px 8px 8px;
+  color: #35352c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: #d2d2d2 transparent;
+}
+
+.diffCode {
+  max-height: 224px;
+  overflow: auto;
+  padding: 8px 48px 8px 0;
+  color: #35352c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 20px;
+  scrollbar-width: thin;
+  scrollbar-color: #d2d2d2 transparent;
+}
+
+.diffLine {
+  min-width: max-content;
+  padding-inline: 8px;
+  white-space: pre;
+}
+
+.diffMeta {
+  background: #f0edff;
+  color: #5c15e0;
+}
+
+.diffAdded {
+  background: #ecf8ec;
+  color: #278c42;
+}
+
+.diffRemoved {
+  background: #fff0f0;
+  color: #bc4a4a;
+}
+
+@keyframes tool-completion-impact {
+  0% {
+    box-shadow: 0 0 0 0 rgb(30 158 124 / 0%);
+    transform: scale(1);
+  }
+
+  28% {
+    box-shadow: 0 0 0 3px rgb(30 158 124 / 18%);
+    transform: scale(0.995);
+  }
+
+  100% {
+    box-shadow: 0 0 0 8px rgb(30 158 124 / 0%);
+    transform: scale(1);
+  }
+}
+
+@keyframes tool-completion-sweep {
+  from {
+    opacity: 0;
+    transform: translateX(0) skewX(-18deg);
+  }
+
+  18% {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(720%) skewX(-18deg);
+  }
+}
+
+@keyframes trace-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes tool-trace-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes tool-progress-flow {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scaleX(0.22);
+  }
+
+  50% {
+    opacity: 0.95;
+    transform: scaleX(0.82);
+  }
+}
+
+@keyframes tool-progress-complete-fade {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace,
+  .loadingIcon,
+  .progressLine,
+  .completionImpact,
+  .completionSweep {
+    animation: none;
+  }
+
+  .item[data-status="started"] .progressLine {
+    opacity: 0.8;
+    transform: scaleX(0.68);
+  }
+
+  .item[data-status="completed"] .progressLine {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@media (max-width: 599px) {
+  .trigger,
+  .itemTrigger {
+    min-height: 44px;
+  }
+
+  .itemTrigger {
+    padding-block: 8px;
+  }
+}

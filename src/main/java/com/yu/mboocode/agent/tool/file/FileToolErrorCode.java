@@ -1,0 +1,30 @@
+package com.yu.mboocode.agent.tool.file;
+
+import com.yu.mboocode.agent.tool.ToolErrorCode;
+
+public enum FileToolErrorCode implements ToolErrorCode {
+    PATH_NOT_REGULAR_FILE,
+    PATH_IGNORED,
+    GIT_INTERNAL_WRITE_DENIED,
+    FILE_TOO_LARGE,
+    BINARY_FILE,
+    UNSUPPORTED_ENCODING,
+    INVALID_GLOB,
+    INVALID_REGEX,
+    RG_NOT_FOUND,
+    DEPENDENCY_VERSION_UNSUPPORTED,
+    RG_TIMEOUT,
+    RG_EXECUTION_FAILED,
+    EDIT_TEXT_NOT_FOUND,
+    EDIT_TEXT_NOT_UNIQUE,
+    FILE_CHANGED,
+    ATOMIC_REPLACE_UNSUPPORTED,
+    FILE_READ_FAILED,
+    FILE_WRITE_FAILED,
+    FILE_TOOL_ERROR;
+
+    @Override
+    public String getCode() {
+        return name();
+    }
+}

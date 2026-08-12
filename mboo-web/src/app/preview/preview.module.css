@@ -1,0 +1,35 @@
+.root,
+.root *,
+.root *::before,
+.root *::after {
+  box-sizing: border-box;
+}
+
+/* 预览页严格复用 MasterGo D2C 的 Inter 字体环境；中文再按原型顺序回退。 */
+.root,
+.root button,
+.root input,
+.root textarea,
+.root select {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+}
+
+/* 原型中的文字控件不使用浏览器默认按钮字体和默认字号。 */
+.root button,
+.root input,
+.root textarea,
+.root select {
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+
+.root {
+  font-size: 16px;
+  font-weight: 400;
+  line-height: normal;
+  letter-spacing: normal;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}

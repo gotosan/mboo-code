@@ -1,0 +1,1078 @@
+@import "tailwindcss";
+/* qq2007 high-fidelity · based on codedrobe theme 1.1.57 */
+
+/*
+  函数级意图：把主题包的窗口/侧栏/输入器/滚动条材质翻译为项目自有 qq-* 类。
+  设计决策：不注入 Codex 原选择器，避免 DOM 耦合；只提取颜色、尺寸与伪元素规则。
+*/
+:root {
+  color-scheme: light;
+  --canvas: #eff9ff;
+  --canvas-deep: #c5e7fa;
+  --panel: #f3faff;
+  --panel-elevated: #ffffff;
+  --panel-muted: #dff2ff;
+  --line: #75add4;
+  --line-strong: #3b88c2;
+  --text-1: #153656;
+  --text-2: #365f83;
+  --text-3: #5c7892;
+  --accent: #087fd1;
+  --accent-strong: #0069b8;
+  --accent-soft: #dff2ff;
+  --accent-fg: #ffffff;
+  --running: #d66b13;
+  --running-soft: #fff4dc;
+  --danger: #c93220;
+  --danger-soft: #fff0ed;
+  --ok: #27862e;
+  --ok-soft: #eef9ec;
+  --focus: #ffb12b;
+  --qq-blue-900: #124f89;
+  --qq-blue-700: #087fd1;
+  --qq-blue-500: #35a9ef;
+  --qq-blue-300: #8ed1f7;
+  --qq-blue-100: #dff2ff;
+  --qq-blue-050: #f3faff;
+  --qq-shadow: rgba(22, 89, 139, 0.2);
+  --qq-titlebar-height: 46px;
+  --qq-profile-height: 52px;
+  --panel-shadow: 0 1px 0 rgb(255 255 255 / 0.75), 0 2px 6px rgb(18 79 137 / 0.14);
+  --dock-shadow: 0 2px 8px rgb(18 79 137 / 0.16);
+  --radius-sm: 3px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --qq-titlebar:
+    linear-gradient(
+      180deg,
+      #003b91 0%,
+      #0047ad 4%,
+      #075fca 13%,
+      #0d76df 30%,
+      #188cf0 49%,
+      #1385ea 60%,
+      #0a70d7 76%,
+      #045bbb 90%,
+      #00479e 97%,
+      #75aae5 100%
+    );
+  --qq-window: linear-gradient(180deg, #71bdff 0%, #2b91f2 48%, #0866cc 52%, #0b56b2 100%);
+  --qq-window-close: linear-gradient(180deg, #ff9675 0%, #f15e38 46%, #d63618 52%, #aa210e 100%);
+  --qq-selected: linear-gradient(180deg, #f5fbff 0%, #ccecff 43%, #9fd3f3 100%);
+  --qq-sidebar-bg: linear-gradient(90deg, #f8fcff 0%, #eaf6ff 72%, #d7efff 100%);
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-canvas-deep: var(--canvas-deep);
+  --color-panel: var(--panel);
+  --color-panel-elevated: var(--panel-elevated);
+  --color-panel-muted: var(--panel-muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-text-1: var(--text-1);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-running: var(--running);
+  --color-running-soft: var(--running-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-focus: var(--focus);
+  --shadow-panel: var(--panel-shadow);
+  --shadow-dock: var(--dock-shadow);
+  /* 设计决策：UI 走雅黑/苹方，贴近 QQ 2007 中文观感；mono 仅路径/代码 */
+  --font-sans: "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑", "PingFang SC",
+    "Hiragino Sans GB", "Noto Sans SC", "Segoe UI", sans-serif;
+  --font-mono: var(--font-code), ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+}
+
+@utility console-scroll {
+  scrollbar-width: auto;
+  scrollbar-color: #75b9e7 #eaf6ff;
+}
+
+@layer base {
+  * {
+    @apply box-border;
+  }
+
+  html,
+  body {
+    @apply h-full;
+  }
+
+  body {
+    margin: 0;
+    /* 主题包整窗分段色带 */
+    background:
+      linear-gradient(180deg, #2aa9f5 0 3px, #e9f6ff 3px 36px, #c9e9ff 36px 37px, #eff9ff 37px 100%);
+    color: var(--text-1);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 22%, transparent);
+    color: var(--text-1);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+}
+
+/* 消息列表已改为普通滚动；保持 visible，避免滚动时跳绘 */
+.message-item {
+  content-visibility: visible;
+  contain: none;
+}
+
+.session-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+  contain: content;
+}
+
+.qq-region {
+  contain: layout paint style;
+}
+
+.qq-avatar {
+  display: block;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: var(--panel-elevated);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.qq-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.qq-icon-search {
+  width: 16px;
+  height: 16px;
+  background-image: url("/qq2007/sidebar-search.png");
+  background-size: 30px 30px;
+}
+
+.qq-icon-new-task {
+  width: 16px;
+  height: 16px;
+  background-image: url("/qq2007/sidebar-new-task.png");
+  background-size: 30px 30px;
+}
+
+.qq-icon-refresh {
+  width: 16px;
+  height: 16px;
+  background-image: url("/qq2007/sidebar-scheduled.png");
+  background-size: 30px 30px;
+}
+
+.qq-icon-archive {
+  width: 16px;
+  height: 16px;
+  background-image: url("/qq2007/sidebar-pull-request.png");
+  background-size: 30px 30px;
+}
+
+.qq-icon-folder {
+  width: 16px;
+  height: 16px;
+  background-image: url("/qq2007/sidebar-project-folder.png");
+  background-size: 30px 30px;
+}
+
+.qq-icon-sites {
+  width: 16px;
+  height: 16px;
+  background-image: url("/qq2007/sidebar-sites.png");
+  background-size: 30px 30px;
+}
+
+.qq-icon-plugins {
+  width: 16px;
+  height: 16px;
+  background-image: url("/qq2007/sidebar-plugins.png");
+  background-size: 30px 30px;
+}
+
+textarea {
+  font-size: 16px;
+}
+
+@media (min-width: 640px) {
+  textarea {
+    font-size: inherit;
+  }
+}
+
+/* 整窗外壳：宽度与原型画板由 workbench-layout.module.css 统一控制 */
+.qq-shell {
+  border: 0;
+  background: #fff;
+}
+
+/* 设计决策：顶栏时代感保留，但非功能项必须“看起来也不能点” */
+.qq-chrome-deco {
+  border-radius: 3px;
+  color: rgb(244 251 255 / 0.55);
+  opacity: 0.72;
+  text-shadow: 0 1px 1px rgba(0, 35, 105, 0.35);
+  pointer-events: none;
+  user-select: none;
+  cursor: default;
+}
+
+.qq-chrome-deco-label {
+  letter-spacing: 0.02em;
+}
+
+/* 像素窗口按钮：不用 Lucide 线性图标 */
+.qq-window-button,
+.qq-window-close {
+  position: relative;
+  width: 32px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: transparent;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.qq-window-button {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 26%) 4px 2px / 24px 24px no-repeat,
+    var(--qq-window) 4px 2px / 24px 24px no-repeat,
+    linear-gradient(180deg, #cbe9ff, #4d8bd0) 3px 1px / 26px 26px no-repeat;
+  filter: drop-shadow(0 1px 0 rgba(0, 38, 105, 0.65));
+}
+
+.qq-window-close {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0) 24%) 4px 2px / 24px 24px no-repeat,
+    var(--qq-window-close) 4px 2px / 24px 24px no-repeat,
+    linear-gradient(180deg, #ffd3c7, #b9361e) 3px 1px / 26px 26px no-repeat;
+  filter: drop-shadow(0 1px 0 rgba(0, 38, 105, 0.65));
+}
+
+.qq-window-button::before,
+.qq-window-button::after,
+.qq-window-close::before,
+.qq-window-close::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+/* 最小化：横线 */
+.qq-window-button[data-action="minimize"]::before {
+  left: 10px;
+  top: 16px;
+  width: 12px;
+  height: 2px;
+  background: #fff;
+}
+
+/* 最大化：方框 */
+.qq-window-button[data-action="maximize"]::before {
+  left: 10px;
+  top: 7px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  background: transparent;
+}
+
+/* 关闭：交叉 */
+.qq-window-close::before,
+.qq-window-close::after {
+  left: 15px;
+  top: 6px;
+  width: 2px;
+  height: 14px;
+  background: #fff;
+}
+
+.qq-window-close::before {
+  transform: rotate(45deg);
+}
+
+.qq-window-close::after {
+  transform: rotate(-45deg);
+}
+
+.qq-window-button:hover,
+.qq-window-close:hover {
+  filter: brightness(1.06) drop-shadow(0 1px 0 rgba(0, 38, 105, 0.65));
+}
+
+.qq-window-button:active,
+.qq-window-close:active {
+  transform: translateY(1px);
+}
+
+.qq-window-button:focus-visible,
+.qq-window-close:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 左栏 */
+.qq-sidebar {
+  position: relative;
+  contain: layout paint style;
+  background: var(--qq-sidebar-bg);
+  border-right: 1px solid var(--line-strong);
+  box-shadow: inset -1px 0 #fff;
+  color: var(--text-1);
+}
+
+.qq-profile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: var(--qq-profile-height);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #87b9dc;
+  background: linear-gradient(180deg, #fbfeff, #d8efff);
+}
+
+.qq-profile-avatar {
+  width: 44px;
+  height: 44px;
+  border: 1px solid #6ea8d2;
+  border-radius: 3px;
+  background: #fff;
+  object-fit: cover;
+  box-shadow: inset 0 0 0 1px #fff, 0 1px 2px rgba(18, 79, 137, 0.18);
+}
+
+.qq-profile-name {
+  color: #153656;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+.qq-profile-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #174e77;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.qq-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.45);
+}
+
+.qq-status-dot-online {
+  background:
+    linear-gradient(45deg, transparent 42%, #fff 43% 62%, transparent 63%) 3px 7px / 4px 7px no-repeat,
+    linear-gradient(-45deg, transparent 42%, #fff 43% 62%, transparent 63%) 6px 5px / 7px 4px no-repeat,
+    radial-gradient(circle, #72d340 0 5px, #2c9b13 5.5px 6.5px, transparent 7px) center / 14px 14px no-repeat;
+  width: 14px;
+  height: 14px;
+  box-shadow: none;
+}
+
+.qq-search-field {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid #5f9fd0;
+  border-radius: 4px;
+  background: #fff;
+  color: #52758f;
+  box-shadow: inset 0 1px 2px rgba(30, 88, 130, 0.13);
+}
+
+.qq-search-field:focus-within {
+  border-color: #267fc0;
+  background: linear-gradient(180deg, #fff, #eef9ff);
+  outline: 1px solid rgba(38, 127, 192, 0.28);
+  outline-offset: 1px;
+}
+
+.qq-panel-header {
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: linear-gradient(180deg, #eef8ff 0%, #cfefff 100%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.9);
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 会话选中：多层 inset/高光/底阴影 */
+.qq-selected-row {
+  border: 1px solid #378dca;
+  background: var(--qq-selected);
+  box-shadow:
+    inset 0 0 0 1px #378dca,
+    inset 0 1px 0 #fff,
+    inset 1px 0 0 rgba(255, 255, 255, 0.68),
+    inset 0 -1px 0 #63a7d5,
+    0 1px 2px rgba(27, 98, 150, 0.24);
+  color: #075fae;
+  text-shadow: 0 1px rgba(255, 255, 255, 0.82);
+}
+
+.qq-session-row {
+  border: 1px solid transparent;
+  border-radius: 3px;
+  transition: background 0.12s linear, border-color 0.12s linear, box-shadow 0.12s linear;
+}
+
+.qq-session-row:hover {
+  background: linear-gradient(180deg, #fff 0%, #e8f7ff 44%, #c2e6fb 100%);
+  box-shadow:
+    inset 0 0 0 1px #78b5dc,
+    inset 0 1px 0 #fff,
+    inset 0 -1px 0 rgba(80, 151, 199, 0.42),
+    0 1px 2px rgba(45, 116, 164, 0.16);
+}
+
+.qq-group-header {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: #3a7fab;
+  font-size: 12px;
+  font-weight: 600;
+  text-shadow: 0 1px rgba(255, 255, 255, 0.86);
+}
+
+.qq-group-header:hover {
+  color: #075fae;
+  background: color-mix(in oklab, var(--panel-muted) 70%, white);
+}
+
+/* 输入器基础结构已迁移至 mboo-office-light.css，此处不再保留同名旧 QQ 规则 */
+
+.qq-search-field:focus-within {
+  border-color: var(--focus);
+  box-shadow:
+    inset 0 1px 2px rgb(18 79 137 / 0.08),
+    0 0 0 1px color-mix(in oklab, var(--focus) 55%, transparent);
+}
+
+/* 经典 15px 滚动条 */
+.qq-scrollbar,
+.console-scroll {
+  scrollbar-width: auto;
+  scrollbar-color: #75b9e7 #eaf6ff;
+}
+
+.qq-scrollbar::-webkit-scrollbar,
+.console-scroll::-webkit-scrollbar {
+  width: 15px;
+  height: 15px;
+}
+
+.qq-scrollbar::-webkit-scrollbar-track,
+.console-scroll::-webkit-scrollbar-track {
+  border-left: 1px solid #9ac7e6;
+  border-right: 1px solid #d9effd;
+  background:
+    repeating-linear-gradient(135deg, rgba(125, 183, 222, 0.16) 0 1px, transparent 1px 3px),
+    linear-gradient(90deg, #f8fdff, #e0f2fd 55%, #f8fdff);
+  box-shadow: inset 1px 0 #fff, inset -1px 0 #bad9ef;
+}
+
+.qq-scrollbar::-webkit-scrollbar-thumb,
+.console-scroll::-webkit-scrollbar-thumb {
+  min-height: 34px;
+  border: 1px solid #5b9dce;
+  border-radius: 2px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.85), transparent 24%, transparent 72%, rgba(50, 129, 185, 0.24)),
+    linear-gradient(90deg, #bfe6fb, #78bee9 48%, #9bd3f3);
+  box-shadow: inset 0 1px #eaffff, inset 1px 0 #dff5ff, inset -1px 0 #569ccd;
+}
+
+.qq-scrollbar::-webkit-scrollbar-thumb:hover,
+.console-scroll::-webkit-scrollbar-thumb:hover {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.92), transparent 24%, transparent 72%, rgba(39, 112, 171, 0.28)),
+    linear-gradient(90deg, #d1efff, #83caf2 48%, #a7dcf8);
+}
+
+.qq-scrollbar::-webkit-scrollbar-button:single-button,
+.console-scroll::-webkit-scrollbar-button:single-button {
+  display: block;
+  width: 15px;
+  height: 15px;
+  border: 1px solid #69a8d3;
+  box-shadow: inset 1px 1px #fff, inset -1px -1px #a7cee7;
+}
+
+.qq-scrollbar::-webkit-scrollbar-button:single-button:vertical:decrement,
+.console-scroll::-webkit-scrollbar-button:single-button:vertical:decrement {
+  background:
+    linear-gradient(135deg, transparent 45%, #3579aa 46% 62%, transparent 63%) 3px 5px / 5px 6px no-repeat,
+    linear-gradient(45deg, transparent 45%, #3579aa 46% 62%, transparent 63%) 7px 5px / 5px 6px no-repeat,
+    linear-gradient(180deg, #f9fdff, #cce9fa);
+}
+
+.qq-scrollbar::-webkit-scrollbar-button:single-button:vertical:increment,
+.console-scroll::-webkit-scrollbar-button:single-button:vertical:increment {
+  background:
+    linear-gradient(45deg, transparent 45%, #3579aa 46% 62%, transparent 63%) 3px 4px / 5px 6px no-repeat,
+    linear-gradient(135deg, transparent 45%, #3579aa 46% 62%, transparent 63%) 7px 4px / 5px 6px no-repeat,
+    linear-gradient(180deg, #f9fdff, #cce9fa);
+}
+
+.qq-scrollbar::-webkit-scrollbar-corner,
+.console-scroll::-webkit-scrollbar-corner {
+  border: 1px solid #8bbbdc;
+  background: #dff1fc;
+}
+
+/* 响应式断点对齐主题包 720 / 900 / 1180（内容驱动，而非设备名） */
+@media (max-width: 900px) {
+  /* 平板/窄桌面：侧栏未常驻前，会话行操作保持可点，不依赖 hover */
+  .session-row-actions {
+    display: flex !important;
+  }
+}
+
+@media (max-width: 719px) {
+  /* 设计决策：手机优先拇指区与单列任务，标题栏只保留必要动作 */
+  .qq-shell {
+    border-radius: 0;
+    /* 贴合刘海/底部指示条；依赖 viewport-fit=cover */
+    padding-top: env(safe-area-inset-top);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .qq-profile {
+    min-height: 56px;
+    padding: 0.55rem 0.65rem;
+  }
+
+  .qq-profile-avatar {
+    width: 40px;
+    height: 40px;
+  }
+
+  .qq-search-field {
+    min-height: 40px;
+  }
+
+}
+
+/* 触控主设备：不依赖 hover 的会话操作与更稳的按下反馈 */
+@media (hover: none) {
+  .session-row-actions {
+    display: flex !important;
+  }
+
+  .qq-session-row:hover {
+    filter: none;
+  }
+}
+
+/* 矮视口（手机横屏/分屏）：压缩装饰与输入器，把高度留给消息阅读 */
+@media (max-height: 520px) {
+  /* 输入器矮视口规则已迁移至 mboo-office-light.css */
+}
+
+@media (max-height: 520px) and (orientation: landscape) {
+  .qq-profile {
+    display: none;
+  }
+
+  .qq-shell {
+    border-radius: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .motion-safe\:animate-spin,
+  .motion-safe\:animate-pulse {
+    animation: none !important;
+  }
+
+  .qq-window-button,
+  .qq-window-close,
+  .qq-session-row {
+    transition: none;
+  }
+
+  .qq-window-button:active,
+  .qq-window-close:active {
+    transform: none;
+  }
+}
+
+
+
+/* 助手消息 MarkStream：QQ2007 文档流 + 主题硬隔离 + 可操作代码块 */
+.mboo-markdown {
+  position: relative;
+  color: var(--text-1);
+  font-size: 15px;
+  line-height: 1.75;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.mboo-markdown .markstream-react {
+  color: inherit !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+  background: transparent !important;
+}
+
+.mboo-markdown .markstream-react > *:first-child {
+  margin-top: 0 !important;
+}
+
+.mboo-markdown .markstream-react > *:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* 压住库 utility 皮肤：只保留我们的 QQ token 表面 */
+.mboo-markdown .markstream-react [class*="bg-"],
+.mboo-markdown .markstream-react [class*="dark:"],
+.mboo-markdown .markstream-react [class*="gray-"],
+.mboo-markdown .markstream-react [class*="slate-"],
+.mboo-markdown .markstream-react [class*="zinc-"],
+.mboo-markdown .markstream-react [class*="neutral-"],
+.mboo-markdown .markstream-react [class*="vscode"],
+.mboo-markdown .markstream-react [class*="rounded-"],
+.mboo-markdown .markstream-react [class*="shadow"] {
+  color: inherit;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  border-radius: var(--radius-sm) !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.mboo-markdown h1,
+.mboo-markdown h2,
+.mboo-markdown h3,
+.mboo-markdown h4,
+.mboo-markdown h5,
+.mboo-markdown h6 {
+  color: var(--text-1);
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0;
+  margin: 1.05em 0 0.28em;
+}
+
+.mboo-markdown h1 {
+  font-size: 1.42em;
+  padding-bottom: 0.18em;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 70%, white);
+}
+
+.mboo-markdown h2 {
+  font-size: 1.24em;
+  color: var(--qq-blue-900);
+}
+
+.mboo-markdown h3 {
+  font-size: 1.12em;
+}
+
+.mboo-markdown h4,
+.mboo-markdown h5,
+.mboo-markdown h6 {
+  font-size: 1.02em;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.mboo-markdown p {
+  margin: 0.42em 0;
+}
+
+.mboo-markdown ul,
+.mboo-markdown ol {
+  margin: 0.42em 0;
+  padding-left: 1.4em;
+}
+
+.mboo-markdown li + li {
+  margin-top: 0.18em;
+}
+
+.mboo-markdown li > ul,
+.mboo-markdown li > ol {
+  margin-top: 0.18em;
+  margin-bottom: 0.18em;
+}
+
+.mboo-markdown a,
+.mboo-markdown .mboo-md-link {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mboo-markdown a:hover,
+.mboo-markdown .mboo-md-link:hover {
+  color: var(--accent);
+}
+
+.mboo-markdown a:focus-visible,
+.mboo-markdown .mboo-md-link:focus-visible,
+.mboo-markdown .mboo-md-copy:focus-visible,
+.mboo-markdown .mboo-md-inline-code:focus-visible,
+.mboo-markdown .mboo-md-table-scroll:focus-visible,
+.mboo-markdown pre:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.mboo-markdown .mboo-md-link.is-external {
+  text-decoration-style: dashed;
+}
+
+.mboo-markdown .mboo-md-link__mark {
+  margin-left: 0.15em;
+  color: var(--text-3);
+  font-size: 0.85em;
+}
+
+.mboo-markdown blockquote {
+  margin: 0.7em 0;
+  padding: 0.45em 0.8em;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--panel-muted) 78%, white);
+  color: var(--text-2);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.7);
+}
+
+.mboo-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1em 0;
+}
+
+.mboo-markdown .mboo-md-table-scroll {
+  max-width: 100%;
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-elevated);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.75);
+}
+
+.mboo-markdown .mboo-md-table-scroll table,
+.mboo-markdown table {
+  display: table;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  background: transparent;
+}
+
+.mboo-markdown thead,
+.mboo-markdown th {
+  background: var(--panel-muted);
+}
+
+.mboo-markdown th,
+.mboo-markdown td {
+  border: 1px solid var(--line);
+  padding: 0.38em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.mboo-markdown th {
+  color: var(--text-1);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mboo-markdown code,
+.mboo-markdown :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 0.08em 0.32em;
+  border: 1px solid color-mix(in oklab, var(--line) 70%, white);
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--panel-muted) 70%, white);
+  color: var(--text-1);
+}
+
+.mboo-markdown .mboo-md-inline-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2em;
+  margin: 0 0.08em;
+  vertical-align: baseline;
+  max-width: 100%;
+}
+
+.mboo-markdown .mboo-md-inline-code code {
+  user-select: text;
+}
+
+.mboo-markdown .mboo-md-inline-code .mboo-md-copy {
+  padding: 0.12rem 0.3rem;
+  font-size: 0.68rem;
+  line-height: 1.1;
+}
+
+.mboo-markdown .mboo-md-codeblock {
+  margin: 0.75em 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #f7fbff;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.75);
+  overflow: hidden;
+}
+
+.mboo-markdown .mboo-md-codeblock__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 28px;
+  padding: 0.2rem 0.45rem 0.2rem 0.55rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 75%, white);
+  background: linear-gradient(180deg, #f8fcff 0%, #e7f4ff 100%);
+}
+
+.mboo-markdown .mboo-md-codeblock__lang {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.mboo-markdown .mboo-md-codeblock__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.mboo-markdown .mboo-md-copy {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: #ffffff;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.28rem 0.45rem;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.75);
+}
+
+.mboo-markdown .mboo-md-copy:hover {
+  color: var(--text-1);
+  border-color: var(--line-strong);
+}
+
+.mboo-markdown .mboo-md-copy:active {
+  transform: translateY(1px);
+}
+
+.mboo-markdown .mboo-md-toggle {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.28rem 0.4rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mboo-markdown .mboo-md-toggle:hover {
+  color: var(--accent);
+  background: color-mix(in oklab, var(--panel-muted) 70%, white);
+  border-color: color-mix(in oklab, var(--line) 55%, white);
+  text-decoration: none;
+}
+
+.mboo-markdown .mboo-md-toggle:active {
+  transform: translateY(1px);
+}
+
+.mboo-markdown .mboo-md-codeblock__more {
+  display: flex;
+  justify-content: center;
+  padding: 0.25rem 0.5rem 0.45rem;
+  border-top: 1px solid color-mix(in oklab, var(--line) 55%, white);
+  background: color-mix(in oklab, var(--panel-muted) 45%, white);
+}
+
+.mboo-markdown .mboo-md-table {
+  margin: 0.75em 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-elevated);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.75);
+  overflow: hidden;
+}
+
+.mboo-markdown .mboo-md-table__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 28px;
+  padding: 0.2rem 0.45rem 0.2rem 0.55rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 75%, white);
+  background: linear-gradient(180deg, #f8fcff 0%, #e7f4ff 100%);
+}
+
+.mboo-markdown .mboo-md-table__label {
+  color: var(--text-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.mboo-markdown .mboo-md-table .mboo-md-table-scroll {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.mboo-markdown .mboo-md-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-muted);
+}
+
+.mboo-markdown .mboo-md-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mboo-markdown .sr-only,
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mboo-markdown .mboo-md-codeblock pre,
+.mboo-markdown pre {
+  margin: 0;
+  padding: 0.7em 0.8em;
+  overflow-x: auto;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-1);
+}
+
+.mboo-markdown .mboo-md-codeblock pre.is-collapsed {
+  max-height: 14.5rem;
+  mask-image: linear-gradient(180deg, #000 70%, transparent 100%);
+}
+
+.mboo-markdown pre code,
+.mboo-markdown .mboo-md-codeblock code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 0.84em;
+  line-height: 1.55;
+  white-space: pre;
+  font-family: var(--font-mono);
+}
+
+.mboo-markdown .mboo-md-stream-caret {
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 0.12em;
+  vertical-align: -0.12em;
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent-strong) 35%, white);
+  animation: mboo-md-caret 1s steps(1, end) infinite;
+}
+
+@keyframes mboo-md-caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mboo-markdown .markstream-react *,
+  .mboo-markdown .mboo-md-stream-caret {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .mboo-markdown .mboo-md-stream-caret {
+    opacity: 1;
+  }
+}
+
+/* polish: 搜索占位符保持可读，避免过浅灰 */
+.qq-search-field input::placeholder {
+  color: #6a849c;
+  opacity: 1;
+}
