@@ -5,7 +5,7 @@ import styles from "./preview.module.css";
 /**
  * MasterGo 3:3160 D2C 高保真静态预览
  *
- * 此路由完全基于确认版 D2C HTML 还原，不使用任何 qq-* 类名，
+ * 此路由完全基于确认版 D2C HTML 还原，不依赖运行时主题类名，
  * 不依赖 globals.css 或 mboo-office-light.css 的选择器。
  * 所有视觉属性通过内联 style 精确还原 MasterGo 导出值。
  */
