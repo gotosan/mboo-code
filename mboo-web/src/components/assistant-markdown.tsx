@@ -295,7 +295,7 @@ function MarkdownActionProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * 设计决策：助手正文是 QQ2007 任务文档流。
+ * 设计决策：助手正文采用 Mboo 任务文档流。
  * 复制只走显式按钮 + 统一 live region；折叠有完整 ARIA；不做静默点 pre 复制。
  */
 const AssistantMarkdown = memo(function AssistantMarkdown({
@@ -324,7 +324,7 @@ const AssistantMarkdown = memo(function AssistantMarkdown({
           content={content}
           customId={customId}
           final={!isStreaming}
-          typewriter={false}
+          typewriter={isStreaming}
           fade={false}
           smoothStreaming={isStreaming ? "auto" : false}
           maxLiveNodes={isStreaming ? 0 : undefined}
@@ -333,12 +333,9 @@ const AssistantMarkdown = memo(function AssistantMarkdown({
           streamingComponents={streamingComponents}
         />
         {isStreaming ? (
-          <>
-            <span className="mboo-md-stream-caret" aria-hidden />
-            <span className="sr-only" role="status">
-              正在生成回复
-            </span>
-          </>
+          <span className="sr-only" role="status">
+            正在生成回复
+          </span>
         ) : null}
       </div>
     </MarkdownActionProvider>
