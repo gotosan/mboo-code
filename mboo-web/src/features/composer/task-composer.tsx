@@ -52,6 +52,10 @@ export type TaskComposerProps = {
   modelOptionsError: string;
   isLoadingModelOptions: boolean;
   modelContextLimit: ModelContextLimit | null;
+  onSaveContextLimit: (value: number) => void;
+  onResetContextLimit: () => void;
+  isSavingContextLimit: boolean;
+  contextLimitError: string;
   reasoningEffort: string;
   reasoningOptions: string[];
   onReasoningChange: (value: string) => void;
@@ -89,6 +93,10 @@ export const TaskComposer = memo(function TaskComposer({
   modelOptionsError,
   isLoadingModelOptions,
   modelContextLimit,
+  onSaveContextLimit,
+  onResetContextLimit,
+  isSavingContextLimit,
+  contextLimitError,
   reasoningEffort,
   reasoningOptions,
   onReasoningChange,
@@ -109,10 +117,15 @@ export const TaskComposer = memo(function TaskComposer({
 }: TaskComposerProps) {
   const [contextOpen, setContextOpen] = useState(false);
   const [contextPopoverPosition, setContextPopoverPosition] = useState({ top: 0, left: 0, ready: false });
+  const [draftLimit, setDraftLimit] = useState<number | null>(null);
   const contextTriggerRef = useRef<HTMLButtonElement>(null);
   const contextPopoverRef = useRef<HTMLDivElement>(null);
   const workspaceLabel = workspaceBasename(workspacePath) || workspaceStatusText;
   const contextLimit = modelContextLimit?.effectiveContextLimit ?? null;
+  const minimumLimit = modelContextLimit?.minimumContextLimit ?? null;
+  const maximumLimit = modelContextLimit?.maximumContextLimit ?? null;
+  const configuredLimit = modelContextLimit?.configuredContextLimit ?? null;
+  const isContextLimitAdjustable = modelContextLimit?.adjustable ?? false;
   const totalTokens = contextUsage?.totalTokens ?? null;
   const usagePercentValue = contextLimit && totalTokens !== null
     ? Math.min(100, Math.max(0, Math.round((totalTokens / contextLimit) * 100)))
@@ -163,6 +176,13 @@ export const TaskComposer = memo(function TaskComposer({
       window.removeEventListener("scroll", updateContextPopoverPosition, true);
     };
   }, [contextOpen]);
+
+  // 打开面板时用生效值初始化草稿；模型切换或保存成功后自动同步；关闭面板丢弃未保存草稿。
+  useEffect(() => {
+    if (contextOpen) {
+      setDraftLimit(modelContextLimit?.effectiveContextLimit ?? null);
+    }
+  }, [contextOpen, modelContextLimit]);
 
   const controlsDisabled = isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace;
 
@@ -326,8 +346,59 @@ export const TaskComposer = memo(function TaskComposer({
                     <dl className={styles.contextDetails}>
                       <div><dt>当前输入</dt><dd>{contextUsage?.inputTokens != null ? formatTokenCount(contextUsage.inputTokens) : "—"}</dd></div>
                       <div><dt>上下文消息</dt><dd>{contextMessageTokens !== null ? formatTokenCount(contextMessageTokens) : "—"}</dd></div>
-                      <div><dt>模型上限</dt><dd>{contextLimit !== null ? formatTokenCount(contextLimit) : "—"}</dd></div>
+                      <div><dt>模型能力上限</dt><dd>{maximumLimit !== null ? formatTokenCount(maximumLimit) : "—"}</dd></div>
                     </dl>
+                    {modelContextLimit ? (
+                      <div className={styles.contextLimitAdjuster}>
+                        <div className={styles.contextLimitAdjusterHeader}>
+                          <span className={styles.contextLimitAdjusterLabel}>上下文上限</span>
+                          <span className={styles.contextLimitAdjusterValue}>
+                            {configuredLimit != null ? <span className={styles.contextLimitCustomBadge}>已自定义</span> : null}
+                            <span className={styles.contextLimitDraftValue}>{formatTokenCount(draftLimit ?? contextLimit ?? 0)}</span>
+                          </span>
+                        </div>
+                        {isContextLimitAdjustable ? (
+                          <>
+                            <input
+                              className={styles.contextLimitSlider}
+                              type="range"
+                              min={minimumLimit ?? 0}
+                              max={maximumLimit ?? 0}
+                              step={1000}
+                              value={draftLimit ?? contextLimit ?? minimumLimit ?? 0}
+                              disabled={controlsDisabled || isSavingContextLimit}
+                              aria-label="调整上下文上限"
+                              onChange={(event) => setDraftLimit(Number(event.target.value))}
+                            />
+                            <div className={styles.contextLimitScale} aria-hidden>
+                              <span>{formatTokenCount(minimumLimit ?? 0)}</span>
+                              <span>{formatTokenCount(maximumLimit ?? 0)}</span>
+                            </div>
+                          </>
+                        ) : (
+                          <span className={styles.contextLimitReadonly}>该模型上下文上限固定为 {formatTokenCount(maximumLimit ?? 0)}，不可调节</span>
+                        )}
+                        <div className={styles.contextLimitActions}>
+                          {configuredLimit != null ? (
+                            <button
+                              className={styles.contextLimitResetButton}
+                              type="button"
+                              disabled={controlsDisabled || isSavingContextLimit}
+                              onClick={onResetContextLimit}
+                            >恢复默认</button>
+                          ) : null}
+                          {isContextLimitAdjustable ? (
+                            <button
+                              className={styles.contextLimitSaveButton}
+                              type="button"
+                              disabled={controlsDisabled || isSavingContextLimit || draftLimit === contextLimit}
+                              onClick={() => onSaveContextLimit(draftLimit ?? contextLimit ?? 0)}
+                            >{isSavingContextLimit ? "保存中…" : "保存"}</button>
+                          ) : null}
+                        </div>
+                        {contextLimitError ? <span className={styles.contextLimitError} role="alert">{contextLimitError}</span> : null}
+                      </div>
+                    ) : null}
                     <div className={styles.contextPopoverActions}>
                       <span className={`${styles.compactionState} ${compressionState === "failed" ? styles.compactionStateError : ""}`} role="status">
                         {isCompressing ? "压缩中…" : compressionMessage || "自动压缩：系统处理"}
