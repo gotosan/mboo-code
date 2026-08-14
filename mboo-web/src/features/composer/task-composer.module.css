@@ -677,6 +677,142 @@
   to { transform: rotate(360deg); }
 }
 
+/* 上下文上限可调区块：滑块 + 显式保存 + 恢复默认 */
+.contextLimitAdjuster {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #f2f2f2;
+}
+
+.contextLimitAdjusterHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.contextLimitAdjusterLabel {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  color: #35352c;
+}
+
+.contextLimitAdjusterValue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.contextLimitCustomBadge {
+  font-size: 11px;
+  line-height: 14px;
+  color: #996af1;
+}
+
+.contextLimitDraftValue {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  color: #5c15e0;
+}
+
+.contextLimitSlider {
+  width: 100%;
+  height: 4px;
+  margin: 4px 0;
+  cursor: pointer;
+  accent-color: #996af1;
+}
+
+.contextLimitSlider:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.contextLimitScale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  line-height: 14px;
+  color: #8b8b84;
+}
+
+.contextLimitActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.contextLimitResetButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #d8d3f5;
+  border-radius: 6px;
+  background: #f0edff;
+  color: #5c15e0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.contextLimitResetButton:hover:not(:disabled) {
+  border-color: #996af1;
+  background: #e9e4ff;
+}
+
+.contextLimitSaveButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid #5c15e0;
+  border-radius: 6px;
+  background: #5c15e0;
+  color: #ffffff;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.contextLimitSaveButton:hover:not(:disabled) {
+  background: #4a12b8;
+  border-color: #4a12b8;
+}
+
+.contextLimitResetButton:focus-visible,
+.contextLimitSaveButton:focus-visible {
+  outline: 2px solid #8d71ff;
+  outline-offset: 2px;
+}
+
+.contextLimitResetButton:disabled,
+.contextLimitSaveButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.contextLimitReadonly {
+  font-size: 11px;
+  line-height: 14px;
+  color: #8b8b84;
+}
+
+.contextLimitError {
+  font-size: 11px;
+  line-height: 14px;
+  color: #bc4a4a;
+}
+
 .stopButton {
   border-color: #c9bdf5;
   background: #fff;

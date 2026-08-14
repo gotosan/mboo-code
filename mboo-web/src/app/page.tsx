@@ -181,6 +181,8 @@ export default function Home() {
   const [isManualModel, setIsManualModel] = useState(true);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
   const [modelContextLimit, setModelContextLimit] = useState<ModelContextLimit | null>(null);
+  const [isSavingContextLimit, setIsSavingContextLimit] = useState(false);
+  const [contextLimitError, setContextLimitError] = useState("");
   const [reasoningOptions, setReasoningOptions] = useState<string[]>([]);
   const [contextUsage, setContextUsage] = useState<ContextUsageSnapshot | null>(null);
   const [compressionState, setCompressionState] = useState<ContextCompressionState | null>(null);
@@ -413,6 +415,48 @@ export default function Home() {
       void error;
     }
   }, [permissionMode]);
+
+  const saveContextLimit = useCallback(async (value: number) => {
+    const targetModel = modelName.trim();
+    if (!targetModel) return;
+    setIsSavingContextLimit(true);
+    setContextLimitError("");
+    try {
+      const response = await fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contextLimit: value }),
+      });
+      const updated = await readApiData<ModelContextLimit>(response);
+      if (updated && updated.modelId === targetModel) {
+        setModelContextLimit(updated);
+      }
+    } catch (error) {
+      setContextLimitError(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setIsSavingContextLimit(false);
+    }
+  }, [modelName]);
+
+  const resetContextLimit = useCallback(async () => {
+    const targetModel = modelName.trim();
+    if (!targetModel) return;
+    setIsSavingContextLimit(true);
+    setContextLimitError("");
+    try {
+      const response = await fetch(`/api/model/${encodeURIComponent(targetModel)}/context-limit`, {
+        method: "DELETE",
+      });
+      const updated = await readApiData<ModelContextLimit>(response);
+      if (updated && updated.modelId === targetModel) {
+        setModelContextLimit(updated);
+      }
+    } catch (error) {
+      setContextLimitError(error instanceof Error ? error.message : "恢复默认失败");
+    } finally {
+      setIsSavingContextLimit(false);
+    }
+  }, [modelName]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -2489,6 +2533,10 @@ export default function Home() {
                   modelOptionsError={modelOptionsError}
                   isLoadingModelOptions={isLoadingModelOptions}
                   modelContextLimit={modelContextLimit}
+                  onSaveContextLimit={(value) => void saveContextLimit(value)}
+                  onResetContextLimit={() => void resetContextLimit()}
+                  isSavingContextLimit={isSavingContextLimit}
+                  contextLimitError={contextLimitError}
                   reasoningEffort={reasoningEffort}
                   reasoningOptions={reasoningOptions}
                   onReasoningChange={setReasoningEffort}
