@@ -6,7 +6,7 @@ import type {
 } from "@/lib/session-types";
 
 export type MessageRole = "user" | "assistant" | "system";
-export type MessageState = AssistantMessageState | "streaming" | "info";
+export type MessageState = AssistantMessageState | "info";
 
 export type ToolCallView = {
   id: string;

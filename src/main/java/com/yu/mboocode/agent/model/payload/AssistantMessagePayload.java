@@ -35,6 +35,7 @@ public class AssistantMessagePayload implements SessionEventPayload {
     @AllArgsConstructor
     @Getter
     public enum AssistantMessageState implements CodeEnum {
+        STREAMING("streaming"),
         COMPLETE("complete"),
         CANCEL("cancel"),
         ERROR("error"),

@@ -45,6 +45,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 @Service
@@ -206,6 +207,7 @@ public class TurnService {
 
         String assistantMessageId = IdUtil.getSnowflakeNextIdStr();
         StringBuffer finalText = new StringBuffer();
+        AtomicReference<String> lastAssistantSnapshot = new AtomicReference<>("");
         Flux<@NonNull SessionEvent> assistantMessageFlux = Flux.create(sink -> {
             runtime.configureModelUsage(params.modelName(), currentContextLimit, assistantMessageId, usage -> emitEvent(sink, () -> SessionEvent.builder()
                     .eventId(IdUtil.getSnowflakeNextIdStr())
@@ -279,6 +281,27 @@ public class TurnService {
 //                        }
                     })
                     .onPartialToolCallWithContext((toolCall, context) -> cancelHandle(sink, context.streamingHandle(), runtime)) // tool call
+                    .onIntermediateResponse(_ -> {
+                        String text = finalText.toString();
+                        if (StrUtil.isBlank(text) || text.equals(lastAssistantSnapshot.get())) {
+                            return;
+                        }
+                        emitEvent(sink, () -> sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
+                                .eventId(IdUtil.getSnowflakeNextIdStr())
+                                .sessionId(sessionTurn.sessionId())
+                                .turnId(sessionTurn.turnId())
+                                .type(SessionEventType.ASSISTANT_MESSAGE)
+                                .source(SessionEventSource.ASSISTANT)
+                                .createdAt(DateTimeUtil.now())
+                                .payload(AssistantMessagePayload.builder()
+                                        .messageId(assistantMessageId)
+                                        .state(AssistantMessagePayload.AssistantMessageState.STREAMING)
+                                        .text(text)
+                                        .build())
+                                .meta(Collections.emptyMap())
+                                .build()));
+                        lastAssistantSnapshot.set(text);
+                    })
                     .beforeToolExecution(beforeToolExecution -> { // 工具调用前
                         ToolExecutionRequest request = beforeToolExecution.request();
                         Runnable toolStartedEmitter = () -> emitEvent(sink, () -> sessionEventStore.appendSession(
@@ -334,6 +357,7 @@ public class TurnService {
                         if (!runtime.claimAssistantTerminal(TurnTerminalState.COMPLETE)) {
                             return;
                         }
+                        String text = StrUtil.blankToDefault(finalText.toString(), StrUtil.nullToEmpty(chatResponse.aiMessage().text()));
                         emitEvent(sink, () -> sessionEventStore.appendSession(sessionTurn.transcriptUri(), SessionEvent.builder()
                                 .eventId(IdUtil.getSnowflakeNextIdStr())
                                 .sessionId(sessionTurn.sessionId())
@@ -344,7 +368,7 @@ public class TurnService {
                                 .payload(AssistantMessagePayload.builder()
                                         .messageId(assistantMessageId)
                                         .state(AssistantMessagePayload.AssistantMessageState.COMPLETE)
-                                        .text(chatResponse.aiMessage().text())
+                                        .text(text)
                                         .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
                                         .contextUsage(runtime.getLatestContextUsage())
                                         .build())

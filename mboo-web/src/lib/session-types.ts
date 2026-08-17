@@ -12,7 +12,7 @@ export type SessionEventType =
 
 export type SessionEventSource = "USER" | "ASSISTANT" | "SYSTEM";
 
-export type AssistantMessageState = "complete" | "cancel" | "error";
+export type AssistantMessageState = "streaming" | "complete" | "cancel" | "error";
 
 export type ToolCallStatus = "waiting_approval" | "submitting" | "started" | "completed" | "failed";
 

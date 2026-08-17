@@ -72,7 +72,7 @@ const FILE_TOOL_NAMES = new Set([
 const PENDING_SESSION_KEY = "__pending__";
 
 type MessageRole = "user" | "assistant" | "system";
-type MessageState = AssistantMessageState | "streaming" | "info";
+type MessageState = AssistantMessageState | "info";
 type ConnectionState = "idle" | "running" | "error";
 
 type ToolCallView = {
@@ -1066,13 +1066,13 @@ export default function Home() {
         if (event.payload.contextUsage) {
           rememberContextUsage(targetKey, event.payload.contextUsage);
         }
-        // 完整消息以服务端文本为准；保留已按事件序排好的 tool parts
+        // 完整快照以服务端文本为准；保留已按事件序排好的 tool parts
         const messageId = event.payload.messageId || event.eventId;
         dropPendingAssistantDelta(targetKey, messageId);
         flushPendingAssistantDeltas();
         commitSessionMessages(targetKey, (current) => {
           const index = current.findIndex((item) => item.id === messageId);
-          const finalText = event.payload.text || "";
+          const snapshotText = event.payload.text || "";
           if (index < 0) {
             return [
               ...current,
@@ -1083,7 +1083,7 @@ export default function Home() {
                 state: event.payload.state,
                 turnId: event.turnId,
                 createdAt: event.createdAt,
-                parts: applyFinalAssistantText(undefined, finalText, messageId),
+                parts: applyAssistantSnapshot(undefined, snapshotText, messageId),
               }),
             ];
           }
@@ -1094,7 +1094,7 @@ export default function Home() {
             state: event.payload.state,
             turnId: existing.turnId || event.turnId,
             createdAt: existing.createdAt || event.createdAt,
-            parts: applyFinalAssistantText(existing.parts, finalText, messageId),
+            parts: applyAssistantSnapshot(existing.parts, snapshotText, messageId),
           });
           return next;
         });
@@ -2858,60 +2858,28 @@ function upsertAssistantToolPart(
   return next;
 }
 
-/**
- * 最终 ASSISTANT_MESSAGE：
- * - 已有交错 parts 时保留 tool 位置，不把全文再追加一份
- * - 只有 tool、尚无 text 时，把最终文本接在 tool 后
- * - 完全没有 parts 时，退化为单段 text
- */
-function applyFinalAssistantText(
+/** 完整助手快照：纯文本直接覆盖；工具时间线只追加相对当前文本的新后缀。 */
+function applyAssistantSnapshot(
   parts: AssistantPart[] | undefined,
-  finalText: string,
+  snapshotText: string,
   messageId: string,
 ): AssistantPart[] {
   const current = parts ?? [];
   const hasTool = current.some((part) => part.type === "tool");
-  const hasText = current.some((part) => part.type === "text");
-
-  // 空消息：整段终稿作为唯一 text part
-  if (!hasTool && !hasText) {
-    return finalText
-      ? [
-          {
-            type: "text",
-            id: `text_${messageId}_0`,
-            text: finalText,
-          },
-        ]
+  if (!hasTool) {
+    return snapshotText
+      ? [{ type: "text", id: `text_${messageId}_0`, text: snapshotText }]
       : [];
   }
 
-  // 已有文本时间线（来自 delta）：必须保留 tool/text 交错，不能用终稿重排
-  if (hasText) {
-    if (!hasTool && finalText) {
-      // 纯文本助手消息：终稿覆盖，避免 delta 与终稿微差
-      return [
-        {
-          type: "text",
-          id: `text_${messageId}_0`,
-          text: finalText,
-        },
-      ];
-    }
+  const currentText = assistantPartsToText(current);
+  if (!snapshotText || currentText === snapshotText) {
     return current;
   }
-
-  // 仅有 tool（常见于历史未落 delta）：正文接在工具之后
-  return finalText
-    ? [
-        ...current,
-        {
-          type: "text",
-          id: `text_${messageId}_${current.length}`,
-          text: finalText,
-        },
-      ]
-    : current;
+  if (snapshotText.startsWith(currentText)) {
+    return appendAssistantTextPart(current, snapshotText.slice(currentText.length), messageId);
+  }
+  return current;
 }
 
 function isToolCallEvent(event: SessionEvent): event is ToolCallEvent {
@@ -3086,7 +3054,7 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
 
     if (event.type === "ASSISTANT_MESSAGE") {
       const messageId = event.payload.messageId || event.eventId;
-      const finalText = event.payload.text || "";
+      const snapshotText = event.payload.text || "";
       const index = messages.findIndex((message) => message.id === messageId);
       if (index < 0) {
         messages = upsertMessageSnapshot(
@@ -3098,7 +3066,7 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
             state: event.payload.state,
             turnId: event.turnId,
             createdAt: event.createdAt,
-            parts: applyFinalAssistantText(undefined, finalText, messageId),
+            parts: applyAssistantSnapshot(undefined, snapshotText, messageId),
           }),
         );
       } else {
@@ -3109,7 +3077,7 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
           state: event.payload.state,
           turnId: existing.turnId || event.turnId,
           createdAt: existing.createdAt || event.createdAt,
-          parts: applyFinalAssistantText(existing.parts, finalText, messageId),
+          parts: applyAssistantSnapshot(existing.parts, snapshotText, messageId),
         });
         messages = next;
       }
