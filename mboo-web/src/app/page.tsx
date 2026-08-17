@@ -180,6 +180,8 @@ export default function Home() {
   const [isLoadingModelOptions, setIsLoadingModelOptions] = useState(true);
   const [isManualModel, setIsManualModel] = useState(true);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
+  const [isSavingPermissionMode, setIsSavingPermissionMode] = useState(false);
+  const [permissionModeError, setPermissionModeError] = useState("");
   const [modelContextLimit, setModelContextLimit] = useState<ModelContextLimit | null>(null);
   const [isSavingContextLimit, setIsSavingContextLimit] = useState(false);
   const [contextLimitError, setContextLimitError] = useState("");
@@ -394,12 +396,18 @@ export default function Home() {
   }, [modelName]);
 
   const changePermissionMode = useCallback(async (nextMode: PermissionMode) => {
+    if (nextMode === permissionMode || isSavingPermissionMode) return;
+
     const previousMode = permissionMode;
-    setPermissionMode(nextMode);
     const targetSessionId = currentSessionIdRef.current;
+    setPermissionMode(nextMode);
+    setPermissionModeError("");
+
     if (!targetSessionId) {
       return;
     }
+
+    setIsSavingPermissionMode(true);
     try {
       const response = await fetch(`/api/session/${encodeURIComponent(targetSessionId)}/permission-mode`, {
         method: "PUT",
@@ -412,9 +420,11 @@ export default function Home() {
       }
     } catch (error) {
       setPermissionMode(previousMode);
-      void error;
+      setPermissionModeError(toErrorMessage(error));
+    } finally {
+      setIsSavingPermissionMode(false);
     }
-  }, [permissionMode]);
+  }, [isSavingPermissionMode, permissionMode]);
 
   const saveContextLimit = useCallback(async (value: number) => {
     const targetModel = modelName.trim();
@@ -2542,6 +2552,8 @@ export default function Home() {
                   onReasoningChange={setReasoningEffort}
                   permissionMode={permissionMode}
                   onPermissionModeChange={(mode) => void changePermissionMode(mode)}
+                  isSavingPermissionMode={isSavingPermissionMode}
+                  permissionModeError={permissionModeError}
                   workspacePath={displayedWorkspacePath}
                   workspaceStatusText={workspaceStatusText}
                   canSelectWorkspace={!sessionId && !isSessionSwitching && !isArchivedView}

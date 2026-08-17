@@ -61,6 +61,8 @@ export type TaskComposerProps = {
   onReasoningChange: (value: string) => void;
   permissionMode: PermissionMode;
   onPermissionModeChange: (value: PermissionMode) => void;
+  isSavingPermissionMode: boolean;
+  permissionModeError: string;
   workspacePath: string;
   workspaceStatusText: string;
   canSelectWorkspace: boolean;
@@ -102,6 +104,8 @@ export const TaskComposer = memo(function TaskComposer({
   onReasoningChange,
   permissionMode,
   onPermissionModeChange,
+  isSavingPermissionMode,
+  permissionModeError,
   workspacePath,
   workspaceStatusText,
   canSelectWorkspace,
@@ -185,6 +189,7 @@ export const TaskComposer = memo(function TaskComposer({
   }, [contextOpen, modelContextLimit]);
 
   const controlsDisabled = isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace;
+  const permissionControlsDisabled = isSessionSwitching || isSelectingWorkspace || isSavingPermissionMode;
 
   useEffect(() => {
     if (controlsDisabled) {
@@ -285,19 +290,27 @@ export const TaskComposer = memo(function TaskComposer({
         <div className={styles.statusbar}>
           <span className={styles.statusText}>{workspaceLabel}{modelName.trim() ? ` · ${modelName.trim()}` : ""}</span>
           <div className={styles.statusActions}>
-            <label className={styles.permissionSelect}>
-                  <span className="sr-only">文件访问权限</span>
-                  <select
-                    aria-label="文件访问权限"
-                    disabled={controlsDisabled}
-                    value={permissionMode}
-                    onChange={(event) => onPermissionModeChange(event.target.value as PermissionMode)}
-                  >
-                    <option value="DEFAULT">默认权限</option>
-                    <option value="FULL_ACCESS">文件完全访问</option>
-                  </select>
+            <div className={styles.permissionControl}>
+              <label className={styles.permissionSelect}>
+                <span className="sr-only">工具权限模式</span>
+                <select
+                  aria-label="工具权限模式"
+                  aria-busy={isSavingPermissionMode}
+                  disabled={permissionControlsDisabled}
+                  value={permissionMode}
+                  onChange={(event) => onPermissionModeChange(event.target.value as PermissionMode)}
+                >
+                  <option value="DEFAULT">默认权限</option>
+                  <option value="FULL_ACCESS">完全访问</option>
+                </select>
+                {isSavingPermissionMode ? (
+                  <LoaderCircle className={styles.permissionSelectLoading} aria-label="正在应用权限模式" />
+                ) : (
                   <ChevronDown className={styles.permissionSelectIcon} aria-hidden />
-                </label>
+                )}
+              </label>
+              {permissionModeError ? <span className={styles.permissionError} role="alert">{permissionModeError}</span> : null}
+            </div>
                 <button
                   ref={contextTriggerRef}
                   className={`${styles.contextTrigger} ${contextOpen ? styles.contextTriggerOpen : ""}`}
