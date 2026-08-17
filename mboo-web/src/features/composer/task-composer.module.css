@@ -404,6 +404,13 @@
   gap: 6px;
 }
 
+.permissionControl {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
 .permissionSelect {
   position: relative;
   display: inline-flex;
@@ -446,13 +453,36 @@
   opacity: 0.55;
 }
 
-.permissionSelectIcon {
+.permissionSelectIcon,
+.permissionSelectLoading {
   position: absolute;
   right: 7px;
   width: 12px;
   height: 12px;
   pointer-events: none;
   color: #8b8b84;
+}
+
+.permissionSelectLoading {
+  animation: context-spin 700ms linear infinite;
+  color: #5c15e0;
+}
+
+.permissionError {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 4;
+  width: max-content;
+  max-width: 240px;
+  padding: 5px 7px;
+  border: 1px solid #f3c6c6;
+  border-radius: 5px;
+  background: #fff7f7;
+  color: #b13b3b;
+  font-size: 11px;
+  line-height: 15px;
+  box-shadow: 0 4px 12px rgb(17 24 39 / 10%);
 }
 
 .contextTrigger {
