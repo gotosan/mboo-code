@@ -8,6 +8,7 @@ import com.yu.mboocode.agent.enums.ToolApprovalDecision;
 import com.yu.mboocode.agent.model.SessionEvent;
 import com.yu.mboocode.agent.model.SessionTurn;
 import com.yu.mboocode.agent.model.payload.ToolApprovalRequiredPayload;
+import com.yu.mboocode.agent.service.McpServerRuntime;
 import com.yu.mboocode.agent.service.SessionEventStore;
 import com.yu.mboocode.agent.service.SessionService;
 import com.yu.mboocode.common.exception.ServiceException;
@@ -62,11 +63,14 @@ public class ToolApprovalService {
     private RunningCommandRegistry runningCommandRegistry;
     @Resource
     private RunningNetworkCallRegistry runningNetworkCallRegistry;
+    @Resource
+    private McpServerRuntime mcpServerRuntime;
     private final Map<String, PendingApprovalStage> pendingByApprovalId = new ConcurrentHashMap<>();
     private final Map<String, PendingToolInvocation> invocationsByToolCall = new ConcurrentHashMap<>();
 
     public ApprovalRequestStatus requestIfNeeded(SessionTurn sessionTurn, String messageId, ToolExecutionRequest request,
                                                   Consumer<SessionEvent> eventEmitter, Runnable toolStartedEmitter) {
+        if (mcpServerRuntime.isMcpTool(request.name())) return ApprovalRequestStatus.ALLOWED;
         String key = toolCallKey(sessionTurn.sessionId(), request.id());
         ToolPermissionChain chain;
         try {
