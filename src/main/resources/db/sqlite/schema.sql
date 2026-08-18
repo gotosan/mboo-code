@@ -51,3 +51,15 @@ CREATE TABLE IF NOT EXISTS mboo_model_context_preference (
                           created_at TEXT NOT NULL, -- 偏好创建时间
                           updated_at TEXT NOT NULL -- 偏好最近更新时间
 );
+
+CREATE TABLE IF NOT EXISTS mboo_mcp_servers (
+                          id TEXT PRIMARY KEY,
+                          name TEXT NOT NULL COLLATE NOCASE,
+                          mcp_json TEXT NOT NULL CHECK (json_valid(mcp_json)),
+                          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+                          created_at TEXT NOT NULL,
+                          updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_name
+    ON mboo_mcp_servers(name COLLATE NOCASE);

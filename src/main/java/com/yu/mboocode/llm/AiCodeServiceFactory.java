@@ -3,6 +3,7 @@ package com.yu.mboocode.llm;
 import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.tool.ToolRequestValidatorRegistry;
 import com.yu.mboocode.agent.tool.permission.ToolPermissionRegistry;
+import com.yu.mboocode.agent.service.McpServerRuntime;
 import com.yu.mboocode.config.Setting;
 import com.yu.mboocode.llm.integration.PermissionToolExecutor;
 import com.yu.mboocode.llm.listener.ModelUsageRequestListener;
@@ -54,6 +55,8 @@ public class AiCodeServiceFactory {
     private ChatMemoryService chatMemoryService;
     @Resource
     private SystemPromptService systemPromptService;
+    @Resource
+    private McpServerRuntime mcpServerRuntime;
 
     @Bean
     public ChatMemoryProvider chatMemoryProvider() {
@@ -95,6 +98,7 @@ public class AiCodeServiceFactory {
                     return systemPromptService.appendConversationSummary(systemMessage, summary);
                 })
                 .tools(tools)
+                .toolProvider(mcpServerRuntime.toolProvider())
                 .registerListeners(modelUsageRequestListener, modelUsageResponseListener)
                 .build();
     }

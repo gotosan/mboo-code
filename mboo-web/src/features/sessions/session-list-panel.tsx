@@ -22,6 +22,7 @@ import type {
   SessionListTab,
   WorkspaceInfo,
 } from "@/features/sessions/session-types";
+import { McpManager } from "@/features/mcp/mcp-manager";
 
 type SessionListPanelProps = {
   visibleSessions: SessionInfo[];
@@ -180,6 +181,7 @@ export const SessionListPanel = memo(function SessionListPanel({
           <span className={styles.buttonIcon} aria-hidden>＋</span>
           新会话
         </button>
+        <McpManager />
         <button
           aria-label="刷新会话列表"
           className={styles.secondaryButton}

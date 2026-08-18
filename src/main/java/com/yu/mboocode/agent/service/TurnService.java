@@ -79,6 +79,8 @@ public class TurnService {
     private WorkspaceService workspaceService;
     @Resource
     private SystemPromptService systemPromptService;
+    @Resource
+    private McpServerRuntime mcpServerRuntime;
 
     private final Map<String, ActiveTurnRuntime> activeTurnRuntime = new ConcurrentHashMap<>();
 
@@ -172,8 +174,15 @@ public class TurnService {
             if (StrUtil.isNotBlank(previousTurnId)) {
                 log.warn("识别并接管僵尸 turn sessionId:{} previousTurnId:{} newTurnId:{}", session.getId(), previousTurnId, turnId);
             }
+            mcpServerRuntime.captureTurnSnapshot(session.getId(), turnId);
             return runtime;
         } catch (RuntimeException e) {
+            mcpServerRuntime.releaseTurnSnapshot(session.getId(), turnId);
+            try {
+                sessionService.clearActiveTurn(session.getId(), turnId);
+            } catch (Exception cleanupError) {
+                log.error("回滚启动失败的 turn 占用失败 sessionId:{} turnId:{}", session.getId(), turnId, cleanupError);
+            }
             activeTurnRuntime.remove(session.getId(), runtime);
             throw e;
         }
@@ -433,6 +442,11 @@ public class TurnService {
             toolApprovalService.cancelTurn(sessionTurn.sessionId(), sessionTurn.turnId());
         } catch (Exception e) {
             log.error("清理 turn 授权请求失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
+        }
+        try {
+            mcpServerRuntime.releaseTurnSnapshot(sessionTurn.sessionId(), sessionTurn.turnId());
+        } catch (Exception e) {
+            log.error("释放 turn MCP 快照失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
         }
         if (sessionTurn.operationType() == TurnOperationType.CHAT) {
             // 持久化本轮最后一次有效主模型 usage，供下一轮工具压薄、自动摘要和摘要模型选择
