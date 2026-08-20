@@ -31,6 +31,7 @@ const TypewriterEffectCanvas = memo(function TypewriterEffectCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number>(0);
+  const lastScrollTopRef = useRef<number | null>(null);
   const isReducedMotionRef = useRef(false);
   const isVisibleRef = useRef(true);
 
@@ -86,18 +87,22 @@ const TypewriterEffectCanvas = memo(function TypewriterEffectCanvas({
     const scroller = scrollerRef.current;
     if (!scroller) return;
 
-    // markstream 内置 typewriter 光标：absolute 定位，精确跟随流式内容末尾
-    const caret = scroller.querySelector(".typewriter-cursor") as HTMLElement | null;
-    if (!caret) return;
+    const streamingMessage = scroller.querySelector('[data-streaming="true"]');
+    if (!streamingMessage) return;
 
-    const caretRect = caret.getBoundingClientRect();
+    // markstream-react 的光标已按 Markdown、换行和行内节点完成布局；不要扫描
+    // 文本节点，否则会误命中正文后的 sr-only 状态文本而导致锚点偏离。
+    const cursor = streamingMessage.querySelector<HTMLElement>(".typewriter-cursor");
+    if (!cursor) return;
+    const caretRect = cursor.getBoundingClientRect();
+    if (caretRect.width === 0 && caretRect.height === 0) return;
+
     const scrollerRect = scroller.getBoundingClientRect();
-
-    // 坐标转换到 Canvas CSS 像素空间（相对 scroller 左上角）
     const x = caretRect.left - scrollerRect.left + caretRect.width / 2;
     const y = caretRect.top - scrollerRect.top + caretRect.height / 2;
 
     typewriterStore.getState().updateCaret(sessionId, x, y);
+    typewriterStore.getState().flushPendingBurst(sessionId, { x, y });
   }, [isStreaming, sessionId, scrollerRef]);
 
   // ── RAF 渲染循环 ────────────────────────────────────
@@ -118,9 +123,6 @@ const TypewriterEffectCanvas = memo(function TypewriterEffectCanvas({
       const dt = lastFrameRef.current ? timestamp - lastFrameRef.current : 16;
       lastFrameRef.current = timestamp;
 
-      // 追踪 caret 位置
-      trackCaret();
-
       const canvas = canvasRef.current;
       const scroller = scrollerRef.current;
       if (!canvas || !scroller) {
@@ -139,6 +141,17 @@ const TypewriterEffectCanvas = memo(function TypewriterEffectCanvas({
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const rect = scroller.getBoundingClientRect();
+
+      // 消息列表自动贴底滚动时，已生成的粒子也要跟随内容一起移动。
+      const previousScrollTop = lastScrollTopRef.current;
+      const scrollDeltaY = previousScrollTop === null ? 0 : scroller.scrollTop - previousScrollTop;
+      lastScrollTopRef.current = scroller.scrollTop;
+      if (scrollDeltaY !== 0) {
+        typewriterStore.getState().translateParticles(sessionId, 0, -scrollDeltaY);
+      }
+
+      // 先追随滚动中的已有粒子，再用本帧已提交文本的光标位置创建新粒子。
+      trackCaret();
 
       // 清空画布
       ctx.save();
@@ -172,6 +185,7 @@ const TypewriterEffectCanvas = memo(function TypewriterEffectCanvas({
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
+      lastScrollTopRef.current = null;
     };
   }, [sessionId, isStreaming, scrollerRef, syncCanvasSize, trackCaret]);
 

@@ -524,20 +524,9 @@ textarea {
   font-family: var(--font-mono);
 }
 
-.mboo-markdown .typewriter-cursor {
-  border-right-color: var(--accent);
-  width: 0.45em;
-  height: 1em;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .mboo-markdown .markstream-react *,
-  .mboo-markdown .typewriter-cursor {
+  .mboo-markdown .markstream-react * {
     animation: none !important;
     transition: none !important;
-  }
-
-  .mboo-markdown .typewriter-cursor {
-    opacity: 1;
   }
 }
