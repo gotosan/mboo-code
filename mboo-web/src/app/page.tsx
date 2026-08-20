@@ -1060,8 +1060,8 @@ export default function Home() {
 
       if (event.type === "ASSISTANT_MESSAGE_DELTA") {
         const messageId = event.payload.messageId || event.eventId;
-        // 触发打字机粒子特效：text token 到达时爆发粒子
-        typewriterStore.getState().onToken(targetKey, null);
+        // DOM 提交后由 canvas 取得真实文字末尾坐标，再触发粒子。
+        typewriterStore.getState().onToken(targetKey);
         appendAssistantDelta(targetKey, messageId, event.payload.text || "", event);
         return;
       }
@@ -1108,20 +1108,31 @@ export default function Home() {
           });
           return next;
         });
+        // 会话终态属于流本身：即使用户已切走，也必须结束对应 runtime。
+        if (event.payload.state === "complete") {
+          sessionRuntimeStore.getState().setStatus(targetKey, "completed");
+        } else if (event.payload.state === "cancel") {
+          sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
+        } else if (event.payload.state === "error") {
+          sessionRuntimeStore.getState().setStatus(
+            targetKey,
+            "error",
+            event.payload.errorMessage || "本轮会话执行失败",
+          );
+        }
+
+        // 页面级连接状态只描述当前正在查看的会话。
         if (!isViewingSessionKey(targetKey)) {
           return;
         }
         if (event.payload.state === "complete") {
-          sessionRuntimeStore.getState().setStatus(targetKey, "completed");
           setConnectionState("idle");
           setActiveTurnId(null);
         } else if (event.payload.state === "cancel") {
-          sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
           setConnectionState("idle");
           setActiveTurnId(null);
         } else if (event.payload.state === "error") {
           const message = event.payload.errorMessage || "本轮会话执行失败";
-          sessionRuntimeStore.getState().setStatus(targetKey, "error", message);
           setConnectionState("error");
           setErrorMessage(message);
           setActiveTurnId(null);

@@ -324,9 +324,10 @@ const AssistantMarkdown = memo(function AssistantMarkdown({
           content={content}
           customId={customId}
           final={!isStreaming}
+          // 仅保留库维护的末尾光标作为 Canvas 粒子锚点；文本仍由 React 直接提交。
           typewriter={isStreaming}
           fade={false}
-          smoothStreaming={isStreaming ? "auto" : false}
+          smoothStreaming={false}
           maxLiveNodes={isStreaming ? 0 : undefined}
           renderCodeBlocksAsPre
           isDark={false}
