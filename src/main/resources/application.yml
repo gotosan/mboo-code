@@ -8,6 +8,14 @@ spring:
     init:
       mode: always
       schema-locations: classpath:db/sqlite/schema.sql
+  servlet:
+    multipart:
+      max-file-size: 4MB
+      max-request-size: 6MB
+
+server:
+  tomcat:
+    max-part-count: 300
 
 mybatis-plus:
   configuration:
