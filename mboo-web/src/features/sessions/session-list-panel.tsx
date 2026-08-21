@@ -43,6 +43,7 @@ type SessionListPanelProps = {
   editingSessionId: string | null;
   titleDraft: string;
   confirmingAction: SessionConfirmAction;
+  currentWorkspaceId?: string | null;
   onQueryChange: (value: string) => void;
   onCreateSession: () => void;
   onCreateSessionInWorkspace: (workspace: WorkspaceInfo) => void;
@@ -81,6 +82,7 @@ export const SessionListPanel = memo(function SessionListPanel({
   editingSessionId,
   titleDraft,
   confirmingAction,
+  currentWorkspaceId,
   onQueryChange,
   onCreateSession,
   onCreateSessionInWorkspace,
@@ -181,7 +183,7 @@ export const SessionListPanel = memo(function SessionListPanel({
           <span className={styles.buttonIcon} aria-hidden>＋</span>
           新会话
         </button>
-        <McpManager />
+        <McpManager workspaces={workspaces} currentWorkspaceId={currentWorkspaceId} />
         <button
           aria-label="刷新会话列表"
           className={styles.secondaryButton}

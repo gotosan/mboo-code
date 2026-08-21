@@ -4,6 +4,8 @@ import { CircleAlert, Code2, Plug, Plus, RefreshCw, Save, Trash2, X } from "luci
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import styles from "./mcp-manager.module.css";
+import { SkillManager } from "@/features/skill/skill-manager";
+import type { WorkspaceInfo } from "@/features/sessions/session-types";
 
 type McpServer = {
   id: string;
@@ -17,7 +19,7 @@ type McpServer = {
 
 const EMPTY_JSON = '{\n  "mcpServers": {}\n}';
 
-export function McpManager() {
+export function McpManager({ workspaces = [], currentWorkspaceId }: { workspaces?: WorkspaceInfo[]; currentWorkspaceId?: string | null }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"mcp" | "skill">("mcp");
   const [servers, setServers] = useState<McpServer[]>([]);
@@ -93,7 +95,7 @@ export function McpManager() {
               </div>)}</div>}
               <div className={styles.editor}><div className={styles.editorTitle}><strong>{editingId ? "编辑配置" : "新增配置"}</strong>{editingId ? <button className={styles.textButton} type="button" onClick={resetEditor}>新建</button> : null}</div><textarea value={json} onChange={(event) => setJson(event.target.value)} spellCheck={false} aria-label="MCP 配置 JSON" /><button className={styles.saveButton} type="button" disabled={busy} onClick={submit}><Save aria-hidden />保存配置</button></div>
               {error ? <div className={styles.alert}>{error}</div> : null}
-            </div> : <div className={styles.skillBlank} />}
+            </div> : <SkillManager workspaces={workspaces} currentWorkspaceId={currentWorkspaceId} />}
           </section>
         </div>
       ), document.body) : null}
