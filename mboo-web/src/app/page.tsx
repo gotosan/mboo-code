@@ -58,6 +58,8 @@ const TOOL_LABELS: Record<string, string> = {
   run_command: "执行命令",
   web_search: "网络搜索",
   web_fetch: "网页抓取",
+  activate_skill: "激活 Skill",
+  read_skill_resource: "读取 Skill 资源",
 };
 
 const FILE_TOOL_NAMES = new Set([
@@ -2260,6 +2262,7 @@ export default function Home() {
       editingSessionId={editingSessionId}
       titleDraft={titleDraft}
       confirmingAction={confirmingAction as SessionConfirmAction}
+      currentWorkspaceId={sessions.find((session) => session.id === highlightedSessionId)?.workspaceId || workspaces.find((workspace) => workspace.path === displayedWorkspacePath)?.id || null}
       onQueryChange={setSessionQuery}
       onCreateSession={startNewSession}
       onCreateSessionInWorkspace={createSessionInWorkspace}
@@ -2566,6 +2569,7 @@ export default function Home() {
                   isSavingPermissionMode={isSavingPermissionMode}
                   permissionModeError={permissionModeError}
                   workspacePath={displayedWorkspacePath}
+                  workspaceId={sessions.find((session) => session.id === highlightedSessionId)?.workspaceId || workspaces.find((workspace) => workspace.path === displayedWorkspacePath)?.id || null}
                   workspaceStatusText={workspaceStatusText}
                   canSelectWorkspace={!sessionId && !isSessionSwitching && !isArchivedView}
                   canClearWorkspace={Boolean(!sessionId && displayedWorkspacePath)}
