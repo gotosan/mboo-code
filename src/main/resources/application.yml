@@ -3,7 +3,7 @@ spring:
     name: mboo-code
   datasource:
     driver-class-name: org.sqlite.JDBC
-    url: jdbc:sqlite:${user.home}/.mboo/mboo_data.sqlite
+    url: jdbc:sqlite:${mboo.appDataDir:${user.home}/.mboo}/mboo_data.sqlite
   sql:
     init:
       mode: always
