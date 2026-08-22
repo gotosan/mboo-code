@@ -3,6 +3,7 @@ package com.yu.mboocode.agent.skill;
 import com.yu.mboocode.agent.skill.model.SkillDescriptor;
 import com.yu.mboocode.agent.skill.model.SkillResourceDescriptor;
 import com.yu.mboocode.agent.skill.model.SkillSource;
+import com.yu.mboocode.common.util.AppDataPaths;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -47,7 +48,7 @@ public class SkillScriptCache {
                 return path.toRealPath();
             }
             if (script.textContent() == null) return null;
-            Path cacheRoot = Path.of(System.getProperty("user.home"), ".mboo", "cache", "skills", descriptor.name(), descriptor.contentHash());
+            Path cacheRoot = AppDataPaths.root().resolve("cache").resolve("skills").resolve(descriptor.name()).resolve(descriptor.contentHash());
             Path target = cacheRoot.resolve(script.relativePath()).normalize();
             if (!target.startsWith(cacheRoot)) return null;
             if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) materializeBuiltinScripts(descriptor, cacheRoot);
