@@ -8,6 +8,14 @@ spring:
     init:
       mode: always
       schema-locations: classpath:db/sqlite/schema.sql
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+server:
+  shutdown: graceful
+
+mboo:
+  version: ${MBOO_VERSION:0.0.1-SNAPSHOT}
 
 mybatis-plus:
   configuration:
