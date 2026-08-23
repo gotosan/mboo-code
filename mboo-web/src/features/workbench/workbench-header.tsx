@@ -1,6 +1,6 @@
 "use client";
 
-import { Maximize2, PanelLeft, RotateCcw } from "lucide-react";
+import { Maximize2, PanelLeft, RotateCcw, Settings2 } from "lucide-react";
 import { memo } from "react";
 import styles from "./workbench-header.module.css";
 
@@ -17,6 +17,7 @@ type WorkbenchHeaderProps = {
   onToggleSidebar: () => void;
   onToggleFullscreen: () => void;
   onResetLayout: () => void;
+  onOpenModelSettings: () => void;
 };
 
 export const WorkbenchHeader = memo(function WorkbenchHeader({
@@ -26,6 +27,7 @@ export const WorkbenchHeader = memo(function WorkbenchHeader({
   onToggleSidebar,
   onToggleFullscreen,
   onResetLayout,
+  onOpenModelSettings,
 }: WorkbenchHeaderProps) {
   return (
     <header className={styles.header}>
@@ -45,6 +47,15 @@ export const WorkbenchHeader = memo(function WorkbenchHeader({
       </span>
       <div className={styles.spacer} />
       <div className={styles.actions}>
+        <button
+          className={styles.action}
+          type="button"
+          aria-label="打开模型服务设置"
+          title="模型服务设置"
+          onClick={onOpenModelSettings}
+        >
+          <Settings2 className={styles.actionIcon} aria-hidden />
+        </button>
         <button
           className={`${styles.action} ${styles.sidebarAction}`}
           type="button"

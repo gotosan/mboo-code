@@ -82,6 +82,17 @@ npm run verify:runtime -- darwin-arm64
 
 `verify:runtime` 会检查 Java、Node.js、`rg` 的版本、SHA-256、CPU 架构以及 macOS 可执行权限。Windows 资源可以在 macOS 上做静态架构校验，但 Windows 真机启动、路径和进程回收仍须在 Windows runner 或 Windows 机器验证。
 
+如果当前网络无法访问 GitHub，而 Git 历史中已经保存了与 `manifest.json` 对应的运行时归档，可以从该提交恢复 `desktop/.runtime-archives/<target>` 后离线准备：
+
+```text
+git log --all --oneline -- desktop/.runtime-archives
+git restore --source=<包含归档的提交> -- desktop/.runtime-archives/<target>
+npm run prepare:runtime -- <target>
+npm run verify:runtime -- <target>
+```
+
+恢复后仍必须执行 SHA-256 校验；不要通过关闭校验或替换为未认证镜像来绕过下载失败。`.runtime-cache/` 是解压后的构建缓存，不应提交到 Git。
+
 ## 封包
 
 ```text
