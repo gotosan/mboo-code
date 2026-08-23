@@ -5,6 +5,9 @@ HELP.md
 !**/src/main/**/build/
 !**/src/test/**/build/
 /desktop/build/
+/desktop/.runtime-archives/
+/desktop/.runtime-caches/
+/desktop/release/
 .workbuddy
 
 ### STS ###
