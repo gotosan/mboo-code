@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { DesktopArchitecture, DesktopPlatform } from "../shared/platform.js";
 import { getDesktopResourceLayout } from "../shared/resource-layout.js";
 import { buildSqliteJdbcUrl } from "./sqlite-url.js";
@@ -22,6 +24,9 @@ export interface JavaServerLaunchOptions {
  */
 export function createJavaServerLaunchSpec(options: JavaServerLaunchOptions): JavaServerLaunchSpec {
   const layout = getDesktopResourceLayout(options.resourcesDirectory, options.platform, options.architecture);
+  const nodeDirectory = path.dirname(layout.nodeExecutable);
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+  const inheritedPath = process.env[pathKey] ?? "";
 
   return {
     executable: layout.javaExecutable,
@@ -34,6 +39,9 @@ export function createJavaServerLaunchSpec(options: JavaServerLaunchOptions): Ja
       "-jar",
       layout.backendJar,
     ],
-    environment: { MBOO_INSTANCE_ID: options.instanceId },
+    environment: {
+      MBOO_INSTANCE_ID: options.instanceId,
+      [pathKey]: inheritedPath ? `${nodeDirectory}${path.delimiter}${inheritedPath}` : nodeDirectory,
+    },
   };
 }

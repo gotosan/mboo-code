@@ -1,6 +1,9 @@
 {
   "name": "mboo-code-desktop",
   "version": "0.1.0",
+  "description": "Mboo Code 桌面客户端",
+  "author": "Mboo Code Team",
+  "license": "UNLICENSED",
   "private": true,
   "type": "module",
   "main": "dist/main/index.js",
@@ -18,8 +21,10 @@
     "package": "npm run package:target"
   },
   "devDependencies": {
+    "@electron-internal/extract-zip": "1.0.5",
     "electron": "43.4.1",
     "electron-builder": "26.15.3",
+    "tar": "7.5.22",
     "tsx": "4.23.12",
     "typescript": "^5.9.3"
   }

@@ -217,7 +217,7 @@ public class McpServerRuntime {
             Map<String, String> env = new HashMap<>();
             JSONObject envObject = config.getJSONObject("env");
             if (envObject != null) envObject.forEach((key, value) -> env.put(key, String.valueOf(value)));
-            List<String> effectiveCommand = applyWorkingDirectory(resolveCommand(command), config.getString("cwd"));
+            List<String> effectiveCommand = prepareStdioCommand(resolveCommand(command), config.getString("cwd"));
             return new ManagedStdioMcpTransport(effectiveCommand, env);
         }
         Map<String, String> headers = new HashMap<>();
@@ -261,20 +261,22 @@ public class McpServerRuntime {
         return candidates.stream().filter(candidate -> Files.isRegularFile(Path.of(candidate))).findFirst().orElse(executable);
     }
 
-    private List<String> applyWorkingDirectory(List<String> command, String cwd) {
-        if (cwd == null || cwd.isBlank()) return command;
+    private List<String> prepareStdioCommand(List<String> command, String cwd) {
         if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
-            String commandLine = "cd /d " + quoteWindowsCommandArgument(cwd) + " && "
+            boolean isBatch = command.getFirst().toLowerCase().endsWith(".cmd") || command.getFirst().toLowerCase().endsWith(".bat");
+            if ((cwd == null || cwd.isBlank()) && !isBatch) return command;
+            String commandLine = (cwd == null || cwd.isBlank() ? "" : "cd /d " + quoteWindowsCommandArgument(cwd) + " && ")
                     + command.stream().map(this::quoteWindowsCommandArgument).reduce((left, right) -> left + " " + right).orElseThrow();
             return List.of("cmd.exe", "/d", "/s", "/v:off", "/c", commandLine);
         }
+        if (cwd == null || cwd.isBlank()) return command;
         List<String> wrapped = new ArrayList<>(List.of("/bin/sh", "-c", "cd -- \"$1\" && shift && exec \"$@\"", "mboo-mcp", cwd));
         wrapped.addAll(command);
         return wrapped;
     }
 
     private String quoteWindowsCommandArgument(String value) {
-        return "\"" + value.replace("%", "%%").replace("\"", "\\\"") + "\"";
+        return "\"" + value.replace("%", "%%").replace("\"", "\"\"") + "\"";
     }
 
     private void retireCurrentConnection(String id) {

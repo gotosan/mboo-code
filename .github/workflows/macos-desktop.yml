@@ -1,0 +1,45 @@
+name: macOS Desktop
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: mac:x64
+            artifact: macos-x64
+          - runner: macos-15
+            target: mac:arm64
+            artifact: macos-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            mboo-web/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - run: npm ci
+        working-directory: mboo-web
+      - run: npm run package:${{ matrix.target }}
+        working-directory: desktop
+        env:
+          MBOO_SIGNING_MODE: unsigned
+      - run: hdiutil verify desktop/release/Mboo-Code-*-mac-*.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mboo-code-${{ matrix.artifact }}
+          path: desktop/release/Mboo-Code-*-mac-*.dmg
+

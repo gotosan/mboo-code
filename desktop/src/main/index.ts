@@ -52,7 +52,7 @@ function registerBridgeHandlers(): void {
 }
 
 function getDesktopAppDataDirectory(): string {
-  return resolveDesktopAppDataDirectory(app.getPath("home"));
+  return resolveDesktopAppDataDirectory(app.getPath("home"), process.env.MBOO_DESKTOP_APP_DATA_DIR);
 }
 
 /**
@@ -102,13 +102,19 @@ async function initializeDesktop(): Promise<void> {
   }
 
   try {
-    await runLegacyImportFlow(
-      getDesktopAppDataDirectory(),
-      path.join(app.getPath("home"), ".mboo"),
-      requestLegacyImportDecision,
-    );
+    if (!isSmokeMode()) {
+      await runLegacyImportFlow(
+        getDesktopAppDataDirectory(),
+        path.join(app.getPath("home"), ".mboo"),
+        requestLegacyImportDecision,
+      );
+    }
     await startProductionServices();
-    mainWindow = createMainWindow(currentDesktopUrl);
+    if (process.argv.includes("--smoke-exit-after-ready")) {
+      setTimeout(() => app.quit(), 500);
+      return;
+    }
+    if (!process.argv.includes("--smoke-parent-crash")) mainWindow = createMainWindow(currentDesktopUrl);
   } catch (error) {
     runtimeState.mode = "failed";
     if (error instanceof DesktopServiceStartError) {
@@ -119,6 +125,10 @@ async function initializeDesktop(): Promise<void> {
     }
     mainWindow = createMainWindow();
   }
+}
+
+function isSmokeMode(): boolean {
+  return process.argv.includes("--smoke-exit-after-ready") || process.argv.includes("--smoke-parent-crash");
 }
 
 /**

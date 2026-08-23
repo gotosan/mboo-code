@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { access, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,12 +9,13 @@ import { createElectronBuilderArguments } from "../src/build/package-target.js";
 import { createRuntimePreparationPlan, readRuntimeManifest } from "../src/build/runtime-manifest.js";
 import { prepareRuntimeCache } from "../src/build/runtime-preparation.js";
 import { assertExecutableVersion, getRuntimeExecutableRelativePath, verifyExecutableArchitecture } from "../src/build/resource-verification.js";
-import type { DesktopTargetKey } from "../src/shared/platform.js";
+import { desktopTargets, isCurrentHostTarget, type DesktopTargetKey } from "../src/shared/platform.js";
 
 const desktopDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceDirectory = path.resolve(desktopDirectory, "..");
 const targetKey = readTargetKey();
 
+assertNativeBuildHost(targetKey);
 await buildApplicationArtifacts();
 const manifest = await readRuntimeManifest(path.join(desktopDirectory, "resources", "runtime", "manifest.json"));
 const runtimePlan = createRuntimePreparationPlan({ desktopDirectory, targetKey, manifest });
@@ -40,9 +42,13 @@ function readTargetKey(): DesktopTargetKey {
 async function buildApplicationArtifacts(): Promise<void> {
   const javaHome = process.env.MBOO_JAVA_HOME ?? process.env.JAVA_HOME;
   const gradleCommand = createGradleBootJarCommand(process.platform, javaHome);
-  await runCommand(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], desktopDirectory, process.env);
-  await runCommand(gradleCommand.command, gradleCommand.arguments, workspaceDirectory, process.env);
-  await runCommand(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], path.join(workspaceDirectory, "mboo-web"), process.env);
+  const npmCliPath = process.env.npm_execpath;
+  if (!npmCliPath) throw new Error("无法获取 npm CLI 路径");
+  await access(npmCliPath);
+  await runCommand(process.execPath, [npmCliPath, "run", "build"], desktopDirectory, process.env);
+  await runCommand(gradleCommand.command, gradleCommand.arguments, workspaceDirectory, gradleCommand.environment);
+  await runCommand(process.execPath, [npmCliPath, "run", "build"], path.join(workspaceDirectory, "mboo-web"), process.env);
+  await verifyStandaloneNativeModules(path.join(workspaceDirectory, "mboo-web", ".next", "standalone"));
 }
 
 async function verifyRuntimeCache(runtimePlan: ReturnType<typeof createRuntimePreparationPlan>): Promise<void> {
@@ -61,10 +67,26 @@ async function verifyRuntimeCache(runtimePlan: ReturnType<typeof createRuntimePr
   assertExecutableVersion(await readCommandOutput(rgExecutable, ["--version"]), target.rg.version, "rg");
 }
 
-function isCurrentHostTarget(targetKey: DesktopTargetKey): boolean {
-  return (targetKey === "darwin-arm64" && process.platform === "darwin" && process.arch === "arm64")
-    || (targetKey === "darwin-x64" && process.platform === "darwin" && process.arch === "x64")
-    || (targetKey === "win32-x64" && process.platform === "win32" && process.arch === "x64");
+function assertNativeBuildHost(target: DesktopTargetKey): void {
+  if (isCurrentHostTarget(target)) return;
+  const expected = desktopTargets[target];
+  throw new Error(`完整桌面封包必须在目标原生构建机执行：目标 ${expected.platform}/${expected.architecture}，当前 ${process.platform}/${process.arch}`);
+}
+
+async function verifyStandaloneNativeModules(directory: string): Promise<void> {
+  for (const file of await findFilesBySuffix(directory, ".node")) {
+    await verifyExecutableArchitecture(file, targetKey, `Next.js 原生模块 ${path.basename(file)}`);
+  }
+}
+
+async function findFilesBySuffix(directory: string, suffix: string): Promise<string[]> {
+  const matches: string[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) matches.push(...await findFilesBySuffix(entryPath, suffix));
+    else if (entry.isFile() && entry.name.endsWith(suffix)) matches.push(entryPath);
+  }
+  return matches;
 }
 
 function readCommandOutput(command: string, argumentsList: string[]): Promise<string> {

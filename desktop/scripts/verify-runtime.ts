@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { createRuntimePreparationPlan, readRuntimeManifest } from "../src/build/runtime-manifest.js";
 import { assertExecutableVersion, getRuntimeExecutableRelativePath, verifyExecutableArchitecture } from "../src/build/resource-verification.js";
-import type { DesktopTargetKey } from "../src/shared/platform.js";
+import { isCurrentHostTarget, type DesktopTargetKey } from "../src/shared/platform.js";
 
 const desktopDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const targetKey = readTargetKey();
@@ -34,12 +34,6 @@ function readTargetKey(): DesktopTargetKey {
   const targetKey = process.argv[2];
   if (targetKey === "win32-x64" || targetKey === "darwin-x64" || targetKey === "darwin-arm64") return targetKey;
   throw new Error("请传入目标平台：win32-x64、darwin-x64 或 darwin-arm64");
-}
-
-function isCurrentHostTarget(targetKey: DesktopTargetKey): boolean {
-  return (targetKey === "darwin-arm64" && process.platform === "darwin" && process.arch === "arm64")
-    || (targetKey === "darwin-x64" && process.platform === "darwin" && process.arch === "x64")
-    || (targetKey === "win32-x64" && process.platform === "win32" && process.arch === "x64");
 }
 
 function readCommandOutput(command: string, argumentsList: string[]): Promise<string> {

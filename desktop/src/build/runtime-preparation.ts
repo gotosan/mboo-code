@@ -2,7 +2,8 @@ import { chmod, cp, mkdir, mkdtemp, readdir, rename, rm, stat } from "node:fs/pr
 import { createWriteStream } from "node:fs";
 import { once } from "node:events";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import extractZip from "@electron-internal/extract-zip";
+import { extract as extractTar } from "tar";
 
 import type { RuntimePreparationComponent, RuntimePreparationPlan } from "./runtime-manifest.js";
 import { verifyRuntimeArchive } from "./runtime-manifest.js";
@@ -38,16 +39,17 @@ export async function prepareRuntimeCache(options: PrepareRuntimeCacheOptions): 
 
       await mkdir(path.dirname(destination), { recursive: true });
       await cp(source, destination, { recursive: component.kind !== "rg", force: true, preserveTimestamps: true });
+      await copyComponentLicenses(component.kind, source, path.join(temporaryCacheDirectory, "licenses", component.kind));
       if (component.kind === "rg" && options.plan.targetKey !== "win32-x64") {
         await chmod(destination, 0o755);
       }
     }
 
-    await rm(path.join(temporaryCacheDirectory, ".extracted"), { recursive: true, force: true });
-    await rm(options.plan.cacheDirectory, { recursive: true, force: true });
-    await rename(temporaryCacheDirectory, options.plan.cacheDirectory);
+    await removeDirectory(path.join(temporaryCacheDirectory, ".extracted"));
+    await removeDirectory(options.plan.cacheDirectory);
+    await renameWithRetry(temporaryCacheDirectory, options.plan.cacheDirectory);
   } catch (error) {
-    await rm(temporaryCacheDirectory, { recursive: true, force: true });
+    await removeDirectory(temporaryCacheDirectory);
     throw error;
   }
 }
@@ -71,9 +73,14 @@ export async function downloadRuntimeArchive(component: RuntimePreparationCompon
   await mkdir(path.dirname(component.archivePath), { recursive: true });
   const temporaryArchivePath = `${component.archivePath}.download`;
   await rm(temporaryArchivePath, { force: true });
-  await writeWebStreamToFile(response.body, temporaryArchivePath);
-  await verifyRuntimeArchive(temporaryArchivePath, component.component.sha256);
-  await rename(temporaryArchivePath, component.archivePath);
+  try {
+    await writeWebStreamToFile(response.body, temporaryArchivePath);
+    await verifyRuntimeArchive(temporaryArchivePath, component.component.sha256);
+    await renameWithRetry(temporaryArchivePath, component.archivePath);
+  } catch (error) {
+    await rm(temporaryArchivePath, { force: true });
+    throw error;
+  }
 }
 
 async function writeWebStreamToFile(body: ReadableStream<Uint8Array>, outputPath: string): Promise<void> {
@@ -97,11 +104,33 @@ async function writeWebStreamToFile(body: ReadableStream<Uint8Array>, outputPath
 }
 
 /**
- * 使用系统 tar 解压 ZIP、tar.gz 与 tar.xz 归档；打包主机需要具备此基础工具，失败时直接阻断产物生成。
+ * 使用 Node 库解压 ZIP 与 tar.gz，避免 Windows 构建机依赖 file、tar 或 Git Bash 等额外命令。
  */
 export async function extractRuntimeArchive(component: RuntimePreparationComponent, extractionDirectory: string): Promise<string> {
-  await runCommand("tar", ["-xf", component.archivePath, "-C", extractionDirectory]);
+  if (component.archivePath.endsWith(".zip")) {
+    await extractZip(component.archivePath, { dir: extractionDirectory });
+    return extractionDirectory;
+  }
+  if (!component.archivePath.endsWith(".tar.gz") && !component.archivePath.endsWith(".tgz")) {
+    throw new Error(`不支持的运行时归档格式：${component.component.name}`);
+  }
+  await extractTar({
+    file: component.archivePath,
+    cwd: extractionDirectory,
+    preservePaths: false,
+    filter: (entryPath) => {
+      assertSafeArchivePath(entryPath);
+      return true;
+    },
+  });
   return extractionDirectory;
+}
+
+function assertSafeArchivePath(entryPath: string): void {
+  const normalized = entryPath.replaceAll("\\", "/");
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) || normalized.split("/").includes("..")) {
+    throw new Error(`运行时归档包含不安全路径：${entryPath}`);
+  }
 }
 
 async function locateExtractedResource(
@@ -158,17 +187,51 @@ async function isFile(filePath: string): Promise<boolean> {
   }
 }
 
-function runCommand(command: string, argumentsList: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const process = spawn(command, argumentsList, { stdio: "pipe" });
-    let errorOutput = "";
-    process.stderr.on("data", (chunk: Buffer) => {
-      errorOutput += chunk.toString();
-    });
-    process.once("error", reject);
-    process.once("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`执行 ${command} 失败（退出码 ${code ?? "unknown"}）：${errorOutput.trim()}`));
-    });
-  });
+async function copyComponentLicenses(kind: RuntimePreparationComponent["kind"], source: string, destination: string): Promise<void> {
+  await mkdir(destination, { recursive: true });
+  if (kind === "jre") {
+    await copyIfExists(path.join(source, "legal"), path.join(destination, "legal"), true);
+    for (const name of ["NOTICE", "LICENSE", "ASSEMBLY_EXCEPTION", "ADDITIONAL_LICENSE_INFO"]) {
+      await copyIfExists(path.join(source, name), path.join(destination, name), false);
+    }
+    if (!await containsFile(destination)) throw new Error("Temurin 运行时归档缺少许可证文件");
+    return;
+  }
+  const root = kind === "rg" ? path.dirname(source) : source;
+  for (const name of kind === "node" ? ["LICENSE"] : ["LICENSE-MIT", "UNLICENSE", "COPYING"]) {
+    await copyIfExists(path.join(root, name), path.join(destination, name), false);
+  }
+  if (!await containsFile(destination)) throw new Error(`${kind === "node" ? "Node.js" : "ripgrep"} 运行时归档缺少许可证文件`);
+}
+
+async function copyIfExists(source: string, destination: string, recursive: boolean): Promise<void> {
+  try {
+    await cp(source, destination, { recursive, force: true, preserveTimestamps: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+async function containsFile(directory: string): Promise<boolean> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isFile()) return true;
+    if (entry.isDirectory() && await containsFile(path.join(directory, entry.name))) return true;
+  }
+  return false;
+}
+
+async function removeDirectory(directory: string): Promise<void> {
+  await rm(directory, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 5 : 1, retryDelay: 200 });
+}
+
+async function renameWithRetry(source: string, destination: string): Promise<void> {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error) {
+      if (attempt === 5 || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 200));
+    }
+  }
 }

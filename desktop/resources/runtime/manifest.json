@@ -4,10 +4,10 @@
   "targets": {
     "win32-x64": {
       "jre": {
-        "name": "OpenJDK25U-jdk_x64_windows_hotspot_25.0.4_7.zip",
+        "name": "OpenJDK25U-jre_x64_windows_hotspot_25.0.4_7.zip",
         "version": "25.0.4+7-LTS",
-        "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jdk_x64_windows_hotspot_25.0.4_7.zip",
-        "sha256": "7caab7db43bf4b94a2e6252c699e70d90084f9aa7c943cd3414761fd540937ae",
+        "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jre_x64_windows_hotspot_25.0.4_7.zip",
+        "sha256": "5b0d58f043f762fa3ee6cc12b6774b59b245cafdcb357e45ce61f822aa9a56cb",
         "license": "GPL-2.0-only WITH Classpath-exception-2.0"
       },
       "node": {
@@ -27,17 +27,17 @@
     },
     "darwin-x64": {
       "jre": {
-        "name": "OpenJDK25U-jdk_x64_mac_hotspot_25.0.4_7.tar.gz",
+        "name": "OpenJDK25U-jre_x64_mac_hotspot_25.0.4_7.tar.gz",
         "version": "25.0.4+7-LTS",
-        "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jdk_x64_mac_hotspot_25.0.4_7.tar.gz",
-        "sha256": "a5ac9c46dad47ac06df35e36d096913195d8da1f3f71918828bcc2cfe33869b7",
+        "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jre_x64_mac_hotspot_25.0.4_7.tar.gz",
+        "sha256": "1603a51392d6e4aa66dea50f60cc725d40ed77c05bf7557096e5003807236296",
         "license": "GPL-2.0-only WITH Classpath-exception-2.0"
       },
       "node": {
-        "name": "node-v24.19.0-darwin-x64.tar.xz",
+        "name": "node-v24.19.0-darwin-x64.tar.gz",
         "version": "24.19.0",
-        "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-x64.tar.xz",
-        "sha256": "d35e95230f46f6f0751df497c56622c6735e05d5e1fb1630996a005b9d328fe4",
+        "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-x64.tar.gz",
+        "sha256": "d1b5e999db158c62fe8f7267a4476b035d8bd93b1a605bac24a3f0dd166e3316",
         "license": "MIT"
       },
       "rg": {
@@ -50,17 +50,17 @@
     },
     "darwin-arm64": {
       "jre": {
-        "name": "OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4_7.tar.gz",
+        "name": "OpenJDK25U-jre_aarch64_mac_hotspot_25.0.4_7.tar.gz",
         "version": "25.0.4+7-LTS",
-        "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4_7.tar.gz",
-        "sha256": "5a101c54abf5a9f16c0f70d8c38ba99e6567c1ba213378f0bb04497284f051bd",
+        "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jre_aarch64_mac_hotspot_25.0.4_7.tar.gz",
+        "sha256": "bc5c721d4475b328e50cc0fbbe3319773db374716836e7caa8fb4398c1f90eba",
         "license": "GPL-2.0-only WITH Classpath-exception-2.0"
       },
       "node": {
-        "name": "node-v24.19.0-darwin-arm64.tar.xz",
+        "name": "node-v24.19.0-darwin-arm64.tar.gz",
         "version": "24.19.0",
-        "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.xz",
-        "sha256": "3f1cf157479c1480352083105e13faf9d008ede98e7e157746b6df940d197b94",
+        "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz",
+        "sha256": "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d",
         "license": "MIT"
       },
       "rg": {

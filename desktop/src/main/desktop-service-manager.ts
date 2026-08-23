@@ -1,4 +1,5 @@
-import { mkdir } from "node:fs/promises";
+import { access, mkdir, stat } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 
 import { createInstanceId } from "./instance-id.js";
@@ -41,11 +42,14 @@ export async function startDesktopServices(options: DesktopServiceManagerOptions
   const appDataDirectory = options.appDataDirectory ?? path.join(options.userDataDirectory, "mboo");
   await mkdir(appDataDirectory, { recursive: true });
   const collector = await DesktopDiagnosticsCollector.create(path.join(appDataDirectory, "logs", "desktop-startup.log"));
-  const javaRuntime = getDesktopResourceLayout(options.resourcesDirectory, platform, architecture).javaExecutable;
+  const layout = getDesktopResourceLayout(options.resourcesDirectory, platform, architecture);
+  const javaRuntime = layout.javaExecutable;
   try {
+    await verifyBundledExecutable(layout.javaExecutable, "Java JRE");
+    await verifyBundledExecutable(layout.nodeExecutable, "Node.js");
     await verifyBundledRg(options.resourcesDirectory, platform, architecture);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "桌面随包 ripgrep 校验失败";
+    const message = error instanceof Error ? error.message : "桌面随包运行时校验失败";
     collector.recordOutput("启动预检", "stderr", message);
     await collector.flush();
     throw new DesktopServiceStartError(message, collector.snapshot({
@@ -58,7 +62,7 @@ export async function startDesktopServices(options: DesktopServiceManagerOptions
   }
 
   const supervisorScript = path.join(options.resourcesDirectory, "process-supervisor.js");
-  const nodeExecutable = getDesktopResourceLayout(options.resourcesDirectory, platform, architecture).nodeExecutable;
+  const nodeExecutable = layout.nodeExecutable;
 
   const coordinator = new DesktopStartupCoordinator({
     allocatePorts: allocateLoopbackPorts,
@@ -142,6 +146,17 @@ export async function startDesktopServices(options: DesktopServiceManagerOptions
       nodeVersion: process.versions.node,
       javaRuntime,
     }));
+  }
+}
+
+async function verifyBundledExecutable(executable: string, name: string): Promise<void> {
+  try {
+    const metadata = await stat(executable);
+    if (!metadata.isFile()) throw new Error(`${name} 不是普通文件`);
+    await access(executable, constants.X_OK);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("不是普通文件")) throw error;
+    throw new Error(`桌面随包 ${name} 不存在或不可执行：${executable}`);
   }
 }
 

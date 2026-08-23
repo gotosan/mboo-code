@@ -13,10 +13,16 @@ async function main(): Promise<void> {
   const target = spawnTarget(targetExecutable, targetArguments, targetEnvironment);
   let isStopping = false;
 
-  const stopParentWatch = watchParentProcess(parentPid, () => {
+  const requestStop = () => {
     if (isStopping) return;
     isStopping = true;
+    stopParentWatch();
     void stopTarget(target).finally(() => process.exit(0));
+  };
+  const stopParentWatch = watchParentProcess(parentPid, requestStop);
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (data) => {
+    if (data.toString().split(/\r?\n/).some((line) => line.trim() === "stop")) requestStop();
   });
 
   target.once("error", (error) => {
@@ -32,12 +38,7 @@ async function main(): Promise<void> {
   });
 
   for (const signal of ["SIGTERM", "SIGINT", "SIGBREAK"] as const) {
-    process.once(signal, () => {
-      if (isStopping) return;
-      isStopping = true;
-      stopParentWatch();
-      void stopTarget(target).finally(() => process.exit(0));
-    });
+    process.once(signal, requestStop);
   }
 }
 
@@ -99,7 +100,9 @@ function isProcessAlive(pid: number): boolean {
 async function stopTarget(target: ChildProcess): Promise<void> {
   if (target.exitCode !== null || target.signalCode !== null) return;
   if (process.platform === "win32" && target.pid) {
-    await runTaskKill(target.pid);
+    await runTaskKill(target.pid, false);
+    await waitForExit(target, 5_000);
+    if (target.exitCode === null && target.signalCode === null) await runTaskKill(target.pid, true);
     return;
   }
   target.kill("SIGTERM");
@@ -107,9 +110,10 @@ async function stopTarget(target: ChildProcess): Promise<void> {
   if (target.exitCode === null && target.signalCode === null) target.kill("SIGKILL");
 }
 
-function runTaskKill(pid: number): Promise<void> {
+function runTaskKill(pid: number, force: boolean): Promise<void> {
   return new Promise((resolve) => {
-    const taskKill = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+    const argumentsList = ["/pid", String(pid), "/t", ...(force ? ["/f"] : [])];
+    const taskKill = spawn("taskkill.exe", argumentsList, { stdio: "ignore", windowsHide: true });
     taskKill.once("close", () => resolve());
     taskKill.once("error", () => resolve());
   });

@@ -11,6 +11,7 @@ if (signingMode !== "unsigned" && signingMode !== "signed") {
 }
 
 const isSignedBuild = signingMode === "signed";
+if (!isSignedBuild) process.env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
 const macIdentity = process.env.MBOO_MAC_IDENTITY ?? process.env.CSC_NAME;
 const hasMacSigningCredentials = Boolean(
   macIdentity || process.env.CSC_LINK || process.env.CSC_KEYCHAIN_PROFILE || process.env.CSC_KEYCHAIN,

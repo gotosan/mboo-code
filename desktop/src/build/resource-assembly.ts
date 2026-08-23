@@ -49,6 +49,10 @@ export function createResourceAssemblyPlan(options: CreateResourceAssemblyPlanOp
         destination: path.join(outputDirectory, "tools", "rg", rgFileName),
       },
       {
+        source: path.join(cacheDirectory, "licenses"),
+        destination: path.join(outputDirectory, "licenses"),
+      },
+      {
         source: path.join(options.workspaceDirectory, "build", "libs", "mboo-code-0.0.1-SNAPSHOT.jar"),
         destination: path.join(outputDirectory, "backend", "mboo-code.jar"),
       },

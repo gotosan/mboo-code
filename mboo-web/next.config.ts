@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -34,8 +35,6 @@ const optionalPeerAliases = {
 const nextConfig: NextConfig = {
   // 桌面生产包由内置 Node.js 直接运行 standalone server.js，避免目标机器依赖 npm 或 next 命令。
   output: "standalone",
-  // 允许本机局域网 IP 访问开发服务（含 /_next/webpack-hmr）
-  allowedDevOrigins: collectLanDevOrigins(),
   reactCompiler: true,
   // 避免上层多 lockfile 导致 workspace root 误判与多余扫描
   turbopack: {
@@ -58,4 +57,8 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default (phase: string): NextConfig => ({
+  ...nextConfig,
+  // 仅开发服务需要局域网 HMR 白名单，避免生产 standalone 写入构建机网络信息。
+  ...(phase === PHASE_DEVELOPMENT_SERVER ? { allowedDevOrigins: collectLanDevOrigins() } : {}),
+});

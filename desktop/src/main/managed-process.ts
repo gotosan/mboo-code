@@ -39,7 +39,7 @@ export function launchManagedProcess(spec: ProcessLaunchSpec): ManagedProcess & 
   return {
     name: spec.name,
     hasExited: () => exited,
-    stop: () => stopChildProcess(child),
+    stop: () => stopChildProcess(child, Boolean(spec.supervisorExecutable && spec.supervisorScript)),
   };
 }
 
@@ -62,19 +62,34 @@ function encodeJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
 
-function stopChildProcess(child: ChildProcess): Promise<void> {
+function stopChildProcess(child: ChildProcess, usesSupervisor: boolean): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve();
   }
 
   return new Promise((resolve) => {
     const forceStopTimer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    }, 5_000);
-    child.once("exit", () => {
+      if (child.exitCode === null && child.signalCode === null) terminateProcessTree(child);
+    }, 10_000);
+    const finish = () => {
       clearTimeout(forceStopTimer);
       resolve();
-    });
-    child.kill("SIGTERM");
+    };
+    child.once("exit", finish);
+    child.once("error", finish);
+    if (usesSupervisor && child.stdin?.writable) {
+      child.stdin.write("stop\n");
+    } else {
+      terminateProcessTree(child);
+    }
   });
+}
+
+function terminateProcessTree(child: ChildProcess): void {
+  if (process.platform === "win32" && child.pid) {
+    const taskKill = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    taskKill.once("error", () => child.kill("SIGKILL"));
+    return;
+  }
+  child.kill("SIGKILL");
 }

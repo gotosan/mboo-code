@@ -48,7 +48,7 @@ ELECTRON_MIRROR=https://your-approved-mirror.example/electron/ npm run package:m
 
 应用图标资源位于 `desktop/resources/icons/`：`mboo-code.png` 是通用 1024 × 1024 源图，`mboo-code.icns` 用于 macOS，`mboo-code.ico` 用于 Windows。修改图标后需要重新封包，已安装的旧 App 不会自动更新图标缓存。
 
-运行时归档（Java、Node.js、`rg`）仍由 `resources/runtime/manifest.json` 固定来源和 SHA-256。构建脚本会优先复用 `desktop/.runtime-archives/<target>` 缓存，并在使用前重新校验；在公司网络中应使用 HTTPS 代理或提供内容完全一致的内部缓存，不应关闭校验或使用未知镜像替换归档。
+运行时归档（Java JRE、Node.js、`rg`）仍由 `resources/runtime/manifest.json` 固定来源和 SHA-256。构建脚本会优先复用 `desktop/.runtime-archives/<target>` 缓存，并在使用前重新校验；在公司网络中应使用 HTTPS 代理或提供内容完全一致的内部缓存，不应关闭校验或使用未知镜像替换归档。解压和二进制架构校验由 Node.js 实现，Windows 不需要额外安装 `file`、tar 或 Git Bash。
 
 ## 开发与测试
 
@@ -80,7 +80,7 @@ npm run verify:runtime -- darwin-x64
 npm run verify:runtime -- darwin-arm64
 ```
 
-`verify:runtime` 会检查 Java、Node.js、`rg` 的版本、SHA-256、CPU 架构以及 macOS 可执行权限。Windows 资源可以在 macOS 上做静态架构校验，但 Windows 真机启动、路径和进程回收仍须在 Windows runner 或 Windows 机器验证。
+`verify:runtime` 会检查 Java、Node.js、`rg` 的版本、SHA-256、CPU 架构以及 macOS 可执行权限。运行时资源可以跨平台做静态架构校验；完整封包必须在与目标系统、CPU 架构一致的原生构建机执行，防止 Next.js 原生模块串入宿主架构。
 
 如果当前网络无法访问 GitHub，而 Git 历史中已经保存了与 `manifest.json` 对应的运行时归档，可以从该提交恢复 `desktop/.runtime-archives/<target>` 后离线准备：
 
@@ -134,9 +134,10 @@ Windows 使用 `WIN_CSC_LINK` 和 `WIN_CSC_KEY_PASSWORD`；macOS 使用 `CSC_LIN
 
 - `.github/workflows/windows-desktop.yml`：Windows x64 测试和未签名 NSIS 封包。
 - `.github/workflows/macos-desktop.yml`：macOS x64/arm64 测试和未签名 DMG 封包。
-- `.github/workflows/signed-desktop-release.yml`：手动触发的三平台签名/公证封包，需要 GitHub Secrets `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD`、`MAC_CSC_LINK`、`MAC_CSC_KEY_PASSWORD`、`APPLE_API_KEY_P8`、`APPLE_API_KEY_ID` 和 `APPLE_API_ISSUER`。
 
-Windows workflow 还会执行 `scripts/windows-installer-smoke.ps1`，使用临时目录验证 NSIS 静默安装、桌面服务 ready、进程树回收和卸载。
+正式签名发布继续使用本节前述环境变量在受保护的发布环境执行；仓库内 CI 只产出未签名验证包，不保存或处理发布证书。
+
+Windows workflow 会先执行 `scripts/windows-unpacked-smoke.ps1` 验证桌面服务和进程回收，再执行 `scripts/windows-installer-smoke.ps1`，使用隔离的临时数据目录验证 NSIS 静默安装、正常退出、Electron 父进程异常退出后的进程树回收和卸载。
 
 工作流可通过 GitHub Actions 手动触发。当前仓库已在 macOS 完成三目标资源静态校验和 macOS 两种架构的随包回归；Windows 真机安装、启动、卸载、中文/空格路径、空 PATH 下 `rg.exe` 和 Windows 进程树回收仍需 Windows runner 或 Windows 机器的实际结果。正式签名、公证和干净环境安装也不应以本地未签名包的结果代替。
 
