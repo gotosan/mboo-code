@@ -1,4 +1,7 @@
 node_modules/
 dist/
 release/
+.runtime-cache/
+.runtime-archives/
+*.DS_Store
 *.log

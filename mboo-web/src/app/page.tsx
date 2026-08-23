@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { TaskComposer } from "@/features/composer/task-composer";
 import { ContextRail } from "@/features/context-rail/context-rail";
+import { ModelSettingsDialog } from "@/features/settings/model-settings-dialog";
 import { WorkbenchHeader } from "@/features/workbench/workbench-header";
 import layoutStyles from "@/features/workbench/workbench-layout.module.css";
 import { ConversationLoadingState, ConversationStatusPanel } from "@/features/conversation/conversation-status-panel";
@@ -225,6 +226,7 @@ export default function Home() {
   // 工作台：左栏折叠与全屏状态映射到顶部工具栏控件
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isModelSettingsOpen, setIsModelSettingsOpen] = useState(false);
   // 移动端任务设置默认折叠摘要；缺模型时强制展开，避免找不到配置
   const [isComposerSettingsOpen, setIsComposerSettingsOpen] = useState(true);
   const [sessionQuery, setSessionQuery] = useState("");
@@ -274,6 +276,7 @@ export default function Home() {
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const lastSentModelRef = useRef("");
   const modelOptionsRef = useRef<string[]>([]);
+  const modelOptionsRequestRef = useRef(0);
   const modelNameRef = useRef("");
   const contextUsageBySessionRef = useRef<Record<string, ContextUsageSnapshot | null>>({});
   const compressionAbortControllerRef = useRef<AbortController | null>(null);
@@ -330,32 +333,41 @@ export default function Home() {
     connectionStateRef.current = connectionState;
   }, [connectionState]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadModelOptions = async () => {
-      try {
-        const response = await fetch("/api/model/list", { cache: "no-store" });
-        const options = (await readApiData<string[]>(response)) ?? [];
-        if (cancelled) return;
-        modelOptionsRef.current = options;
-        setModelOptions(options);
-        setModelOptionsError("");
-        const nextModelName = modelNameRef.current || lastSentModelRef.current || options[0] || "";
-        applyModelName(nextModelName, !nextModelName || !options.includes(nextModelName));
-      } catch (error) {
-        if (!cancelled) {
-          setModelOptionsError(toErrorMessage(error));
-          setIsManualModel(true);
-        }
-      } finally {
-        if (!cancelled) setIsLoadingModelOptions(false);
+  /**
+   * 统一模型列表的初始化与刷新入口，确保设置保存后沿用当前选择策略更新输入器，而不是维护两套加载逻辑。
+   */
+  const refreshModelOptions = useCallback(async () => {
+    const requestId = modelOptionsRequestRef.current + 1;
+    modelOptionsRequestRef.current = requestId;
+    setIsLoadingModelOptions(true);
+
+    try {
+      const response = await fetch("/api/model/list", { cache: "no-store" });
+      const options = (await readApiData<string[]>(response)) ?? [];
+      if (requestId !== modelOptionsRequestRef.current) return;
+
+      modelOptionsRef.current = options;
+      setModelOptions(options);
+      setModelOptionsError("");
+      const nextModelName = modelNameRef.current || lastSentModelRef.current || options[0] || "";
+      applyModelName(nextModelName, !nextModelName || !options.includes(nextModelName));
+    } catch (error) {
+      if (requestId !== modelOptionsRequestRef.current) return;
+      setModelOptionsError(toErrorMessage(error));
+      setIsManualModel(true);
+    } finally {
+      if (requestId === modelOptionsRequestRef.current) {
+        setIsLoadingModelOptions(false);
       }
-    };
-    void loadModelOptions();
-    return () => {
-      cancelled = true;
-    };
+    }
   }, [applyModelName]);
+
+  useEffect(() => {
+    void refreshModelOptions();
+    return () => {
+      modelOptionsRequestRef.current += 1;
+    };
+  }, [refreshModelOptions]);
 
   useEffect(() => {
     const targetModel = modelName.trim();
@@ -2301,7 +2313,8 @@ export default function Home() {
   const desktopSidebarVisible = !isSidebarCollapsed;
 
   return (
-    <main className="relative h-dvh overflow-hidden bg-[#e8e8e8] p-0 text-text-1 [overscroll-behavior:none]">
+    <>
+      <main className="relative h-dvh overflow-hidden bg-[#e8e8e8] p-0 text-text-1 [overscroll-behavior:none]">
       <div className={layoutStyles.shell}>
         <WorkbenchHeader
           status={status}
@@ -2310,6 +2323,7 @@ export default function Home() {
           onToggleSidebar={() => setIsSidebarCollapsed((current) => !current)}
           onToggleFullscreen={() => void toggleFullscreen()}
           onResetLayout={() => void resetWindowLayout()}
+          onOpenModelSettings={() => setIsModelSettingsOpen(true)}
         />
 
         <div
@@ -2607,6 +2621,12 @@ export default function Home() {
         </div>
       </div>
     </main>
+    <ModelSettingsDialog
+      open={isModelSettingsOpen}
+      onClose={() => setIsModelSettingsOpen(false)}
+      onModelsRefreshed={refreshModelOptions}
+    />
+    </>
   );
 }
 
