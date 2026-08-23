@@ -217,7 +217,9 @@ public class McpServerRuntime {
             Map<String, String> env = new HashMap<>();
             JSONObject envObject = config.getJSONObject("env");
             if (envObject != null) envObject.forEach((key, value) -> env.put(key, String.valueOf(value)));
-            List<String> effectiveCommand = prepareStdioCommand(resolveCommand(command), config.getString("cwd"));
+            String resolutionPath = env.entrySet().stream().filter(entry -> entry.getKey().equalsIgnoreCase("PATH"))
+                    .map(Map.Entry::getValue).findFirst().orElseGet(() -> System.getenv("PATH"));
+            List<String> effectiveCommand = prepareStdioCommand(resolveCommand(command, resolutionPath), config.getString("cwd"));
             return new ManagedStdioMcpTransport(effectiveCommand, env);
         }
         Map<String, String> headers = new HashMap<>();
@@ -227,17 +229,17 @@ public class McpServerRuntime {
     }
 
     /** Windows 的 npx/npm 通常是 .cmd 文件，Java ProcessBuilder 不会按 PATHEXT 自动补全扩展名。 */
-    private List<String> resolveCommand(List<String> command) {
+    private List<String> resolveCommand(List<String> command, String resolutionPath) {
         if (!System.getProperty("os.name", "").toLowerCase().contains("win") || command.isEmpty()) return command;
         String executable = command.getFirst();
-        String resolved = resolveWindowsExecutable(executable);
+        String resolved = resolveWindowsExecutable(executable, resolutionPath);
         if (resolved.equals(executable)) return command;
         ArrayList<String> resolvedCommand = new ArrayList<>(command);
         resolvedCommand.set(0, resolved);
         return resolvedCommand;
     }
 
-    private String resolveWindowsExecutable(String executable) {
+    private String resolveWindowsExecutable(String executable, String resolutionPath) {
         Path input = Path.of(executable);
         boolean hasPath = input.getNameCount() > 1 || executable.contains("\\") || executable.contains("/");
         List<String> candidates = new ArrayList<>();
@@ -247,9 +249,8 @@ public class McpServerRuntime {
             candidates.add(executable + ".bat");
             candidates.add(executable + ".exe");
         } else {
-            String path = System.getenv("PATH");
-            if (path == null || path.isBlank()) return executable;
-            for (String directory : path.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+            if (resolutionPath == null || resolutionPath.isBlank()) return executable;
+            for (String directory : resolutionPath.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
                 if (directory.isBlank()) continue;
                 candidates.add(Path.of(directory, executable + ".cmd").toString());
                 candidates.add(Path.of(directory, executable + ".bat").toString());

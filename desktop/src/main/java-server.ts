@@ -24,9 +24,20 @@ export interface JavaServerLaunchOptions {
  */
 export function createJavaServerLaunchSpec(options: JavaServerLaunchOptions): JavaServerLaunchSpec {
   const layout = getDesktopResourceLayout(options.resourcesDirectory, options.platform, options.architecture);
-  const nodeDirectory = path.dirname(layout.nodeExecutable);
+  const pathApi = options.platform === "win32" ? path.win32 : path.posix;
+  const nodeDirectory = pathApi.dirname(layout.nodeExecutable);
+  const rgDirectory = pathApi.dirname(layout.rgExecutable);
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
   const inheritedPath = process.env[pathKey] ?? "";
+  const pathDelimiter = options.platform === "win32" ? ";" : ":";
+  const pathDirectories = inheritedPath.length > 0 ? inheritedPath.split(pathDelimiter) : [];
+  const normalizedDirectories = new Set(pathDirectories.map((directory) => options.platform === "win32" ? directory.toLowerCase() : directory));
+  for (const directory of [nodeDirectory, rgDirectory]) {
+    const normalized = options.platform === "win32" ? directory.toLowerCase() : directory;
+    if (normalizedDirectories.has(normalized)) continue;
+    pathDirectories.push(directory);
+    normalizedDirectories.add(normalized);
+  }
 
   return {
     executable: layout.javaExecutable,
@@ -41,7 +52,7 @@ export function createJavaServerLaunchSpec(options: JavaServerLaunchOptions): Ja
     ],
     environment: {
       MBOO_INSTANCE_ID: options.instanceId,
-      [pathKey]: inheritedPath ? `${nodeDirectory}${path.delimiter}${inheritedPath}` : nodeDirectory,
+      [pathKey]: pathDirectories.join(pathDelimiter),
     },
   };
 }

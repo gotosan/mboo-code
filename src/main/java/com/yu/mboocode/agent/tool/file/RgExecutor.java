@@ -33,7 +33,7 @@ public class RgExecutor {
         try {
             process = new ProcessBuilder(command).redirectErrorStream(false).start();
         } catch (IOException e) {
-            throw new FileToolException(FileToolErrorCode.RG_NOT_FOUND, "系统未找到 ripgrep（rg）", e);
+            throw new FileToolException(FileToolErrorCode.RG_NOT_FOUND, "ripgrep 不存在或无法启动", e);
         }
 
         CompletableFuture<byte[]> stdout = CompletableFuture.supplyAsync(() -> readAll(process.getInputStream()));
@@ -69,49 +69,77 @@ public class RgExecutor {
     }
 
     /**
-     * 解析并校验本次实际执行的 rg，避免桌面包预检随包二进制而搜索阶段意外回退到系统 PATH。
+     * 优先使用环境中的合格 rg；环境候选不可用时再使用桌面随包版本。
      */
     private synchronized String ensureVersion() {
-        String executable = resolveExecutable();
-        if (executable.equals(verifiedExecutable)) {
-            return executable;
+        if (verifiedExecutable != null) return verifiedExecutable;
+        List<String> failures = new ArrayList<>();
+        FileToolException lastFailure = null;
+        try {
+            verifyVersion("rg", "系统 PATH 中的");
+            verifiedExecutable = "rg";
+            return verifiedExecutable;
+        } catch (FileToolException e) {
+            if (Thread.currentThread().isInterrupted()) throw e;
+            failures.add(e.getUserMessage());
+            lastFailure = e;
         }
+
+        String bundledExecutable = null;
+        try {
+            bundledExecutable = resolveBundledExecutable();
+        } catch (FileToolException e) {
+            failures.add(e.getUserMessage());
+            lastFailure = e;
+        }
+        if (bundledExecutable != null) {
+            try {
+                verifyVersion(bundledExecutable, "桌面随包");
+                verifiedExecutable = bundledExecutable;
+                return verifiedExecutable;
+            } catch (FileToolException e) {
+                if (Thread.currentThread().isInterrupted()) throw e;
+                failures.add(e.getUserMessage());
+                lastFailure = e;
+            }
+        }
+        FileToolErrorCode errorCode = lastFailure != null && lastFailure.getErrorCode() instanceof FileToolErrorCode code ? code : FileToolErrorCode.RG_NOT_FOUND;
+        throw new FileToolException(errorCode, "没有可用的 ripgrep：" + String.join("；", failures), lastFailure);
+    }
+
+    private void verifyVersion(String executable, String source) {
         Process process;
         try {
             process = new ProcessBuilder(executable, "--version").redirectErrorStream(true).start();
             if (!process.waitFor(5, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                throw new FileToolException(FileToolErrorCode.RG_TIMEOUT, "检查 ripgrep 版本超时");
+                throw new FileToolException(FileToolErrorCode.RG_TIMEOUT, source + " ripgrep 版本检查超时");
             }
             String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             Matcher matcher = VERSION_PATTERN.matcher(output);
             if (!matcher.find()) {
-                throw new FileToolException(FileToolErrorCode.DEPENDENCY_VERSION_UNSUPPORTED, "无法识别 ripgrep 版本，最低要求 13.0.0");
+                throw new FileToolException(FileToolErrorCode.DEPENDENCY_VERSION_UNSUPPORTED, source + " ripgrep 版本无法识别，最低要求 13.0.0");
             }
             Version actual = new Version(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)), Integer.parseInt(matcher.group(3)));
             if (actual.compareTo(MIN_VERSION) < 0) {
-                throw new FileToolException(FileToolErrorCode.DEPENDENCY_VERSION_UNSUPPORTED, "ripgrep 版本不满足要求，最低版本 13.0.0，当前版本 " + actual);
+                throw new FileToolException(FileToolErrorCode.DEPENDENCY_VERSION_UNSUPPORTED, source + " ripgrep 版本不满足要求，最低版本 13.0.0，当前版本 " + actual);
             }
-            verifiedExecutable = executable;
-            return executable;
         } catch (FileToolException e) {
             throw e;
         } catch (IOException e) {
-            throw new FileToolException(FileToolErrorCode.RG_NOT_FOUND, "系统未找到 ripgrep（rg）", e);
+            throw new FileToolException(FileToolErrorCode.RG_NOT_FOUND, source + " ripgrep 不存在或无法启动", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new FileToolException(FileToolErrorCode.RG_EXECUTION_FAILED, "检查 ripgrep 版本被中断", e);
+            throw new FileToolException(FileToolErrorCode.RG_EXECUTION_FAILED, source + " ripgrep 版本检查被中断", e);
         }
     }
 
     /**
-     * 在桌面模式优先使用 Electron 明确传入的随包路径，未配置时才维持浏览器和开发模式的 PATH 兼容。
+     * 桌面模式由 Electron 传入随包绝对路径，浏览器和开发模式没有该候选。
      */
-    private String resolveExecutable() {
+    private String resolveBundledExecutable() {
         String configuredPath = System.getProperty("mboo.rgPath");
-        if (configuredPath == null || configuredPath.isBlank()) {
-            return "rg";
-        }
+        if (configuredPath == null || configuredPath.isBlank()) return null;
         try {
             Path executable = Path.of(configuredPath);
             if (!executable.isAbsolute()) {

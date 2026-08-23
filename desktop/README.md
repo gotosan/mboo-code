@@ -50,6 +50,8 @@ ELECTRON_MIRROR=https://your-approved-mirror.example/electron/ npm run package:m
 
 运行时归档（Java JRE、Node.js、`rg`）仍由 `resources/runtime/manifest.json` 固定来源和 SHA-256。构建脚本会优先复用 `desktop/.runtime-archives/<target>` 缓存，并在使用前重新校验；在公司网络中应使用 HTTPS 代理或提供内容完全一致的内部缓存，不应关闭校验或使用未知镜像替换归档。解压和二进制架构校验由 Node.js 实现，Windows 不需要额外安装 `file`、tar 或 Git Bash。
 
+正式桌面端启动 Java 后端时保留系统 `PATH` 在前，并依次追加随包 Node.js 与 `rg` 目录。命令工具和未显式覆盖 `PATH` 的 MCP stdio 裸命令会优先使用系统可执行文件，系统缺少 `node` 或 `rg` 时自动使用随包版本。文件搜索工具还会校验系统 `rg` 最低版本，不满足要求时直接选择随包版本。桌面包不提供 `npm`、`npx` 或 Corepack。
+
 ## 开发与测试
 
 ```text
