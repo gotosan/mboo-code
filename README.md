@@ -122,6 +122,10 @@ Mboo Code 让 AI 真正进入工作区完成任务：理解代码、检索文件
 
 ## 5. 快速开始
 
+### 5.0 版本配置
+
+项目发布版本统一维护在根目录 `version.properties` 的 `appVersion` 字段，例如 `0.1.0`。Gradle 后端、Next.js 前端和 Electron 桌面安装包都会读取该值；发布时只需修改这一处，再创建对应的 Git 标签 `v0.1.0`。后端打包产物固定为 `build/libs/mboo-code.jar`。
+
 ### 5.1 环境要求
 
 - JDK 25
@@ -264,7 +268,7 @@ JAVA_TOOL_OPTIONS="-Dmboo.appDataDir=/path/to/mboo-data" ./gradlew bootRun
 直接运行 JAR 时，也可以显式传入该参数：
 
 ```bash
-java -Dmboo.appDataDir=/path/to/mboo-data -jar build/libs/mboo-code-0.0.1-SNAPSHOT.jar
+java -Dmboo.appDataDir=/path/to/mboo-data -jar build/libs/mboo-code.jar
 ```
 
 应用启动时会把数据根目录规范化为真实绝对路径；目录无法创建、目标不是目录或路径无效时会直接终止。用户级 Skill 仍固定从 `~/.mboo/skills` 和 `~/.agents/skills` 发现，不随 `mboo.appDataDir` 改变。

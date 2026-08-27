@@ -1,6 +1,18 @@
+const fs = require("node:fs");
+const path = require("node:path");
+
+function readAppVersion() {
+  const versionFile = path.resolve(__dirname, "..", "version.properties");
+  const content = fs.readFileSync(versionFile, "utf8");
+  const match = content.match(/^\s*appVersion\s*=\s*([^#\s]+)\s*$/m);
+  if (!match || !/^\d+\.\d+\.\d+$/.test(match[1])) throw new Error("version.properties 中的 appVersion 必须是 x.y.z 格式");
+  return match[1];
+}
+
 const targetKey = process.env.MBOO_TARGET_KEY;
 const signingMode = process.env.MBOO_SIGNING_MODE ?? "unsigned";
 const electronMirror = process.env.ELECTRON_MIRROR?.trim() || "https://npmmirror.com/mirrors/electron/";
+const appVersion = readAppVersion();
 
 if (!new Set(["win32-x64", "darwin-x64", "darwin-arm64"]).has(targetKey)) {
   throw new Error("MBOO_TARGET_KEY 必须是 win32-x64、darwin-x64 或 darwin-arm64");
@@ -33,6 +45,9 @@ if (isSignedBuild && targetKey === "win32-x64" && !process.env.WIN_CSC_LINK) {
 module.exports = {
   appId: "com.yu.mboocode",
   productName: "Mboo Code",
+  extraMetadata: {
+    version: appVersion,
+  },
   asar: true,
   directories: {
     output: "release",
