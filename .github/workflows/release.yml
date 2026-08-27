@@ -1,0 +1,202 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 Git 标签，例如 v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      release_notes_path: ${{ steps.metadata.outputs.release_notes_path }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Validate tag, version and release notes
+        id: metadata
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          tag="${INPUT_TAG:-$EVENT_REF_NAME}"
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "标签必须符合 v<major>.<minor>.<patch>，可带 prerelease 后缀，例如 v0.1.0 或 v0.1.0-rc.1：$tag" >&2
+            exit 1
+          fi
+
+          version="${BASH_REMATCH[1]}"
+          app_version="$(awk -F= '$1 == "appVersion" { gsub(/[[:space:]]/, "", $2); print $2; exit }' version.properties)"
+          if [[ -z "$app_version" ]]; then
+            echo "version.properties 中缺少 appVersion" >&2
+            exit 1
+          fi
+          if [[ "$app_version" != "$version" ]]; then
+            echo "版本不一致：标签为 $version，version.properties 为 $app_version" >&2
+            exit 1
+          fi
+
+          release_notes_path=".github/release-notes/${tag}.md"
+          if [[ ! -f "$release_notes_path" ]]; then
+            echo "缺少发布说明文件：$release_notes_path" >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$tag" == *-* ]]; then prerelease=true; fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "release_notes_path=$release_notes_path"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: win32-x64
+            package_script: package:win:x64
+            artifact: mboo-code-windows-x64
+          - runner: macos-15-intel
+            target: darwin-x64
+            package_script: package:mac:x64
+            artifact: mboo-code-macos-x64
+          - runner: macos-15
+            target: darwin-arm64
+            package_script: package:mac:arm64
+            artifact: mboo-code-macos-arm64
+
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            mboo-web/package-lock.json
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: mboo-web
+
+      - name: Build unsigned desktop package
+        run: npm run ${{ matrix.package_script }}
+        working-directory: desktop
+        env:
+          MBOO_SIGNING_MODE: unsigned
+
+      - name: Verify macOS DMG
+        if: runner.os == 'macOS'
+        run: hdiutil verify desktop/release/Mboo-Code-*-mac-*.dmg
+
+      - name: Verify Windows installer artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath desktop/release -Filter "Mboo-Code-*-win-x64.exe" -File)
+          if ($installers.Count -ne 1) { throw "应生成且仅生成一个 Windows 安装包，实际为 $($installers.Count) 个" }
+
+          $blockmaps = @(Get-ChildItem -LiteralPath desktop/release -Filter "Mboo-Code-*-win-x64.exe.blockmap" -File)
+          if ($blockmaps.Count -ne 1) { throw "应生成且仅生成一个 Windows blockmap，实际为 $($blockmaps.Count) 个" }
+
+      - name: Upload Windows package
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            desktop/release/Mboo-Code-*-win-x64.exe
+            desktop/release/Mboo-Code-*-win-x64.exe.blockmap
+
+      - name: Upload macOS package
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: desktop/release/Mboo-Code-*-mac-*.dmg
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mboo-code-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: Mboo Code ${{ needs.prepare.outputs.tag }}
+          body_path: ${{ needs.prepare.outputs.release_notes_path }}
+          draft: false
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/Mboo-Code-*-win-x64.exe
+            release-assets/Mboo-Code-*-win-x64.exe.blockmap
+            release-assets/Mboo-Code-*-mac-x64.dmg
+            release-assets/Mboo-Code-*-mac-arm64.dmg
