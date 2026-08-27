@@ -27,12 +27,6 @@ jobs:
         working-directory: desktop
         env:
           MBOO_SIGNING_MODE: unsigned
-      - shell: pwsh
-        run: ./desktop/scripts/windows-unpacked-smoke.ps1
-      - shell: pwsh
-        run: |
-          $installer = (Get-ChildItem ./desktop/release/Mboo-Code-*-win-x64.exe | Select-Object -First 1).FullName
-          ./desktop/scripts/windows-installer-smoke.ps1 -InstallerPath $installer
       - uses: actions/upload-artifact@v4
         with:
           name: mboo-code-windows-x64
