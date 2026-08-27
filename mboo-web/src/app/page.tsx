@@ -2360,7 +2360,6 @@ export default function Home() {
           {desktopSidebarVisible ? (
             <aside className={`${sidebarStyles.sidebar} hidden min-h-0 min-[900px]:flex min-[900px]:flex-col`}>
               <div className={sidebarStyles.profile}>
-                <img src="/mboo-code-icon.png" alt="" aria-hidden className={sidebarStyles.profileAvatar} />
                 <div className="min-w-0">
                   <p className={sidebarStyles.profileName}>Mboo Code</p>
                   <p className={sidebarStyles.profileStatus}>
@@ -2397,7 +2396,6 @@ export default function Home() {
               >
                 <div className={`${sidebarStyles.profile} justify-between gap-2 pr-2`}>
                   <div className="flex min-w-0 items-center gap-2">
-                    <img src="/mboo-code-icon.png" alt="" aria-hidden className={sidebarStyles.profileAvatar} />
                     <div className="min-w-0">
                       <p className={sidebarStyles.profileName}>会话</p>
                       <p className={sidebarStyles.profileStatus}>

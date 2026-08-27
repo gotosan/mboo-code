@@ -16,17 +16,6 @@
   background: #fff;
 }
 
-.profileAvatar {
-  display: inline-flex;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 auto;
-  border: 1px solid #e1e1dc;
-  border-radius: 14px;
-  background: #f0edff;
-  object-fit: cover;
-}
-
 .profileName {
   margin: 0;
   color: #080807;
