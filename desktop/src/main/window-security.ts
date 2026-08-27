@@ -7,6 +7,12 @@ export interface DiagnosticsDocumentData {
   copyText?: string;
 }
 
+/** 轻量启动页不依赖 Next.js，确保 sidecar 启动期间用户能立即看到窗口。 */
+export function createStartupDataUrl(): string {
+  const document = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mboo Code</title><style>:root{color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f9ff;color:#12233d}body{margin:0;min-height:100vh;display:grid;place-items:center}main{text-align:center}h1{margin:0 0 10px;font-size:24px;font-weight:600}p{margin:0;color:#5a6c82;font-size:14px}.loader{width:24px;height:24px;margin:0 auto 18px;border:3px solid #c9d8e8;border-top-color:#1687a7;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><main><div class="loader" aria-hidden="true"></div><h1>Mboo Code</h1><p>正在启动服务...</p></main></body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(document)}`;
+}
+
 /**
  * 将渲染进程权限收敛在单一配置中，避免新增窗口时意外开放 Node.js 或绕过受控桥接。
  */

@@ -38,6 +38,7 @@ const EMPTY_DRAFT: ModelSettingsDraft = {
 
 const STATUS_LABELS: Record<string, string> = {
   NOT_CONFIGURED: "未配置",
+  LOADING: "加载中",
   CONNECTION_FAILED: "连接失败",
   CONNECTED: "已连接",
   RESTART_REQUIRED: "配置更新重启后生效",

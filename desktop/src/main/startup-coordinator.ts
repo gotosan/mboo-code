@@ -34,7 +34,7 @@ export class StartupError extends Error {
 }
 
 /**
- * 按固定顺序托管 Java 与 Next 服务；失败时整轮回收并换用新端口，避免保留残留进程或误连旧实例。
+ * 并行托管 Java 与 Next 服务；失败时整轮回收并换用新端口，避免保留残留进程或误连旧实例。
  */
 export class DesktopStartupCoordinator {
   private readonly maxAttempts: number;
@@ -61,15 +61,29 @@ export class DesktopStartupCoordinator {
 
       try {
         this.reportPhase(context, "java-launch", "启动 Java sidecar");
-        javaProcess = await this.dependencies.launchJava(context);
-        this.reportPhase(context, "java-health", "等待 Java 健康检查");
-        await this.dependencies.waitForHealth({ phase: "java", context, process: javaProcess });
         this.reportPhase(context, "next-launch", "启动 Next.js standalone 服务");
-        nextProcess = await this.dependencies.launchNext(context);
+        const [javaLaunch, nextLaunch] = await Promise.allSettled([
+          this.dependencies.launchJava(context),
+          this.dependencies.launchNext(context),
+        ]);
+        if (javaLaunch.status === "fulfilled") javaProcess = javaLaunch.value;
+        if (nextLaunch.status === "fulfilled") nextProcess = nextLaunch.value;
+        if (javaLaunch.status === "rejected") throw toError(javaLaunch.reason, "Java sidecar 启动失败");
+        if (nextLaunch.status === "rejected") throw toError(nextLaunch.reason, "Next.js 服务启动失败");
+        const launchedJava = javaProcess;
+        const launchedNext = nextProcess;
+        if (!launchedJava || !launchedNext) throw new Error("sidecar 启动未返回进程句柄");
+
+        this.reportPhase(context, "java-health", "等待 Java 健康检查");
         this.reportPhase(context, "next-health", "等待 Next.js 健康检查");
-        await this.dependencies.waitForHealth({ phase: "next", context, process: nextProcess });
+        const [javaHealth, nextHealth] = await Promise.allSettled([
+          this.dependencies.waitForHealth({ phase: "java", context, process: launchedJava }),
+          this.dependencies.waitForHealth({ phase: "next", context, process: launchedNext }),
+        ]);
+        if (javaHealth.status === "rejected") throw toError(javaHealth.reason, "Java 健康检查失败");
+        if (nextHealth.status === "rejected") throw toError(nextHealth.reason, "Next.js 健康检查失败");
         this.reportPhase(context, "ready", "桌面服务健康检查通过");
-        return { ...context, javaProcess, nextProcess };
+        return { ...context, javaProcess: launchedJava, nextProcess: launchedNext };
       } catch (error) {
         lastError = error;
         this.reportPhase(context, "attempt-failed", error instanceof Error ? error.message : "启动失败");
@@ -86,13 +100,10 @@ export class DesktopStartupCoordinator {
   }
 
   private async stopAttempt(...processes: Array<ManagedProcess | undefined>): Promise<void> {
-    for (const process of processes) {
-      if (!process) continue;
-      try {
-        await process.stop();
-      } catch {
-        // 清理失败不应阻塞下一轮新端口尝试；最终诊断由调用方汇总。
-      }
-    }
+    await Promise.allSettled(processes.filter((process): process is ManagedProcess => Boolean(process)).map((process) => process.stop()));
   }
+}
+
+function toError(reason: unknown, fallback: string): Error {
+  return reason instanceof Error ? reason : new Error(fallback);
 }

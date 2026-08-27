@@ -25,6 +25,7 @@ import { readSessionEventStream } from "@/lib/session-stream";
 import { getSessionRuntime, sessionRuntimeStore, useSessionRuntimeStore } from "@/lib/session-runtime-store";
 import { typewriterStore } from "@/features/conversation/typewriter-store";
 import { selectWorkspacePath, type DesktopWorkspaceBridge } from "@/lib/workspace-selection";
+import { getModelSettings } from "@/lib/model-settings-api";
 import type {
   AssistantMessageState,
   ChatReq,
@@ -339,11 +340,8 @@ export default function Home() {
     modelOptionsRequestRef.current = requestId;
     setIsLoadingModelOptions(true);
 
-    try {
-      const response = await fetch("/api/model/list", { cache: "no-store" });
-      const options = (await readApiData<string[]>(response)) ?? [];
-      if (requestId !== modelOptionsRequestRef.current) return;
-
+    const applyOptions = (options: string[]) => {
+      if (requestId !== modelOptionsRequestRef.current) return false;
       modelOptionsRef.current = options;
       setModelOptions(options);
       setModelOptionsError("");

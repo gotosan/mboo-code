@@ -11,6 +11,7 @@ import com.yu.mboocode.agent.model.ModelInfo;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.config.Setting;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import jakarta.annotation.Resource;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
@@ -46,6 +49,7 @@ public class ModelOptionService {
     private volatile ModelServiceStatus status = ModelServiceStatus.NOT_CONFIGURED;
     @Getter
     private volatile String statusMessage = ModelServiceStatus.NOT_CONFIGURED.getLabel();
+    private final ExecutorService refreshExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     @PostConstruct
     public void initialize() {
@@ -61,13 +65,40 @@ public class ModelOptionService {
                 log.warn("模型服务配置不完整，跳过启动时模型列表加载");
                 return;
             }
-            publish(loadModels(config));
+            Map<String, ModelInfo> cachedMetadata = modelMetadataService.loadCachedMetadata();
+            setLoading(cachedMetadata);
+            refreshExecutor.submit(() -> refreshModels(config, cachedMetadata));
+        } catch (Exception e) {
+            clearModels(ModelServiceStatus.CONNECTION_FAILED, "模型服务初始化失败");
+            log.warn("模型服务初始化失败", e);
+        }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        refreshExecutor.shutdownNow();
+    }
+
+    private void refreshModels(ModelServiceConfig config, Map<String, ModelInfo> cachedMetadata) {
+        Map<String, ModelInfo> metadata = cachedMetadata;
+        try {
+            metadata = modelMetadataService.refreshMetadata();
+        } catch (Exception e) {
+            if (metadata.isEmpty()) {
+                clearModels(ModelServiceStatus.CONNECTION_FAILED, "models.dev 模型目录加载失败");
+                log.warn("models.dev 模型目录后台刷新失败，且没有可用缓存", e);
+                return;
+            }
+            log.warn("models.dev 模型目录后台刷新失败，继续使用本地缓存", e);
+        }
+        try {
+            publish(loadModels(config, metadata));
         } catch (ModelServiceException e) {
             clearModels(ModelServiceStatus.CONNECTION_FAILED, e.getMessage());
-            log.warn("模型服务初始化失败，原因: {}", e.getMessage());
+            log.warn("模型服务后台初始化失败，原因: {}", e.getMessage());
         } catch (Exception e) {
             clearModels(ModelServiceStatus.CONNECTION_FAILED, "模型服务连接失败");
-            log.warn("模型服务初始化失败", e);
+            log.warn("模型服务后台初始化失败", e);
         }
     }
 
@@ -79,7 +110,7 @@ public class ModelOptionService {
         if (StrUtil.isBlank(config.apiKey()) || StrUtil.isBlank(config.baseUrl())) {
             throw new ModelServiceException("模型服务配置不完整，请同时填写 api_key 和 base_url");
         }
-        ModelLoadResult result = loadModels(config);
+        ModelLoadResult result = loadModels(config, modelMetadataService.refreshMetadata());
         return new ModelProbeResult(result.modelNames().size());
     }
 
@@ -87,6 +118,7 @@ public class ModelOptionService {
         String cleanedModelId = StrUtil.trim(modelId);
         ModelInfo modelInfo = StrUtil.isBlank(cleanedModelId) ? null : modelInfoMap.get(cleanedModelId);
         if (modelInfo == null && status == ModelServiceStatus.NOT_CONFIGURED) throw new ServiceException("模型服务未配置，请先在模型服务设置中填写 api_key 和 base_url");
+        if (modelInfo == null && status == ModelServiceStatus.LOADING) throw new ServiceException(statusMessage);
         if (modelInfo == null && status == ModelServiceStatus.CONNECTION_FAILED && modelInfoMap.isEmpty()) throw new ServiceException(statusMessage);
         if (modelInfo == null) throw new ServiceException("模型不存在或未提供能力信息");
         return modelInfo;
@@ -108,8 +140,7 @@ public class ModelOptionService {
         return cleanedEffort;
     }
 
-    private ModelLoadResult loadModels(ModelServiceConfig config) {
-        Map<String, ModelInfo> metadata = modelMetadataService.loadMetadata();
+    private ModelLoadResult loadModels(ModelServiceConfig config, Map<String, ModelInfo> metadata) {
         String url = config.baseUrl() + "/models";
         try (HttpResponse response = HttpRequest.get(url)
                 .header(Header.AUTHORIZATION, "Bearer " + config.apiKey())
@@ -168,6 +199,13 @@ public class ModelOptionService {
         statusMessage = StrUtil.isBlank(message) ? nextStatus.getLabel() : message;
     }
 
+    private void setLoading(Map<String, ModelInfo> cachedMetadata) {
+        modelNames = List.of();
+        modelInfoMap = Map.of();
+        status = ModelServiceStatus.LOADING;
+        statusMessage = cachedMetadata.isEmpty() ? "正在加载模型目录" : "正在刷新模型目录";
+    }
+
     private ModelServiceConfig cleanConfig(String apiKey, String baseUrl) {
         return new ModelServiceConfig(StrUtil.trim(apiKey), StrUtil.removeSuffix(StrUtil.trim(baseUrl), "/"));
     }
@@ -199,6 +237,7 @@ public class ModelOptionService {
     public enum ModelServiceStatus {
         NOT_CONFIGURED("未配置"),
         CONNECTION_FAILED("连接失败"),
+        LOADING("加载中"),
         CONNECTED("已连接");
 
         private final String label;
