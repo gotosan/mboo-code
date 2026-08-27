@@ -198,7 +198,7 @@ export function ModelSettingsDialog({ open, onClose, onModelsRefreshed, hasRunni
     setIsRestarting(true);
     setErrorMessage("");
     try {
-      await onCancelRunningTask?.();
+      if (hasRunningTask) await onCancelRunningTask?.();
       const bridge = (window as Window & { mbooDesktop?: { restartApp?: () => Promise<boolean> } }).mbooDesktop;
       if (!bridge?.restartApp || !(await bridge.restartApp())) throw new Error("桌面应用重启请求未执行");
     } catch (error: unknown) {

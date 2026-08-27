@@ -2004,6 +2004,7 @@ export default function Home() {
   }, [addSystemMessage, handleSessionEvent, isCompressing, isRunning, modelName, viewingSessionStatus]);
 
   const stopCurrentRun = useCallback(() => {
+    if (!activeTurnId && !abortControllerRef.current && !compressionAbortControllerRef.current) return;
     const currentRuntimeKey = currentSessionIdRef.current || streamSessionKeyRef.current || PENDING_SESSION_KEY;
     sessionRuntimeStore.getState().stop(currentRuntimeKey);
     if (compressionAbortControllerRef.current) {
