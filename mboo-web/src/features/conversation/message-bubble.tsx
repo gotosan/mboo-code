@@ -50,7 +50,7 @@ export const MessageBubble = memo(function MessageBubble({
       <article className={`flex gap-2.5 ${hasArrivalImpact ? styles.messageImpact : ""}`} aria-label={stateText ? `Mboo Bot，${stateText}` : "Mboo Bot"}>
         {/* 绝对定位的冲击层只负责视觉反馈，不参与消息布局。 */}
         {hasArrivalImpact ? <span aria-hidden className={styles.impactBurst} /> : null}
-        <span aria-hidden className="mboo-avatar-m mt-0.5 size-8 rounded-[8px] border border-line text-base">M</span>
+        <img src="/mboo-code-icon.png" alt="" aria-hidden className="mt-0.5 size-8 rounded-[8px] border border-line object-cover" />
         <div className="min-w-0 flex-1">
           <div className="mb-2 flex items-baseline gap-2">
             <span className="text-xs font-semibold text-accent" id={`assistant-label-${message.id}`}>Mboo Bot</span>

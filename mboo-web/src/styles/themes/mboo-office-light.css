@@ -73,19 +73,6 @@
   background: var(--accent-soft);
 }
 
-/* Mboo 字母标识：浅紫底与深紫粗体 M。 */
-.mboo-avatar-m {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  font-weight: 700;
-  user-select: none;
-}
-
-
 .mboo-markdown .mboo-md-codeblock__bar {
   border-bottom-color: var(--line);
   background: var(--panel-muted);

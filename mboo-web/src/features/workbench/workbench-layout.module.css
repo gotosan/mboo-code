@@ -89,13 +89,6 @@
   z-index: 1;
 }
 
-.emptyStatePanel :global(.mboo-avatar-m) {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  box-shadow: 0 4px 12px rgb(92 21 224 / 10%);
-}
-
 .emptyStatePanel :global(.border-t) {
   border-color: color-mix(in srgb, var(--line) 72%, transparent);
 }

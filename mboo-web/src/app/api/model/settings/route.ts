@@ -3,7 +3,7 @@ import { proxyBackendJson } from "@/lib/backend-api";
 export const dynamic = "force-dynamic";
 
 /**
- * 预留模型设置的同源代理边界；后台接口上线后只需保持 `/config/modelSettings` 契约，页面无需跨端口改造。
+ * 模型设置的同源代理边界，浏览器不直接连接 Java 端口，也不会接触完整 API Key 的响应之外的内容。
  */
 export async function GET() {
   return proxyBackendJson("/config/modelSettings");

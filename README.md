@@ -139,7 +139,7 @@ cd mboo-code
 
 ### 5.3 生成并填写后端配置
 
-首次运行后端时，应用会在用户目录下创建 `.mboo/setting.json`。由于默认 API 配置为空，首次运行会在生成配置后提示模型服务未配置并结束。
+首次运行后端时，应用会在用户目录下创建 `.mboo/setting.json`。默认 API 配置为空时，后端仍会启动并显示“未配置”状态，可直接在 Web 端模型服务设置中填写。
 
 Windows：
 
@@ -237,14 +237,14 @@ MBOO_API_BASE_URL="http://localhost:8080" npm run dev
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `api_key` | 空 | Responses API 访问密钥，必填 |
-| `base_url` | 空 | Responses API 基础地址，必填 |
+| `api_key` | 空 | Responses API 访问密钥；可在设置页填写 |
+| `base_url` | 空 | Responses API 基础地址；可在设置页填写 |
 | `web_search_exa_api_key` | 空 | 可选 Exa API Key；为空时使用公共托管 MCP 端点 |
 | `web_fetch_private_network_enabled` | `false` | 是否具备抓取私有网络资源的能力；开启后仍需会话授权 |
 | `ignored_file_patterns` | 内置敏感文件规则 | 文件工具全局忽略规则 |
 | `ignored_file_pattern_exceptions` | 示例配置文件 | 忽略规则的例外 |
 
-配置只在后端启动时读取，修改后需要重启后端。
+设置页管理上述全部字段。配置写入 `.mboo/setting.json` 后提示“配置更新重启后生效”；桌面端可直接点击“立即重启”，浏览器开发模式需要手动重启后端。
 
 应用私有数据统一从数据根目录解析，包括 SQLite、配置、会话日志、工具结果、默认工作区和内置 Skill 脚本缓存。默认根目录为用户目录下的 `.mboo`，可以通过 JVM 系统属性 `mboo.appDataDir` 修改。使用 Gradle 启动时，可设置 `JAVA_TOOL_OPTIONS`：
 

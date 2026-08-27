@@ -16,15 +16,10 @@
   width: 26px;
   height: 26px;
   flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
   border: 1px solid #cccccc;
   border-radius: 8px;
   background: #f7f7f7;
-  color: #5c15e0;
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 20px;
+  object-fit: cover;
 }
 
 .title {

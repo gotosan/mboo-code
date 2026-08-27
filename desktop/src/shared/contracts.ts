@@ -21,6 +21,7 @@ export interface DesktopBridge {
   revealPath(target: RevealTarget): Promise<boolean>;
   revealToolResult(sessionId: string, resultId: string): Promise<boolean>;
   getVersion(): Promise<string>;
+  restartApp(): Promise<boolean>;
   getRuntimeState(): Promise<DesktopRuntimeState>;
   getDiagnostics(): Promise<DesktopDiagnostics>;
 }

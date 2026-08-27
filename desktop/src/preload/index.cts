@@ -10,6 +10,7 @@ const desktopBridge: DesktopBridge = {
   revealPath: (target: RevealTarget) => ipcRenderer.invoke("mboo:path:reveal", target),
   revealToolResult: (sessionId: string, resultId: string) => ipcRenderer.invoke("mboo:tool-result:reveal", sessionId, resultId),
   getVersion: () => ipcRenderer.invoke("mboo:app:version"),
+  restartApp: (): Promise<boolean> => ipcRenderer.invoke("mboo:app:restart"),
   getRuntimeState: (): Promise<DesktopRuntimeState> => ipcRenderer.invoke("mboo:runtime:get"),
   getDiagnostics: (): Promise<DesktopDiagnostics> => ipcRenderer.invoke("mboo:diagnostics:get")
 };

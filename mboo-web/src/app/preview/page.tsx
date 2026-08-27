@@ -36,33 +36,22 @@ const C = {
   dangerSoft: "rgba(235,86,86,0.1)",
 };
 
-function AvatarM({ size, radius }: { size: number; radius: number }) {
+function BrandIcon({ size, radius }: { size: number; radius: number }) {
   return (
-    <div
+    <img
+      src="/mboo-code-icon.png"
+      alt=""
+      aria-hidden
       style={{
         width: size,
         height: size,
         display: "flex",
         flexShrink: 0,
-        justifyContent: "center",
-        alignItems: "center",
-        background: C.accentSoft,
         border: `1px solid ${C.accentBorder}`,
         borderRadius: radius,
+        objectFit: "cover",
       }}
-    >
-      <span
-        style={{
-          color: C.accentStrong,
-          fontSize: Math.round(size * 0.5),
-          fontWeight: 700,
-          lineHeight: `${Math.round(size * 0.6)}px`,
-          textAlign: "center",
-        }}
-      >
-        M
-      </span>
-    </div>
+    />
   );
 }
 
@@ -237,7 +226,7 @@ export default function PreviewPage() {
             borderBottom: `1px solid ${C.borderLight}`,
           }}
         >
-          <AvatarM size={26} radius={8} />
+          <BrandIcon size={26} radius={8} />
           <span style={{ flexShrink: 0, color: C.text1, fontSize: 15, fontWeight: 700, lineHeight: "20px" }}>
             Mboo Code
           </span>
@@ -330,7 +319,7 @@ export default function PreviewPage() {
                   borderRadius: 12,
                 }}
               >
-                <AvatarM size={26} radius={6} />
+                <BrandIcon size={26} radius={6} />
               </div>
               <div style={{ display: "flex", flexShrink: 0, flexDirection: "column", gap: 4 }}>
                 <span style={{ color: C.text1, fontSize: 14, fontWeight: 600, lineHeight: "18px" }}>Mboo Code</span>
@@ -582,7 +571,7 @@ export default function PreviewPage() {
                       borderRadius: 8,
                     }}
                   >
-                    <AvatarM size={20} radius={4} />
+                    <BrandIcon size={20} radius={4} />
                   </div>
                   <div style={{ display: "flex", flex: 1, flexShrink: 0, flexDirection: "column", gap: 8 }}>
                     <div style={{ display: "flex", alignSelf: "stretch", flexShrink: 0, alignItems: "center", gap: 8 }}>
@@ -665,7 +654,7 @@ export default function PreviewPage() {
                       borderRadius: 8,
                     }}
                   >
-                    <AvatarM size={20} radius={4} />
+                    <BrandIcon size={20} radius={4} />
                   </div>
                   <div style={{ display: "flex", flex: 1, flexShrink: 0, flexDirection: "column", gap: 10 }}>
                     <div style={{ display: "flex", alignSelf: "stretch", flexShrink: 0, alignItems: "center", gap: 8 }}>

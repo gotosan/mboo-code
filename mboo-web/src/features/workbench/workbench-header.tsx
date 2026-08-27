@@ -31,7 +31,7 @@ export const WorkbenchHeader = memo(function WorkbenchHeader({
 }: WorkbenchHeaderProps) {
   return (
     <header className={styles.header}>
-      <span aria-hidden className={styles.avatar}>M</span>
+      <img src="/mboo-code-icon.png" alt="" aria-hidden className={styles.avatar} />
       <p className={styles.title}>Mboo Code</p>
       <StatusPill status={status} compact />
       <span

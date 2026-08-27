@@ -7,9 +7,9 @@ import cn.hutool.http.HttpResponse;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
-import com.yu.mboocode.config.Setting;
 import com.yu.mboocode.agent.model.ModelInfo;
 import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.config.Setting;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 import lombok.Getter;
@@ -26,106 +26,68 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 应用启动时加载一次模型候选，避免每个前端请求都访问模型供应商。
+ * 应用启动时加载一次模型候选；模型服务未配置或不可达时保留空缓存，让设置页面仍可进入修正配置。
  */
 @Service
 @Slf4j
 public class ModelOptionService {
     private static final int REQUEST_TIMEOUT = 10_000;
+
     @Resource
     private Setting setting;
     @Resource
     private ModelMetadataService modelMetadataService;
 
     @Getter
-    private List<String> modelNames = List.of();
+    private volatile List<String> modelNames = List.of();
     @Getter
-    private Map<String, ModelInfo> modelInfoMap = Map.of();
+    private volatile Map<String, ModelInfo> modelInfoMap = Map.of();
+    @Getter
+    private volatile ModelServiceStatus status = ModelServiceStatus.NOT_CONFIGURED;
+    @Getter
+    private volatile String statusMessage = ModelServiceStatus.NOT_CONFIGURED.getLabel();
 
     @PostConstruct
     public void initialize() {
-        String apiKey = StrUtil.trim(setting.getApiKey());
-        String baseUrl = StrUtil.removeSuffix(StrUtil.trim(setting.getBaseUrl()), "/");
-        if (StrUtil.isBlank(apiKey) && StrUtil.isBlank(baseUrl)) {
-            // 首次安装允许先启动并进入配置流程；已有配置的供应商错误仍在后续请求中明确失败。
-            log.warn("模型服务尚未配置，跳过启动时模型列表加载");
-            modelNames = List.of();
-            modelInfoMap = Map.of();
-            return;
-        }
-        if (StrUtil.isBlank(apiKey) || StrUtil.isBlank(baseUrl)) {
-            throw new IllegalStateException("模型服务配置不完整，请同时填写 api_key 和 base_url");
-        }
-        Map<String, ModelInfo> metadata = modelMetadataService.loadMetadata();
-
-        String url = baseUrl + "/models";
-        try (HttpResponse response = HttpRequest.get(url)
-                .header(Header.AUTHORIZATION, "Bearer " + apiKey)
-                .header(Header.ACCEPT, "application/json")
-                .timeout(REQUEST_TIMEOUT)
-                .execute()) {
-            if (!response.isOk()) {
-                log.error("供应商模型列表请求失败，地址: {}，状态码: {}", url, response.getStatus());
-                throw new IllegalStateException("供应商模型列表请求失败");
+        ModelServiceConfig config = cleanConfig(setting.getApiKey(), setting.getBaseUrl());
+        try {
+            if (StrUtil.isBlank(config.apiKey()) && StrUtil.isBlank(config.baseUrl())) {
+                clearModels(ModelServiceStatus.NOT_CONFIGURED, ModelServiceStatus.NOT_CONFIGURED.getLabel());
+                log.warn("模型服务尚未配置，跳过启动时模型列表加载");
+                return;
             }
-
-            String responseBody = response.body();
-            if (StrUtil.isBlank(responseBody)) throw new IllegalStateException("供应商模型列表响应为空");
-            JSONObject body = JSON.parseObject(responseBody);
-            JSONArray data = body == null ? null : body.getJSONArray("data");
-            if (data == null) {
-                throw new IllegalStateException("供应商模型列表响应缺少 data 数组");
+            if (StrUtil.isBlank(config.apiKey()) || StrUtil.isBlank(config.baseUrl())) {
+                clearModels(ModelServiceStatus.CONNECTION_FAILED, "模型服务配置不完整，请同时填写 api_key 和 base_url");
+                log.warn("模型服务配置不完整，跳过启动时模型列表加载");
+                return;
             }
-
-            Set<String> names = new LinkedHashSet<>();
-            for (Object item : data) {
-                if (!(item instanceof JSONObject model)) continue;
-                Object idValue = model.get("id");
-                String id = idValue instanceof String text ? text.trim() : null;
-                if (StrUtil.isNotBlank(id)) names.add(id);
-            }
-            if (names.isEmpty()) throw new IllegalStateException("供应商模型列表没有有效模型 ID");
-
-            Map<String, List<ModelInfo>> metadataByNormalizedName = metadata.values().stream()
-                    .collect(Collectors.groupingBy(modelInfo -> normalizeModelName(modelInfo.name()), LinkedHashMap::new, Collectors.toList()));
-            LinkedHashMap<String, ModelInfo> matched = new LinkedHashMap<>();
-            int exactMatchCount = 0;
-            int normalizedMatchCount = 0;
-            int ambiguousMatchCount = 0;
-            for (String name : names) {
-                ModelInfo modelInfo = metadata.get(name);
-                if (modelInfo != null) {
-                    exactMatchCount++;
-                } else {
-                    String normalizedName = normalizeModelName(name);
-                    List<ModelInfo> candidates = StrUtil.isBlank(normalizedName) ? List.of() : metadataByNormalizedName.getOrDefault(normalizedName, List.of());
-                    if (candidates.size() == 1) {
-                        modelInfo = candidates.get(0);
-                        normalizedMatchCount++;
-                    } else if (candidates.size() > 1) {
-                        ambiguousMatchCount++;
-                        log.warn("模型名称归一化匹配存在歧义，供应商模型 ID: {}，候选元数据数量: {}", name, candidates.size());
-                    }
-                }
-                if (modelInfo != null) matched.put(name, bindProviderModelId(name, modelInfo));
-            }
-            if (matched.isEmpty()) throw new IllegalStateException("供应商模型列表与 models.dev 目录没有匹配模型");
-            modelNames = List.copyOf(matched.keySet());
-            modelInfoMap = Collections.unmodifiableMap(new LinkedHashMap<>(matched));
-            log.info("模型列表加载完成，供应商有效 ID 数: {}，精确匹配数: {}，归一化匹配数: {}，歧义未匹配数: {}，最终匹配数: {}",
-                    names.size(), exactMatchCount, normalizedMatchCount, ambiguousMatchCount, modelNames.size());
-        } catch (IllegalStateException e) {
-            log.error("供应商模型列表加载失败，地址: {}，原因: {}", url, e.getMessage());
-            throw e;
+            publish(loadModels(config));
+        } catch (ModelServiceException e) {
+            clearModels(ModelServiceStatus.CONNECTION_FAILED, e.getMessage());
+            log.warn("模型服务初始化失败，原因: {}", e.getMessage());
         } catch (Exception e) {
-            log.error("供应商模型列表加载失败，地址: {}", url, e);
-            throw new IllegalStateException("供应商模型列表加载失败", e);
+            clearModels(ModelServiceStatus.CONNECTION_FAILED, "模型服务连接失败");
+            log.warn("模型服务初始化失败", e);
         }
+    }
+
+    /**
+     * 使用候选配置访问供应商并完成 models.dev 匹配，但不改变当前进程的模型缓存或配置状态。
+     */
+    public ModelProbeResult probe(String apiKey, String baseUrl) {
+        ModelServiceConfig config = cleanConfig(apiKey, baseUrl);
+        if (StrUtil.isBlank(config.apiKey()) || StrUtil.isBlank(config.baseUrl())) {
+            throw new ModelServiceException("模型服务配置不完整，请同时填写 api_key 和 base_url");
+        }
+        ModelLoadResult result = loadModels(config);
+        return new ModelProbeResult(result.modelNames().size());
     }
 
     public ModelInfo requireModelInfo(String modelId) {
         String cleanedModelId = StrUtil.trim(modelId);
         ModelInfo modelInfo = StrUtil.isBlank(cleanedModelId) ? null : modelInfoMap.get(cleanedModelId);
+        if (modelInfo == null && status == ModelServiceStatus.NOT_CONFIGURED) throw new ServiceException("模型服务未配置，请先在模型服务设置中填写 api_key 和 base_url");
+        if (modelInfo == null && status == ModelServiceStatus.CONNECTION_FAILED && modelInfoMap.isEmpty()) throw new ServiceException(statusMessage);
         if (modelInfo == null) throw new ServiceException("模型不存在或未提供能力信息");
         return modelInfo;
     }
@@ -146,6 +108,70 @@ public class ModelOptionService {
         return cleanedEffort;
     }
 
+    private ModelLoadResult loadModels(ModelServiceConfig config) {
+        Map<String, ModelInfo> metadata = modelMetadataService.loadMetadata();
+        String url = config.baseUrl() + "/models";
+        try (HttpResponse response = HttpRequest.get(url)
+                .header(Header.AUTHORIZATION, "Bearer " + config.apiKey())
+                .header(Header.ACCEPT, "application/json")
+                .timeout(REQUEST_TIMEOUT)
+                .execute()) {
+            if (!response.isOk()) throw new ModelServiceException("模型服务连接失败（供应商 HTTP " + response.getStatus() + "）");
+            String responseBody = response.body();
+            if (StrUtil.isBlank(responseBody)) throw new ModelServiceException("供应商模型列表响应为空");
+            JSONObject body = JSON.parseObject(responseBody);
+            JSONArray data = body == null ? null : body.getJSONArray("data");
+            if (data == null) throw new ModelServiceException("供应商模型列表响应缺少 data 数组");
+
+            Set<String> names = new LinkedHashSet<>();
+            for (Object item : data) {
+                if (!(item instanceof JSONObject model)) continue;
+                Object idValue = model.get("id");
+                String id = idValue instanceof String text ? text.trim() : null;
+                if (StrUtil.isNotBlank(id)) names.add(id);
+            }
+            if (names.isEmpty()) throw new ModelServiceException("供应商模型列表没有有效模型 ID");
+
+            Map<String, List<ModelInfo>> metadataByNormalizedName = metadata.values().stream()
+                    .collect(Collectors.groupingBy(modelInfo -> normalizeModelName(modelInfo.name()), LinkedHashMap::new, Collectors.toList()));
+            LinkedHashMap<String, ModelInfo> matched = new LinkedHashMap<>();
+            for (String name : names) {
+                ModelInfo modelInfo = metadata.get(name);
+                if (modelInfo == null) {
+                    String normalizedName = normalizeModelName(name);
+                    List<ModelInfo> candidates = StrUtil.isBlank(normalizedName) ? List.of() : metadataByNormalizedName.getOrDefault(normalizedName, List.of());
+                    if (candidates.size() == 1) modelInfo = candidates.get(0);
+                }
+                if (modelInfo != null) matched.put(name, bindProviderModelId(name, modelInfo));
+            }
+            if (matched.isEmpty()) throw new ModelServiceException("当前模型跟 models.dev 模型数据不匹配");
+            return new ModelLoadResult(List.copyOf(matched.keySet()), Collections.unmodifiableMap(new LinkedHashMap<>(matched)));
+        } catch (ModelServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ModelServiceException("模型服务连接失败", e);
+        }
+    }
+
+    private void publish(ModelLoadResult result) {
+        modelNames = result.modelNames();
+        modelInfoMap = result.modelInfoMap();
+        status = ModelServiceStatus.CONNECTED;
+        statusMessage = ModelServiceStatus.CONNECTED.getLabel();
+        log.info("模型列表加载完成，最终匹配数: {}", modelNames.size());
+    }
+
+    private void clearModels(ModelServiceStatus nextStatus, String message) {
+        modelNames = List.of();
+        modelInfoMap = Map.of();
+        status = nextStatus;
+        statusMessage = StrUtil.isBlank(message) ? nextStatus.getLabel() : message;
+    }
+
+    private ModelServiceConfig cleanConfig(String apiKey, String baseUrl) {
+        return new ModelServiceConfig(StrUtil.trim(apiKey), StrUtil.removeSuffix(StrUtil.trim(baseUrl), "/"));
+    }
+
     private String normalizeModelName(String value) {
         if (StrUtil.isBlank(value)) return "";
         return value.trim().toLowerCase(Locale.ROOT).codePoints()
@@ -159,5 +185,40 @@ public class ModelOptionService {
         return new ModelInfo(providerModelId, modelInfo.name(), modelInfo.family(), modelInfo.status(), modelInfo.limit(),
                 modelInfo.toolCall(), modelInfo.reasoning(), modelInfo.reasoningOptions(), modelInfo.attachment(),
                 modelInfo.inputModalities(), modelInfo.outputModalities());
+    }
+
+    public record ModelProbeResult(int modelCount) {
+    }
+
+    public record ModelServiceConfig(String apiKey, String baseUrl) {
+    }
+
+    private record ModelLoadResult(List<String> modelNames, Map<String, ModelInfo> modelInfoMap) {
+    }
+
+    public enum ModelServiceStatus {
+        NOT_CONFIGURED("未配置"),
+        CONNECTION_FAILED("连接失败"),
+        CONNECTED("已连接");
+
+        private final String label;
+
+        ModelServiceStatus(String label) {
+            this.label = label;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+    }
+
+    public static class ModelServiceException extends RuntimeException {
+        public ModelServiceException(String message) {
+            super(message);
+        }
+
+        public ModelServiceException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 }

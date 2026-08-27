@@ -21,14 +21,10 @@
   width: 40px;
   height: 40px;
   flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
   border: 1px solid #e1e1dc;
   border-radius: 14px;
   background: #f0edff;
-  color: #5c15e0;
-  font-size: 18px;
-  font-weight: 700;
+  object-fit: cover;
 }
 
 .profileName {

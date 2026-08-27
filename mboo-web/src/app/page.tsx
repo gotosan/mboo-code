@@ -1748,7 +1748,8 @@ export default function Home() {
       }
     } catch (error) {
       if (workspaceSelectionVersionRef.current === requestVersion) {
-        void error;
+        setErrorMessage(error instanceof Error ? error.message : "选择工作区目录失败");
+        setConnectionState("error");
       }
     } finally {
       if (workspaceSelectionVersionRef.current === requestVersion) {
@@ -2335,9 +2336,7 @@ export default function Home() {
           {desktopSidebarVisible ? (
             <aside className={`${sidebarStyles.sidebar} hidden min-h-0 min-[900px]:flex min-[900px]:flex-col`}>
               <div className={sidebarStyles.profile}>
-                <span aria-hidden className={sidebarStyles.profileAvatar}>
-                  M
-                </span>
+                <img src="/mboo-code-icon.png" alt="" aria-hidden className={sidebarStyles.profileAvatar} />
                 <div className="min-w-0">
                   <p className={sidebarStyles.profileName}>Mboo Code</p>
                   <p className={sidebarStyles.profileStatus}>
@@ -2374,9 +2373,7 @@ export default function Home() {
               >
                 <div className={`${sidebarStyles.profile} justify-between gap-2 pr-2`}>
                   <div className="flex min-w-0 items-center gap-2">
-                    <span aria-hidden className={sidebarStyles.profileAvatar}>
-                      M
-                    </span>
+                    <img src="/mboo-code-icon.png" alt="" aria-hidden className={sidebarStyles.profileAvatar} />
                     <div className="min-w-0">
                       <p className={sidebarStyles.profileName}>会话</p>
                       <p className={sidebarStyles.profileStatus}>
@@ -2431,9 +2428,7 @@ export default function Home() {
                     <div className={`${layoutStyles.emptyStatePanel} mx-auto w-full max-w-[72rem] px-4 py-5 sm:px-5 sm:py-6`}>
                       {/* 设计决策：缺模型只在输入器保留一个主阻断；空态只给下一步与示例 */}
                       <div className="flex items-center gap-3">
-                        <span aria-hidden className="mboo-avatar-m size-12 rounded-[12px] border border-line text-xl">
-                          M
-                        </span>
+                        <img src="/mboo-code-icon.png" alt="" aria-hidden className="size-12 rounded-[12px] border border-line object-cover" />
                         <div className="min-w-0">
                           <p className="text-base font-semibold text-text-1">等待新的任务指令</p>
                           <p className="mt-1 text-xs leading-5 text-text-3">
@@ -2625,6 +2620,8 @@ export default function Home() {
       open={isModelSettingsOpen}
       onClose={() => setIsModelSettingsOpen(false)}
       onModelsRefreshed={refreshModelOptions}
+      hasRunningTask={isRunning}
+      onCancelRunningTask={stopCurrentRun}
     />
     </>
   );

@@ -2,10 +2,13 @@ package com.yu.mboocode.agent.controller;
 
 import com.yu.mboocode.agent.dto.ModelContextLimitReq;
 import com.yu.mboocode.agent.dto.ModelContextLimitResp;
+import com.yu.mboocode.agent.dto.ModelSettingsResp;
+import com.yu.mboocode.agent.dto.ModelSettingsUpdateReq;
 import com.yu.mboocode.agent.dto.WorkspaceSelectResp;
 import com.yu.mboocode.agent.model.ModelInfo;
 import com.yu.mboocode.agent.service.ModelContextPreferenceService;
 import com.yu.mboocode.agent.service.ModelOptionService;
+import com.yu.mboocode.agent.service.ModelSettingsService;
 import com.yu.mboocode.agent.service.WorkspaceDirectoryPicker;
 import com.yu.mboocode.common.dto.R;
 import io.swagger.v3.oas.annotations.Operation;
@@ -33,6 +36,8 @@ public class ConfigController {
     private ModelOptionService modelOptionService;
     @Resource
     private ModelContextPreferenceService modelContextPreferenceService;
+    @Resource
+    private ModelSettingsService modelSettingsService;
 
     @Operation(summary = "选择工作区目录")
     @PostMapping("/selectDirectory")
@@ -44,6 +49,24 @@ public class ConfigController {
     @GetMapping("/modelList")
     public R<List<String>> listModels() {
         return R.ok(modelOptionService.getModelNames());
+    }
+
+    @Operation(summary = "读取应用设置")
+    @GetMapping("/modelSettings")
+    public R<ModelSettingsResp> modelSettings() {
+        return R.ok(modelSettingsService.get());
+    }
+
+    @Operation(summary = "测试模型服务设置")
+    @PostMapping("/modelSettings/test")
+    public R<ModelSettingsResp> testModelSettings(@RequestBody ModelSettingsUpdateReq req) {
+        return R.ok(modelSettingsService.test(req));
+    }
+
+    @Operation(summary = "保存应用设置")
+    @PutMapping("/modelSettings")
+    public R<ModelSettingsResp> saveModelSettings(@RequestBody ModelSettingsUpdateReq req) {
+        return R.ok(modelSettingsService.update(req));
     }
 
     @Operation(summary = "模型能力详情")
