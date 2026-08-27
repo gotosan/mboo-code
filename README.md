@@ -41,7 +41,7 @@ Mboo Code 让 AI 真正进入工作区完成任务：理解代码、检索文件
 
 ### 2.3 工程级上下文管理：按模型能力管理，而不是固定截断
 
-- **模型能力自动匹配**：启动时结合 models.dev 能力目录与供应商 `/models` 列表，识别上下文窗口、输出限制和推理选项。
+- **模型能力自动匹配**：启动时优先读取本地模型目录缓存，后台刷新 models.dev 能力目录与供应商 `/models` 列表，识别上下文窗口、输出限制和推理选项。
 - **上下文上限可配置**：允许针对实际模型 ID 保存自定义上下文上限，并统一用于输入预算、压缩判断和硬限制。
 - **真实用量可视化**：前端实时展示输入 token、上下文消息 token、模型上限和使用占比，不再靠字符数猜测。
 - **摘要与近期消息分层**：早期历史摘要和近期原始消息分别持久化，既保留长期任务结论，也保留最近交互细节。
@@ -50,7 +50,7 @@ Mboo Code 让 AI 真正进入工作区完成任务：理解代码、检索文件
 
 ### 2.4 工具执行不是 Demo：结果、异常、超时和取消都有契约
 
-- **统一结果结构**：所有工具返回 `success`、`status`、`errorCode`、`message` 和结构化 `data`，前端无需从自然语言中猜执行状态。
+- **统一结果结构**：内置文件、命令和网络工具返回 `success`、`status`、`errorCode`、`message` 和结构化 `data`，前端无需从自然语言中猜执行状态；MCP 工具保留协议原生结果并统一接入事件轨迹。
 - **文件操作可检查**：读取支持分页和行号，搜索基于 ripgrep，精确编辑会返回替换次数、增删行数和 Unified Diff。
 - **并发写入保护**：文件操作按目标路径加锁，减少同一文件被并发修改造成的内容覆盖。
 - **命令输出可追溯**：超长输出在模型侧保留头尾并裁剪中间内容，同时将原始输出保存为独立制品供用户查看。
@@ -79,6 +79,7 @@ Mboo Code 让 AI 真正进入工作区完成任务：理解代码、检索文件
 - **工具轨迹可视化**：工具开始、等待授权、执行结束、失败和结果详情均有独立界面状态。
 - **权限卡片可操作**：用户可以直接选择允许本次、本会话允许或拒绝，不需要通过自然语言与 Agent 协商权限。
 - **上下文状态可观察**：输入区直接展示上下文使用率、模型上限和压缩状态，长任务的资源消耗清晰可见。
+- **流式交互稳定**：增量文本按帧合并并隔离不同会话的流状态，助手输出提供打字机光标和轻量粒子效果；用户上滑阅读时不会被强制拉回底部。
 - **工作区与会话完整管理**：支持新增工作区、新建任务、重命名、归档、恢复、删除以及路径失效状态展示。
 - **实时与历史一致渲染**：刷新页面、切换会话或打开归档记录时，仍能按相同事件模型还原消息与工具过程。
 - **桌面与窄屏适配**：前端针对桌面、平板和移动窄屏提供响应式布局，不局限于开发调试页面。
@@ -98,12 +99,58 @@ Mboo Code 让 AI 真正进入工作区完成任务：理解代码、检索文件
 | `web_search` | 通过 Exa 搜索公开互联网信息来源 | 结构化结果、结果裁剪、网络授权 |
 | `web_fetch` | 抓取 HTTP/HTTPS 文本资源 | Markdown/Text、分页、私网控制、URL 脱敏 |
 
-### 3.2 工作台能力
+### 3.2 Skill
+
+Skill 是包含 `SKILL.md` 和可选资源、脚本的行为指令包，通过按需激活为 Agent 提供领域知识和工作流程，不绕过现有文件、命令和网络权限。
+
+| 来源 | 位置 | 优先级 | 管理方式 |
+| --- | --- | --- | --- |
+| 项目 `.mboo` | `<workspace>/.mboo/skills/` | 1（最高） | 查看、导入、替换、删除 |
+| 项目 `.agents` | `<workspace>/.agents/skills/` | 2 | 只读 |
+| 全局 `.mboo` | `~/.mboo/skills/` | 3 | 查看、导入、替换、删除 |
+| 全局 `.agents` | `~/.agents/skills/` | 4 | 只读 |
+| 内置 | JAR classpath `skills/` | 5（最低） | 只读 |
+
+- 管理入口位于侧边栏“插件”弹层的 `SKILL` 页；支持查看详情、资源按需读取、项目/全局导入和删除。
+- 导入支持 ZIP、文件夹和单个 Markdown 文件；一次只导入一个 Skill。ZIP 上传和单个 Skill 解压后总大小上限均为 4 MiB，文件数上限为 128，`SKILL.md` 上限为 256 KiB。
+- 输入框支持 `/` Skill 联想。有效标签会在发送前转换为显式 Skill 激活，模型也可以调用 `activate_skill` 和 `read_skill_resource`；无效标签按普通用户文本发送。
+- 每个 turn 固定 Skill 快照，导入、替换或删除从下一 turn 生效。Skill 脚本最终仍通过 `run_command` 执行，并继续遵守命令权限和工作区边界。
+
+### 3.3 MCP 插件
+
+MCP 服务器配置是全局能力，保存在 SQLite 中，不绑定工作区或会话。插件入口与 Skill 共用，支持：
+
+- 使用标准 `mcpServers` JSON 批量新增，或编辑单个服务器；支持启用/停用、重连和删除。
+- 支持 `stdio` 和 Streamable HTTP；不支持旧式 HTTP/SSE 传输，也不接入 MCP Resources 和 Prompts。
+- 启用服务器后自动发现 Tools，并以 `{serverName}__{toolName}` 形式加入后续 turn；每个 turn 使用不可变 MCP 快照，配置变化不会影响正在运行的 turn。
+- 最多保存 50 个服务器，单服务器配置不超过 64 KiB，单服务器最多 128 个 Tool。连接失败只影响该服务器，列表中保留脱敏错误和运行状态。
+- MCP 工具的启用动作本身视为用户信任动作，不追加会话授权卡片；命令、URL、请求头和环境变量仍不会写入普通日志。
+
+`stdio` 的 `command` 按有效 `PATH` 解析。Windows 会自动匹配 `.cmd`、`.bat`、`.exe` 和 `.com`；桌面端在系统 PATH 后追加随包 Node.js 和 `rg` 作为兜底，但桌面包不提供 `npm`、`npx` 或 Corepack。
+
+最小配置示例（保存到插件管理器的 JSON 编辑器）：
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "type": "streamable-http",
+      "url": "https://example.com/mcp"
+    }
+  }
+}
+```
+
+也可以配置 `stdio` 的 `command`、`args`、`env` 和 `cwd`。如果 `env` 显式提供 `PATH`，MCP 配置中的 PATH 优先于桌面端追加的兜底目录。
+
+### 3.4 工作台能力
 
 - **工作区**：保存、分组、可用性检查、目录选择、默认任务工作区和安全删除。
 - **会话**：流式输出、停止生成、历史回放、重命名、归档、恢复和永久删除。
 - **工具**：调用轨迹、参数展示、授权卡片、结果预览、详情加载和原始输出制品。
 - **模型**：候选模型匹配、能力识别、推理强度选择和自定义上下文窗口。
+- **权限**：会话可在 `DEFAULT`（按需询问）与 `FULL_ACCESS`（自动放行可授权项）之间切换；硬拒绝、危险命令和路径错误始终生效。
+- **设置**：模型服务连接测试、API Key 脱敏、文件忽略规则和私有网络能力配置；保存后明确提示重启生效。
 - **上下文**：token 用量展示、自动压缩、手动压缩、摘要持久化和压缩事件回放。
 - **数据**：SQLite 元数据、JSONL 会话日志、独立工具制品和幂等数据库迁移。
 - **接口**：统一 JSON 响应、SSE 会话事件流和 Swagger/OpenAPI 文档。
@@ -115,6 +162,7 @@ Mboo Code 让 AI 真正进入工作区完成任务：理解代码、检索文件
 | Agent Runtime | Java 25、Spring Boot 4.1、LangChain4j |
 | 数据访问 | MyBatis-Plus、SQLite |
 | Web 前端 | Next.js 16、React 19、TypeScript |
+| 桌面端 | Electron 43、electron-builder |
 | 前端状态 | TanStack Query、Zustand |
 | 流式通信 | Server-Sent Events（SSE） |
 | 内容渲染 | MarkStream React |
@@ -129,10 +177,10 @@ Mboo Code 让 AI 真正进入工作区完成任务：理解代码、检索文件
 ### 5.1 环境要求
 
 - JDK 25
-- Node.js 20 或更高版本
+- Node.js 20.9.0 或更高版本
 - npm
-- ripgrep 13 或更高版本，且 `rg` 命令已加入 `PATH`
-- 一个实现 OpenAI Responses API 和 `GET /models` 的模型服务
+- ripgrep 13 或更高版本，且 `rg` 命令已加入 `PATH`（仅源码开发必需；桌面包会提供随包版本）
+- 一个实现 OpenAI Responses API 和 `GET /models` 的模型服务（首次启动可暂不配置，聊天前必须配置）
 
 ### 5.2 获取项目
 
@@ -143,7 +191,7 @@ cd mboo-code
 
 ### 5.3 生成并填写后端配置
 
-首次运行后端时，应用会在用户目录下创建 `.mboo/setting.json`。默认 API 配置为空时，后端仍会启动并显示“未配置”状态，可直接在 Web 端模型服务设置中填写。
+首次运行后端时，应用会在用户目录下创建 `.mboo/setting.json`。默认 API 配置为空时，后端仍会启动并显示“未配置”状态，可直接在 Web 端模型服务设置中填写。设置页也支持连接测试、API Key 脱敏、文件忽略规则和私有网络抓取开关。
 
 Windows：
 
@@ -195,8 +243,18 @@ macOS / Linux：
 ```
 
 `base_url` 通常包含 `/v1`。当前版本只支持 OpenAI Responses API 协议，不支持 Chat Completions API。兼容服务还需要提供 `GET {base_url}/models`。
+模型选择器只展示供应商列表中存在且能在 models.dev 找到能力信息的模型，不再接受任意手填模型 ID。
 
-### 5.4 启动后端
+### 5.4 初始化流程
+
+1. 应用先解析并创建数据根目录：默认是 `~/.mboo`，也可以通过 `-Dmboo.appDataDir=...` 指定。路径无法创建、不是目录或无法解析时直接终止。
+2. 后端创建或读取 `setting.json`，模型服务未配置、配置不完整或远程服务不可达时仍保持启动，分别显示“未配置”或“连接失败”。
+3. 模型能力目录优先读取 `cache/model-metadata.json`，随后在后台刷新 `https://models.dev/api.json`，再请求供应商 `{base_url}/models` 并按模型 ID/名称匹配。刷新完成前状态为“加载中”，不会阻塞应用启动。
+4. 保存设置只更新磁盘目标配置，校验通过后使用临时文件原子替换；所有配置统一在重启后生效。正在运行的 turn 不会切换到新配置，桌面端可使用“立即重启”完成受控重启。
+
+桌面端还会先启动 Java sidecar，再启动 Next.js standalone 前端，通过 `127.0.0.1` 动态端口和带实例标识的健康检查确认服务归属；启动失败时显示诊断页，并在退出时回收子进程。
+
+### 5.5 启动后端
 
 Windows：
 
@@ -212,7 +270,7 @@ macOS / Linux：
 
 后端默认地址为 `http://localhost:8080`，Swagger UI 地址为 `http://localhost:8080/doc.html`。
 
-### 5.5 启动前端
+### 5.6 启动前端
 
 ```bash
 cd mboo-web
@@ -237,6 +295,38 @@ macOS / Linux：
 MBOO_API_BASE_URL="http://localhost:8080" npm run dev
 ```
 
+### 5.7 启动和封包桌面端
+
+桌面端使用 Electron 托管 Java 后端和 Next.js standalone 前端，目标平台为 Windows x64、macOS x64 和 macOS arm64。获得发布安装包后可直接使用；从源码构建需要 Node.js、npm 和 Java 25：
+
+```bash
+cd desktop
+npm ci
+npm run build
+```
+
+开发模式需要先启动后端和 Next.js 开发服务，再通过 `MBOO_DESKTOP_URL` 指向前端页面：
+
+```bash
+MBOO_DESKTOP_URL=http://localhost:3000 npm run dev
+```
+
+Windows PowerShell：`$env:MBOO_DESKTOP_URL="http://localhost:3000"; npm run dev`
+
+不设置 `MBOO_DESKTOP_URL` 时，Electron 会按生产模式启动并检查随包资源，适合在完成资源准备后验证桌面启动链路。
+
+准备随包 Java JRE、Node.js 和 `rg` 并封包：
+
+```bash
+npm run prepare:runtime -- darwin-arm64
+npm run verify:runtime -- darwin-arm64
+MBOO_JAVA_HOME=/path/to/java25 npm run package:mac:arm64
+```
+
+Windows PowerShell 可使用 `$env:MBOO_JAVA_HOME="C:\path\to\java25"; npm run package:win:x64`。
+
+Windows x64 使用 `win32-x64` 和 `npm run package:win:x64`；macOS Intel 使用 `darwin-x64` 和 `npm run package:mac:x64`。封包产物位于 `desktop/release/`，完整运行时准备、签名、公证、CI 和故障排查见 [`desktop/README.md`](./desktop/README.md)。
+
 ## 6. 配置说明
 
 | 配置项 | 默认值 | 说明 |
@@ -248,7 +338,9 @@ MBOO_API_BASE_URL="http://localhost:8080" npm run dev
 | `ignored_file_patterns` | 内置敏感文件规则 | 文件工具全局忽略规则 |
 | `ignored_file_pattern_exceptions` | 示例配置文件 | 忽略规则的例外 |
 
-设置页管理上述全部字段。配置写入 `.mboo/setting.json` 后提示“配置更新重启后生效”；桌面端可直接点击“立即重启”，浏览器开发模式需要手动重启后端。
+设置页管理上述全部字段。保存模型服务配置前会校验非空 URL 和 `/models` 响应，并保留配置文件中的未知字段；API Key 只返回掩码。配置写入 `.mboo/setting.json` 后提示“配置更新重启后生效”；桌面端可直接点击“立即重启”，浏览器开发模式需要手动重启后端。
+
+Skill 上传受 Spring multipart 请求限制：单文件不超过 4 MiB，单次请求不超过 6 MiB。Skill 自身还会执行 ZIP 路径安全、文件类型、UTF-8、YAML Front Matter 和解压后总大小校验。
 
 应用私有数据统一从数据根目录解析，包括 SQLite、配置、会话日志、工具结果、默认工作区和内置 Skill 脚本缓存。默认根目录为用户目录下的 `.mboo`，可以通过 JVM 系统属性 `mboo.appDataDir` 修改。使用 Gradle 启动时，可设置 `JAVA_TOOL_OPTIONS`：
 
@@ -282,6 +374,7 @@ java -Dmboo.appDataDir=/path/to/mboo-data -jar build/libs/mboo-code.jar
 ├── setting.json
 ├── mboo_data.sqlite
 ├── cache/
+│   ├── model-metadata.json
 │   └── skills/
 ├── sessions/
 │   └── {sessionId}/
@@ -296,6 +389,8 @@ java -Dmboo.appDataDir=/path/to/mboo-data -jar build/libs/mboo-code.jar
 - SQLite 保存工作区、会话元数据、模型偏好和近期上下文
 - JSONL 保存可回放的会话事实事件
 - `tool-results` 保存工具结果和命令原始输出
+- `cache/model-metadata.json` 保存 models.dev 模型能力目录缓存，启动时优先读取，后台刷新失败时可继续使用旧缓存
 - `cache/skills` 保存从 JAR 释放的内置 Skill 脚本；指定自定义数据根目录时缓存会写入该目录
-- `skills` 是固定的用户级 Mboo Skill 来源；即使指定自定义数据根目录，仍使用 `~/.mboo/skills`
+- `skills` 是固定的全局 `.mboo` Skill 来源；即使指定自定义数据根目录，仍使用 `~/.mboo/skills`。全局 `.agents/skills` 位于 `~/.agents/skills`，项目 Skill 位于项目目录下的 `.mboo/skills` 或 `.agents/skills`
+- 桌面端启动诊断日志位于 `logs/desktop-startup.log`
 - 未选择自定义目录的新任务会获得独立的默认工作区
