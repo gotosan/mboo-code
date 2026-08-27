@@ -9,11 +9,19 @@ import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.yu.mboocode.agent.model.ModelInfo;
 import com.yu.mboocode.agent.model.ModelLimit;
+import com.yu.mboocode.common.util.AppDataPaths;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -21,17 +29,33 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 @Service
 @Slf4j
 public class ModelMetadataService {
-    private static final String CATALOG_URL = "https://models.opencode.ai/api.json"; // https://models.dev/api.json 被墙了
+    private static final String CATALOG_URL = "https://models.dev/api.json";
+    private static final int CACHE_VERSION = 1;
     private static final int REQUEST_TIMEOUT = 10_000;
+    private static final Path CACHE_PATH = AppDataPaths.root().resolve("cache/model-metadata.json");
 
     private volatile Map<String, ModelInfo> metadata;
 
-    public synchronized Map<String, ModelInfo> loadMetadata() {
+    /** 启动阶段只读取本地缓存，不能因为磁盘缓存不可用阻塞 Spring 启动。 */
+    public synchronized Map<String, ModelInfo> loadCachedMetadata() {
         if (metadata != null) return metadata;
+        metadata = readCache();
+        return metadata;
+    }
+
+    /** 设置测试等显式动作需要完整目录时，缓存为空才同步执行一次远程读取。 */
+    public synchronized Map<String, ModelInfo> loadMetadata() {
+        Map<String, ModelInfo> cached = loadCachedMetadata();
+        return cached.isEmpty() ? refreshMetadata() : cached;
+    }
+
+    /** 后台刷新目录并原子更新磁盘缓存；调用方负责处理远程失败降级。 */
+    public synchronized Map<String, ModelInfo> refreshMetadata() {
         JSONObject root;
         try (HttpResponse response = HttpRequest.get(CATALOG_URL).header(Header.ACCEPT, "application/json").timeout(REQUEST_TIMEOUT).execute()) {
             if (!response.isOk()) {
@@ -73,8 +97,70 @@ public class ModelMetadataService {
         }
         if (cleaned.isEmpty()) throw new IllegalStateException("models.dev 模型目录没有有效模型");
         metadata = Collections.unmodifiableMap(new LinkedHashMap<>(cleaned));
+        writeCache(metadata);
         log.info("models.dev 模型目录清洗完成，总记录数: {}，无效记录数: {}，重复 ID 数: {}，有效模型数: {}", totalCount, invalidCount, duplicateCount, metadata.size());
         return metadata;
+    }
+
+    private Map<String, ModelInfo> readCache() {
+        if (!Files.isRegularFile(CACHE_PATH)) return Map.of();
+        try {
+            JSONObject envelope = JSON.parseObject(Files.readString(CACHE_PATH, StandardCharsets.UTF_8));
+            if (envelope == null || !Integer.valueOf(CACHE_VERSION).equals(envelope.getInteger("version"))) return Map.of();
+            JSONObject models = envelope.getJSONObject("models");
+            if (models == null || models.isEmpty()) return Map.of();
+            LinkedHashMap<String, ModelInfo> result = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : models.entrySet()) {
+                if (!(entry.getValue() instanceof JSONObject value)) continue;
+                try {
+                    ModelInfo modelInfo = JSON.parseObject(value.toJSONString(), ModelInfo.class);
+                    if (isValidModelInfo(modelInfo) && entry.getKey().equals(modelInfo.modelId())) result.putIfAbsent(entry.getKey(), modelInfo);
+                } catch (RuntimeException ignored) {
+                    // 单条缓存损坏时跳过该条，避免丢弃其余可用目录。
+                }
+            }
+            return result.isEmpty() ? Map.of() : Collections.unmodifiableMap(result);
+        } catch (Exception e) {
+            log.warn("本地模型目录缓存读取失败，将在后台重新刷新：{}", CACHE_PATH, e);
+            return Map.of();
+        }
+    }
+
+    private void writeCache(Map<String, ModelInfo> models) {
+        Path cacheDirectory = CACHE_PATH.getParent();
+        if (cacheDirectory == null) return;
+        Path temporaryPath = cacheDirectory.resolve(CACHE_PATH.getFileName() + ".tmp-" + UUID.randomUUID());
+        try {
+            Files.createDirectories(cacheDirectory);
+            LinkedHashMap<String, Object> envelope = new LinkedHashMap<>();
+            envelope.put("version", CACHE_VERSION);
+            envelope.put("updatedAt", java.time.Instant.now().toString());
+            envelope.put("models", models);
+            Files.writeString(temporaryPath, JSON.toJSONString(envelope), StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
+            try {
+                Files.move(temporaryPath, CACHE_PATH, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temporaryPath, CACHE_PATH, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            log.warn("本地模型目录缓存写入失败：{}", CACHE_PATH, e);
+        } finally {
+            try {
+                Files.deleteIfExists(temporaryPath);
+            } catch (IOException ignored) {
+                // 临时文件清理失败不影响本次内存刷新结果。
+            }
+        }
+    }
+
+    private boolean isValidModelInfo(ModelInfo modelInfo) {
+        return modelInfo != null && StrUtil.isNotBlank(modelInfo.modelId()) && StrUtil.isNotBlank(modelInfo.name())
+                && modelInfo.limit() != null && positive(modelInfo.limit().context()) && positive(modelInfo.limit().output())
+                && (modelInfo.limit().input() == null || positive(modelInfo.limit().input()));
+    }
+
+    private boolean positive(Long value) {
+        return value != null && value > 0;
     }
 
     private ModelInfo cleanModel(JSONObject model) {

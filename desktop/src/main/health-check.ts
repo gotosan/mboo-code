@@ -14,20 +14,23 @@ export async function waitForServiceHealth(options: {
   context: DesktopStartupContext;
   process: ManagedProcess & { hasExited?: () => boolean };
   fetcher?: typeof fetch;
+  requestTimeoutMs?: number;
 }): Promise<void> {
   let lastFailure = "健康检查尚未就绪";
+  const requestTimeoutMs = options.requestTimeoutMs ?? 1_000;
 
   while (Date.now() < options.context.deadline) {
     if (options.process.hasExited?.()) {
       throw new Error(`${options.phase} 服务在健康检查完成前退出`);
     }
     try {
-      const response = await (options.fetcher ?? fetch)(options.url, { cache: "no-store" });
+      const timeoutMs = Math.min(requestTimeoutMs, Math.max(1, options.context.deadline - Date.now()));
+      const { response, body } = await fetchWithTimeout(options.fetcher ?? fetch, options.url, timeoutMs);
       if (!response.ok) {
         lastFailure = `${options.phase} 健康检查返回 HTTP ${response.status}`;
       } else {
-        const body = await response.json() as HealthResponse & { data?: HealthResponse };
-        const health: HealthResponse = body.data ?? body;
+        const payload = body as HealthResponse & { data?: HealthResponse };
+        const health: HealthResponse = payload.data ?? payload;
         if (health.status !== "UP") {
           lastFailure = `${options.phase} 健康检查状态不是 UP`;
         } else if (health.instanceId !== options.context.instanceId) {
@@ -44,6 +47,27 @@ export async function waitForServiceHealth(options: {
   }
 
   throw new Error(`${options.phase} 服务健康检查超时：${lastFailure}`);
+}
+
+async function fetchWithTimeout(fetcher: typeof fetch, url: string, timeoutMs: number): Promise<{ response: Response; body: unknown }> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const request = (async () => {
+    const response = await fetcher(url, { cache: "no-store", signal: controller.signal });
+    const body = response.ok ? await response.json() : undefined;
+    return { response, body };
+  })();
+  try {
+    return await Promise.race([
+      request,
+      new Promise<{ response: Response; body: unknown }>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`健康检查请求超时（${timeoutMs}ms）`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    controller.abort();
+  }
 }
 
 function delay(milliseconds: number): Promise<void> {

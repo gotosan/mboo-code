@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ShutdownCoordinator } from "./shutdown-coordinator.js";
-import { createDiagnosticsDataUrl, createWindowSecurityOptions, isAllowedNavigation } from "./window-security.js";
+import { createDiagnosticsDataUrl, createStartupDataUrl, createWindowSecurityOptions, isAllowedNavigation } from "./window-security.js";
 import { isRevealTarget, type DesktopDiagnostics, type DesktopRuntimeState } from "../shared/contracts.js";
 import { DesktopServiceStartError, startDesktopServices } from "./desktop-service-manager.js";
 import { normalizeSelectedWorkspaceDirectory } from "./workspace-picker.js";
@@ -15,6 +15,7 @@ const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = path.join(currentDirectory, "../preload/index.cjs");
 const shutdownCoordinator = new ShutdownCoordinator();
 let mainWindow: BrowserWindow | undefined;
+let allowedNavigationUrl: string | undefined;
 let isQuitting = false;
 let currentDesktopUrl: string | undefined;
 let confirmedWorkspaceDirectory: string | undefined;
@@ -62,9 +63,11 @@ function getDesktopAppDataDirectory(): string {
  */
 function createMainWindow(localUrl?: string): BrowserWindow {
   const window = new BrowserWindow(createWindowSecurityOptions(preloadPath));
+  const initialUrl = localUrl ?? createDiagnosticsDataUrl(diagnostics);
+  allowedNavigationUrl = initialUrl;
 
   window.webContents.on("will-navigate", (event, targetUrl) => {
-    if (localUrl && isAllowedNavigation(targetUrl, localUrl)) return;
+    if (allowedNavigationUrl && (allowedNavigationUrl.startsWith("data:") ? targetUrl === allowedNavigationUrl : isAllowedNavigation(targetUrl, allowedNavigationUrl))) return;
     event.preventDefault();
   });
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -73,20 +76,29 @@ function createMainWindow(localUrl?: string): BrowserWindow {
   });
   window.once("ready-to-show", () => window.show());
   window.on("closed", () => {
-    if (mainWindow === window) mainWindow = undefined;
+    if (mainWindow === window) {
+      mainWindow = undefined;
+      allowedNavigationUrl = undefined;
+    }
   });
 
   if (localUrl) {
     void window.loadURL(localUrl);
   } else {
-    void window.loadURL(createDiagnosticsDataUrl(diagnostics));
+    void window.loadURL(initialUrl);
     window.show();
   }
   return window;
 }
 
+function navigateMainWindow(targetUrl: string): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  allowedNavigationUrl = targetUrl;
+  void mainWindow.loadURL(targetUrl);
+}
+
 /**
- * 开发模式保留显式前端地址，生产模式仅在两个 sidecar 经健康检查确认后才加载窗口，避免连接残留端口或展示无限错误页。
+ * 开发模式保留显式前端地址；生产模式先显示轻量启动页，两个 sidecar 健康后复用同一窗口切换到 Next.js。
  */
 async function initializeDesktop(): Promise<void> {
   if (currentDesktopUrl) {
@@ -103,14 +115,19 @@ async function initializeDesktop(): Promise<void> {
     return;
   }
 
+  const shouldShowWindow = !process.argv.includes("--smoke-parent-crash") && !process.argv.includes("--smoke-exit-after-ready");
+  if (shouldShowWindow && !mainWindow) mainWindow = createMainWindow(createStartupDataUrl());
+
   try {
     await startProductionServices();
+    if (isQuitting) return;
     if (process.argv.includes("--smoke-exit-after-ready")) {
       setTimeout(() => app.quit(), 500);
       return;
     }
-    if (!process.argv.includes("--smoke-parent-crash")) mainWindow = createMainWindow(currentDesktopUrl);
+    if (shouldShowWindow && currentDesktopUrl) navigateMainWindow(currentDesktopUrl);
   } catch (error) {
+    if (isQuitting) return;
     runtimeState.mode = "failed";
     if (error instanceof DesktopServiceStartError) {
       Object.assign(diagnostics, error.diagnostics);
@@ -118,7 +135,10 @@ async function initializeDesktop(): Promise<void> {
       diagnostics.phase = "startup-failed";
       diagnostics.message = error instanceof Error ? error.message : "桌面服务启动失败";
     }
-    mainWindow = createMainWindow();
+    if (shouldShowWindow) {
+      if (mainWindow) navigateMainWindow(createDiagnosticsDataUrl(diagnostics));
+      else mainWindow = createMainWindow();
+    }
   }
 }
 
@@ -131,6 +151,10 @@ async function startProductionServices(): Promise<void> {
     architecture: process.arch,
   });
   const { runtime: services, diagnostics: serviceDiagnostics } = result;
+  if (isQuitting) {
+    await Promise.allSettled([services.javaProcess.stop(), services.nextProcess.stop()]);
+    throw new Error("桌面端正在退出，取消服务启动");
+  }
   shutdownCoordinator.register(() => services.javaProcess.stop());
   shutdownCoordinator.register(() => services.nextProcess.stop());
   runtimeState.mode = "ready";
