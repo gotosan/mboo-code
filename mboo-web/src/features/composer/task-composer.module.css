@@ -1,6 +1,5 @@
 .form {
   position: relative;
-  z-index: 1000;
   width: 100%;
   min-width: 0;
   margin: 0 auto;
@@ -229,7 +228,6 @@
 
 .composer {
   position: relative;
-  z-index: 1001;
   display: flex;
   width: 100%;
   min-width: 0;
@@ -244,7 +242,7 @@
 /* 将边框绘制在内容层上方，避免 toolbar/statusbar 的白色背景盖住圆角与焦点态。 */
 .composer::after {
   position: absolute;
-  z-index: 1003;
+  z-index: 1;
   inset: -1px;
   border: 1px solid #e6e6e6;
   border-radius: inherit;
@@ -397,7 +395,7 @@
 
 .statusActions {
   position: relative;
-  z-index: 1002;
+  z-index: 2;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -541,7 +539,7 @@
 
 .contextPopover {
   position: fixed;
-  z-index: 2147483647;
+  z-index: 900;
   display: flex;
   width: min(292px, calc(100vw - 32px));
   flex-direction: column;

@@ -223,7 +223,7 @@ export function ModelSettingsDialog({ open, onClose, onModelsRefreshed, hasRunni
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-text-1/35 p-3 sm:p-6"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-text-1/35 p-3 sm:p-6"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !isBusy) onClose();
