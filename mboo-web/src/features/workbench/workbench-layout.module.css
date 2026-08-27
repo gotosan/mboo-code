@@ -62,6 +62,13 @@
   margin-block: auto;
 }
 
+/* 空态、状态卡与输入器共用消息滚动区的横向节奏，避免断点切换时左右边缘漂移。 */
+.contentRail {
+  width: calc(100% - 16px);
+  max-width: 72rem;
+  margin-inline: auto;
+}
+
 .emptyStatePanel {
   position: relative;
   overflow: hidden;
@@ -124,6 +131,12 @@
   padding: 8px 0;
 }
 
+@media (max-width: 599px) {
+  .composerDock {
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+}
+
 /* 多条待授权请求共享一个高度预算，避免 composer dock 继续向上挤压唯一消息滚动槽。 */
 .approvalStack {
   max-block-size: clamp(196px, 36svh, 320px);
@@ -155,7 +168,17 @@
   }
 }
 
+@media (min-width: 600px) {
+  .contentRail {
+    width: calc(100% - 24px);
+  }
+}
+
 @media (min-width: 1440px) {
+  .contentRail {
+    width: calc(100% - 48px);
+  }
+
   .gridSidebarVisible {
     grid-template-columns: 280px minmax(0, 1fr) 250px;
   }

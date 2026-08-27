@@ -12,8 +12,6 @@ import type {
 import styles from "./task-composer.module.css";
 import { ComposerTokenEditor } from "./composer-token-editor";
 
-export const MANUAL_MODEL_VALUE = "__manual__";
-
 export const DEFAULT_REASONING_OPTION = { value: "", label: "默认" };
 
 function reasoningOptionLabel(value: string) {
@@ -47,8 +45,7 @@ export type TaskComposerProps = {
   isSessionSwitching: boolean;
   isSelectingWorkspace: boolean;
   modelName: string;
-  isManualModel: boolean;
-  onModelChange: (value: string, manual?: boolean) => void;
+  onModelChange: (value: string) => void;
   modelOptions: string[];
   modelOptionsError: string;
   isLoadingModelOptions: boolean;
@@ -76,7 +73,7 @@ export type TaskComposerProps = {
   onSend: () => void;
   onStop: () => void;
   onCompress: () => void;
-  onFocusModelInput: () => void;
+  onFocusModelSelect: () => void;
 };
 
 export const TaskComposer = memo(function TaskComposer({
@@ -91,7 +88,6 @@ export const TaskComposer = memo(function TaskComposer({
   isSessionSwitching,
   isSelectingWorkspace,
   modelName,
-  isManualModel,
   onModelChange,
   modelOptions,
   modelOptionsError,
@@ -120,7 +116,7 @@ export const TaskComposer = memo(function TaskComposer({
   onSend,
   onStop,
   onCompress,
-  onFocusModelInput,
+  onFocusModelSelect,
 }: TaskComposerProps) {
   const [contextOpen, setContextOpen] = useState(false);
   const [contextPopoverPosition, setContextPopoverPosition] = useState({ top: 0, left: 0, ready: false });
@@ -128,6 +124,9 @@ export const TaskComposer = memo(function TaskComposer({
   const contextTriggerRef = useRef<HTMLButtonElement>(null);
   const contextPopoverRef = useRef<HTMLDivElement>(null);
   const workspaceLabel = workspaceBasename(workspacePath) || workspaceStatusText;
+  const selectableModels = modelName && !modelOptions.includes(modelName)
+    ? [modelName, ...modelOptions]
+    : modelOptions;
   const contextLimit = modelContextLimit?.effectiveContextLimit ?? null;
   const minimumLimit = modelContextLimit?.minimumContextLimit ?? null;
   const maximumLimit = modelContextLimit?.maximumContextLimit ?? null;
@@ -211,8 +210,8 @@ export const TaskComposer = memo(function TaskComposer({
     <form className={styles.form} onSubmit={(event) => { event.preventDefault(); submit(); }}>
       {!modelName.trim() ? (
         <div className={styles.warning} role="status">
-          <span>请先填写模型名称后再发送</span>
-          <button className={styles.warningAction} disabled={controlsDisabled} type="button" onClick={onFocusModelInput}>去填写</button>
+          <span>{modelOptionsError ? "未能获取模型列表，请检查模型服务" : "请先选择模型后再发送"}</span>
+          <button className={styles.warningAction} disabled={controlsDisabled} type="button" onClick={onFocusModelSelect}>去选择</button>
         </div>
       ) : null}
 
@@ -230,15 +229,12 @@ export const TaskComposer = memo(function TaskComposer({
           <div className={`${styles.configBar} ${isComposerSettingsOpen || !modelName.trim() || controlsDisabled ? "" : styles.configBarClosed}`}>
             <div className={styles.configGroup}>
               <label className={styles.configLabel} htmlFor="model-select">模型</label>
-              <select className={styles.configSelect} id="model-select" disabled={controlsDisabled} value={isManualModel ? MANUAL_MODEL_VALUE : modelName} onChange={(event) => onModelChange(event.target.value, event.target.value === MANUAL_MODEL_VALUE)}>
-                {modelOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                <option value={MANUAL_MODEL_VALUE}>手动输入</option>
+              <select className={styles.configSelect} id="model-select" disabled={controlsDisabled} value={modelName} onChange={(event) => onModelChange(event.target.value)}>
+                {!selectableModels.length ? <option value="">暂无候选</option> : null}
+                {selectableModels.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
-              {isManualModel ? (
-                <input className={styles.manualModelInput} id="model-input" aria-label="手动模型名称" autoComplete="off" disabled={controlsDisabled} placeholder="例如 gpt-4.1" value={modelName} onChange={(event) => onModelChange(event.target.value, true)} />
-              ) : null}
               <span className={`${styles.configHint} ${modelOptionsError ? styles.configHintError : ""}`} title={modelOptionsError}>
-                {isLoadingModelOptions ? "加载中" : modelOptionsError ? "候选失败，可手动填写" : modelOptions.length ? `${modelOptions.length} 个候选` : "暂无候选"}
+                {isLoadingModelOptions ? "加载中" : modelOptionsError ? "候选加载失败" : modelOptions.length ? `${modelOptions.length} 个候选` : "暂无候选"}
               </span>
             </div>
             <span className={styles.divider} aria-hidden />

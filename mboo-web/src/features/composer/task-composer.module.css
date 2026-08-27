@@ -75,8 +75,7 @@
   line-height: 14px;
 }
 
-.configSelect,
-.manualModelInput {
+.configSelect {
   height: 28px;
   min-width: 0;
   padding: 0;
@@ -94,13 +93,7 @@
   width: 112px;
 }
 
-.manualModelInput {
-  width: 112px;
-  padding-inline: 4px;
-}
-
-.configSelect:focus-visible,
-.manualModelInput:focus-visible {
+.configSelect:focus-visible {
   outline: 2px solid #8d71ff;
   outline-offset: 2px;
 }
