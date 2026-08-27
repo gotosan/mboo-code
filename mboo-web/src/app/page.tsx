@@ -182,7 +182,6 @@ export default function Home() {
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelOptionsError, setModelOptionsError] = useState("");
   const [isLoadingModelOptions, setIsLoadingModelOptions] = useState(true);
-  const [isManualModel, setIsManualModel] = useState(true);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("DEFAULT");
   const [isSavingPermissionMode, setIsSavingPermissionMode] = useState(false);
   const [permissionModeError, setPermissionModeError] = useState("");
@@ -293,11 +292,10 @@ export default function Home() {
     archivedSessionsRef.current = archivedSessions;
   }, [archivedSessions]);
 
-  const applyModelName = useCallback((value: string, manual?: boolean) => {
+  const applyModelName = useCallback((value: string) => {
     const nextValue = value.trim();
     modelNameRef.current = nextValue;
     setModelName(nextValue);
-    setIsManualModel(manual ?? !modelOptionsRef.current.includes(nextValue));
   }, []);
 
 
@@ -350,11 +348,10 @@ export default function Home() {
       setModelOptions(options);
       setModelOptionsError("");
       const nextModelName = modelNameRef.current || lastSentModelRef.current || options[0] || "";
-      applyModelName(nextModelName, !nextModelName || !options.includes(nextModelName));
+      applyModelName(nextModelName);
     } catch (error) {
       if (requestId !== modelOptionsRequestRef.current) return;
       setModelOptionsError(toErrorMessage(error));
-      setIsManualModel(true);
     } finally {
       if (requestId === modelOptionsRequestRef.current) {
         setIsLoadingModelOptions(false);
@@ -2181,15 +2178,15 @@ export default function Home() {
     setIsSessionDrawerOpen(false);
   }, []);
 
-  const focusModelInput = useCallback(() => {
+  const focusModelSelect = useCallback(() => {
     setIsComposerSettingsOpen(true);
     requestAnimationFrame(() => {
-      const input = document.getElementById("model-input");
-      if (!(input instanceof HTMLInputElement)) {
+      const select = document.getElementById("model-select");
+      if (!(select instanceof HTMLSelectElement)) {
         return;
       }
-      input.focus();
-      input.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      select.focus();
+      select.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
   }, []);
 
@@ -2426,7 +2423,7 @@ export default function Home() {
                   {isSessionSwitching ? (
                     <ConversationLoadingState />
                   ) : (
-                    <div className={`${layoutStyles.emptyStatePanel} mx-auto w-full max-w-[72rem] px-4 py-5 sm:px-5 sm:py-6`}>
+                    <div className={`${layoutStyles.emptyStatePanel} ${layoutStyles.contentRail} px-4 py-5 sm:px-5 sm:py-6`}>
                       {/* 设计决策：缺模型只在输入器保留一个主阻断；空态只给下一步与示例 */}
                       <div className="flex items-center gap-3">
                         <img src="/mboo-code-icon.png" alt="" aria-hidden className="size-12 rounded-[12px] border border-line object-cover" />
@@ -2467,7 +2464,7 @@ export default function Home() {
                                 onClick={() => {
                                   setInput(hint);
                                   if (!modelName.trim()) {
-                                    focusModelInput();
+                                    focusModelSelect();
                                   }
                                 }}
                               >
@@ -2536,15 +2533,15 @@ export default function Home() {
               ) : null}
             </div>
 
-            <div className={`${layoutStyles.composerDock} px-3 sm:px-4 xl:px-6`}>
+            <div className={layoutStyles.composerDock}>
               {isArchivedView ? (
-                <div className="mx-auto w-full max-w-[72rem] rounded-[var(--radius-sm)] border border-running/30 bg-running-soft px-4 py-3 text-sm text-running">
+                <div className={`${layoutStyles.contentRail} rounded-[var(--radius-sm)] border border-running/30 bg-running-soft px-4 py-3 text-sm text-running`}>
                   当前为归档会话，仅支持回看。可在会话列表中取消归档后继续对话。
                 </div>
               ) : (
                 <>
                   {pendingApprovalTools.length > 0 ? (
-                    <div className={`${layoutStyles.approvalStack} mx-auto mb-2 w-full max-w-[72rem] space-y-2`}>
+                    <div className={`${layoutStyles.approvalStack} ${layoutStyles.contentRail} mb-2 space-y-2`}>
                       {pendingApprovalTools.map((toolCall) => (
                         <ToolApprovalCard
                           key={toolCall.approvalId || toolCall.id}
@@ -2554,49 +2551,50 @@ export default function Home() {
                       ))}
                     </div>
                   ) : null}
-                <TaskComposer
-                  input={input}
-                  onInputChange={setInput}
-                  isRunning={isRunning}
-                  isCompressing={isCompressing}
-                  contextUsage={contextUsage}
-                  compressionState={compressionState}
-                  compressionMessage={compressionMessage}
-                  canCompress={Boolean(sessionId && !isArchivedView)}
-                  isSessionSwitching={isSessionSwitching}
-                  isSelectingWorkspace={isSelectingWorkspace}
-                  modelName={modelName}
-                  isManualModel={isManualModel}
-                  onModelChange={applyModelName}
-                  modelOptions={modelOptions}
-                  modelOptionsError={modelOptionsError}
-                  isLoadingModelOptions={isLoadingModelOptions}
-                  modelContextLimit={modelContextLimit}
-                  onSaveContextLimit={(value) => void saveContextLimit(value)}
-                  onResetContextLimit={() => void resetContextLimit()}
-                  isSavingContextLimit={isSavingContextLimit}
-                  contextLimitError={contextLimitError}
-                  reasoningEffort={reasoningEffort}
-                  reasoningOptions={reasoningOptions}
-                  onReasoningChange={setReasoningEffort}
-                  permissionMode={permissionMode}
-                  onPermissionModeChange={(mode) => void changePermissionMode(mode)}
-                  isSavingPermissionMode={isSavingPermissionMode}
-                  permissionModeError={permissionModeError}
-                  workspacePath={displayedWorkspacePath}
-                  workspaceId={sessions.find((session) => session.id === highlightedSessionId)?.workspaceId || workspaces.find((workspace) => workspace.path === displayedWorkspacePath)?.id || null}
-                  workspaceStatusText={workspaceStatusText}
-                  canSelectWorkspace={!sessionId && !isSessionSwitching && !isArchivedView}
-                  canClearWorkspace={Boolean(!sessionId && displayedWorkspacePath)}
-                  onSelectWorkspace={() => void selectWorkspace()}
-                  onClearWorkspace={clearPendingWorkspace}
-                  isComposerSettingsOpen={isComposerSettingsOpen}
-                  onToggleSettings={() => setIsComposerSettingsOpen((current) => !current)}
-                  onSend={sendMessage}
-                  onStop={stopCurrentRun}
-                  onCompress={() => void compressContext()}
-                  onFocusModelInput={focusModelInput}
-                />
+                  <div className={layoutStyles.contentRail}>
+                    <TaskComposer
+                      input={input}
+                      onInputChange={setInput}
+                      isRunning={isRunning}
+                      isCompressing={isCompressing}
+                      contextUsage={contextUsage}
+                      compressionState={compressionState}
+                      compressionMessage={compressionMessage}
+                      canCompress={Boolean(sessionId && !isArchivedView)}
+                      isSessionSwitching={isSessionSwitching}
+                      isSelectingWorkspace={isSelectingWorkspace}
+                      modelName={modelName}
+                      onModelChange={applyModelName}
+                      modelOptions={modelOptions}
+                      modelOptionsError={modelOptionsError}
+                      isLoadingModelOptions={isLoadingModelOptions}
+                      modelContextLimit={modelContextLimit}
+                      onSaveContextLimit={(value) => void saveContextLimit(value)}
+                      onResetContextLimit={() => void resetContextLimit()}
+                      isSavingContextLimit={isSavingContextLimit}
+                      contextLimitError={contextLimitError}
+                      reasoningEffort={reasoningEffort}
+                      reasoningOptions={reasoningOptions}
+                      onReasoningChange={setReasoningEffort}
+                      permissionMode={permissionMode}
+                      onPermissionModeChange={(mode) => void changePermissionMode(mode)}
+                      isSavingPermissionMode={isSavingPermissionMode}
+                      permissionModeError={permissionModeError}
+                      workspacePath={displayedWorkspacePath}
+                      workspaceId={sessions.find((session) => session.id === highlightedSessionId)?.workspaceId || workspaces.find((workspace) => workspace.path === displayedWorkspacePath)?.id || null}
+                      workspaceStatusText={workspaceStatusText}
+                      canSelectWorkspace={!sessionId && !isSessionSwitching && !isArchivedView}
+                      canClearWorkspace={Boolean(!sessionId && displayedWorkspacePath)}
+                      onSelectWorkspace={() => void selectWorkspace()}
+                      onClearWorkspace={clearPendingWorkspace}
+                      isComposerSettingsOpen={isComposerSettingsOpen}
+                      onToggleSettings={() => setIsComposerSettingsOpen((current) => !current)}
+                      onSend={sendMessage}
+                      onStop={stopCurrentRun}
+                      onCompress={() => void compressContext()}
+                      onFocusModelSelect={focusModelSelect}
+                    />
+                  </div>
                 </>
               )}
             </div>
