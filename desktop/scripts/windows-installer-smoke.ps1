@@ -53,6 +53,23 @@ function Wait-ForPackagedProcessesExit {
   throw "安装目录中的应用进程未在 30 秒内清理：$InstallDirectory"
 }
 
+function Wait-ForPathGone {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [int]$TimeoutSeconds = 30
+  )
+
+  for ($attempt = 0; $attempt -lt $TimeoutSeconds; $attempt++) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+      return
+    }
+    Start-Sleep -Seconds 1
+  }
+  if (Test-Path -LiteralPath $Path) {
+    throw "卸载完成后主程序仍存在：$Path"
+  }
+}
+
 function Get-PackagedProcesses {
   param([Parameter(Mandatory = $true)][string]$InstallDirectory)
 
@@ -149,9 +166,7 @@ $uninstallProcess = Start-AndWait -FilePath $uninstaller -Arguments @("/S")
 if ($uninstallProcess.ExitCode -ne 0) {
   throw "NSIS 卸载失败，退出码：$($uninstallProcess.ExitCode)"
 }
-if (Test-Path -LiteralPath $appExecutable) {
-  throw "卸载完成后主程序仍存在：$appExecutable"
-}
+Wait-ForPathGone -Path $appExecutable
 
 Remove-Item -LiteralPath $appDataRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Windows installer smoke test passed"
