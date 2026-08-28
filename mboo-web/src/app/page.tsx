@@ -839,6 +839,17 @@ export default function Home() {
     drainPendingAssistantDeltas();
   }, [drainPendingAssistantDeltas]);
 
+  // 关键决策：隐藏窗口会暂停 RAF，恢复可见时必须主动提交积压文本，不能依赖浏览器补帧。
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        flushPendingAssistantDeltas();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [flushPendingAssistantDeltas]);
+
   // 设计决策：同帧多 delta 合并成一次 React 提交，长流式时主线程更稳
   const appendAssistantDelta = useCallback(
     (sessionKey: string, messageId: string, text: string, event: SessionEvent) => {

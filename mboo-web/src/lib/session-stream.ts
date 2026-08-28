@@ -83,18 +83,31 @@ function waitAnimationFrame(signal?: AbortSignal) {
       return;
     }
 
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+      resolve();
+      return;
+    }
+
     if (typeof requestAnimationFrame !== "function") {
       setTimeout(resolve, 0);
       return;
     }
 
-    const frame = requestAnimationFrame(() => resolve());
-    if (!signal) return;
-
-    const onAbort = () => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       cancelAnimationFrame(frame);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      signal?.removeEventListener("abort", finish);
       resolve();
     };
-    signal.addEventListener("abort", onAbort, { once: true });
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") finish();
+    };
+    const frame = requestAnimationFrame(finish);
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    signal?.addEventListener("abort", finish, { once: true });
   });
 }
