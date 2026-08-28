@@ -6,6 +6,7 @@ HELP.md
 !**/src/test/**/build/
 /desktop/build/
 .workbuddy
+.DS_Store
 
 ### STS ###
 .apt_generated

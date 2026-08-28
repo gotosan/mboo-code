@@ -5,7 +5,11 @@ plugins {
 }
 
 group = 'com.yu'
-version = '0.0.1-SNAPSHOT'
+def appVersionProperties = new Properties()
+file('version.properties').withInputStream { appVersionProperties.load(it) }
+def appVersion = appVersionProperties.getProperty('appVersion')?.trim()
+if (!appVersion || !(appVersion ==~ /\d+\.\d+\.\d+/)) throw new GradleException('version.properties 中的 appVersion 必须是 x.y.z 格式')
+version = appVersion
 description = 'mboo-code'
 
 java {
@@ -53,4 +57,8 @@ tasks.named('test') {
     testLogging {
         showStandardStreams = true
     }
+}
+
+tasks.named('bootJar') {
+    archiveFileName = 'mboo-code.jar'
 }
