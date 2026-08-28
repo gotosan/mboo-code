@@ -347,6 +347,34 @@ export default function Home() {
       setModelOptionsError("");
       const nextModelName = modelNameRef.current || lastSentModelRef.current || options[0] || "";
       applyModelName(nextModelName);
+      return true;
+    };
+
+    try {
+      const response = await fetch("/api/model/list", { cache: "no-store" });
+      const options = (await readApiData<string[]>(response)) ?? [];
+      if (requestId !== modelOptionsRequestRef.current) return;
+
+      applyOptions(options);
+      if (options.length === 0) {
+        const deadline = Date.now() + 30_000;
+        let loadingCompleted = false;
+        while (Date.now() < deadline && requestId === modelOptionsRequestRef.current) {
+          const settings = await getModelSettings();
+          if (requestId !== modelOptionsRequestRef.current) return;
+          if (settings.status !== "LOADING") {
+            loadingCompleted = settings.status === "CONNECTED";
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        }
+        if (requestId !== modelOptionsRequestRef.current) return;
+        if (loadingCompleted && Date.now() < deadline) {
+          const refreshedResponse = await fetch("/api/model/list", { cache: "no-store" });
+          const refreshedOptions = (await readApiData<string[]>(refreshedResponse)) ?? [];
+          applyOptions(refreshedOptions);
+        }
+      }
     } catch (error) {
       if (requestId !== modelOptionsRequestRef.current) return;
       setModelOptionsError(toErrorMessage(error));
@@ -810,6 +838,17 @@ export default function Home() {
     }
     drainPendingAssistantDeltas();
   }, [drainPendingAssistantDeltas]);
+
+  // 关键决策：隐藏窗口会暂停 RAF，恢复可见时必须主动提交积压文本，不能依赖浏览器补帧。
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        flushPendingAssistantDeltas();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [flushPendingAssistantDeltas]);
 
   // 设计决策：同帧多 delta 合并成一次 React 提交，长流式时主线程更稳
   const appendAssistantDelta = useCallback(

@@ -17,7 +17,7 @@ test("delivers fragmented SSE events in source order after asynchronous handlers
     },
   })), async (event) => {
     await new Promise((resolve) => setTimeout(resolve, 0));
-    delivered.push(event.payload.text);
+    delivered.push(readDeltaText(event));
   });
 
   assert.deepEqual(delivered, events.map((event) => event.payload.text));
@@ -33,6 +33,57 @@ test("reports malformed JSON from a session event without hiding the stream erro
     (error: unknown) => error instanceof SessionStreamError && error.message.includes("无法解析后端会话事件"),
   );
 });
+
+test("continues delivering events when the page becomes hidden before the next animation frame", async () => {
+  const originalDocument = globalThis.document;
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+  const visibilityTarget = new EventTarget();
+  const fakeDocument = Object.assign(visibilityTarget, { visibilityState: "visible" });
+  const events = [createDeltaEvent(1), createDeltaEvent(2)];
+  const source = events.map((event) => `event: session\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  const delivered: string[] = [];
+
+  Object.defineProperty(globalThis, "document", { configurable: true, value: fakeDocument });
+  Object.defineProperty(globalThis, "requestAnimationFrame", {
+    configurable: true,
+    value: () => 1,
+  });
+  Object.defineProperty(globalThis, "cancelAnimationFrame", {
+    configurable: true,
+    value: () => undefined,
+  });
+
+  try {
+    const reading = readSessionEventStream(
+      new Response(source, { headers: { "Content-Type": "text/event-stream" } }),
+      (event) => {
+        delivered.push(readDeltaText(event));
+      },
+      { paceWithAnimationFrame: true },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fakeDocument.visibilityState = "hidden";
+    fakeDocument.dispatchEvent(new Event("visibilitychange"));
+
+    await Promise.race([
+      reading,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("隐藏页面的事件链仍在等待动画帧")), 100)),
+    ]);
+    assert.deepEqual(delivered, events.map((event) => event.payload.text));
+  } finally {
+    Object.defineProperty(globalThis, "document", { configurable: true, value: originalDocument });
+    Object.defineProperty(globalThis, "requestAnimationFrame", { configurable: true, value: originalRequestAnimationFrame });
+    Object.defineProperty(globalThis, "cancelAnimationFrame", { configurable: true, value: originalCancelAnimationFrame });
+  }
+});
+
+function readDeltaText(event: SessionEvent): string {
+  if (event.type !== "ASSISTANT_MESSAGE_DELTA") {
+    throw new Error(`测试流收到非文本增量事件：${event.type}`);
+  }
+  return event.payload.text;
+}
 
 function createDeltaEvent(index: number): SessionEvent & { payload: { text: string } } {
   return {
