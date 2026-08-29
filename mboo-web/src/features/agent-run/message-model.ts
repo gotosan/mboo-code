@@ -3,6 +3,7 @@ import type {
   ToolCallStatus,
   ToolPermissionType,
   ToolResultDetail,
+  AskQuestion,
 } from "@/lib/session-types";
 
 export type MessageRole = "user" | "assistant" | "system";
@@ -31,6 +32,8 @@ export type ToolCallView = {
   grantOrigin?: string;
   approvalIndex?: number;
   approvalCount?: number;
+  askQuestions?: AskQuestion[];
+  askAnswers?: string[];
 };
 
 export type ToolResultLoader = (resultId: string, force?: boolean) => Promise<ToolResultDetail>;

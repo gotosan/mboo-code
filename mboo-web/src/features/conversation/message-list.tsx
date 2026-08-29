@@ -167,6 +167,7 @@ export const MessageList = memo(function MessageList({
                   onRegenerate={onRegenerate}
                   onContinue={onContinue}
                   toErrorMessage={toErrorMessage}
+                  onStop={onStop}
                 />
               </div>
             );

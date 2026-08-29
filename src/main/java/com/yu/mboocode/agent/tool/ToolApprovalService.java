@@ -17,6 +17,7 @@ import com.yu.mboocode.agent.tool.command.RunningCommandRegistry;
 import com.yu.mboocode.agent.tool.event.ToolEventFormatterRegistry;
 import com.yu.mboocode.agent.tool.network.NetworkToolErrorCode;
 import com.yu.mboocode.agent.tool.network.RunningNetworkCallRegistry;
+import com.yu.mboocode.agent.tool.ask.AskService;
 import com.yu.mboocode.agent.tool.permission.PermissionCheck;
 import com.yu.mboocode.agent.tool.permission.PermissionMode;
 import com.yu.mboocode.agent.tool.permission.PermissionRequirement;
@@ -64,6 +65,8 @@ public class ToolApprovalService {
     private RunningCommandRegistry runningCommandRegistry;
     @Resource
     private RunningNetworkCallRegistry runningNetworkCallRegistry;
+    @Resource
+    private AskService askService;
     @Resource
     private McpServerRuntime mcpServerRuntime;
     @Resource
@@ -154,6 +157,7 @@ public class ToolApprovalService {
     public void cancelTurn(String sessionId, String turnId) {
         runningCommandRegistry.cancelTurn(sessionId, turnId);
         runningNetworkCallRegistry.cancelTurn(sessionId, turnId);
+        askService.cancelTurn(sessionId, turnId);
         invocationsByToolCall.values().stream()
                 .filter(item -> item.sessionId.equals(sessionId) && item.turnId.equals(turnId))
                 .forEach(item -> {
@@ -166,6 +170,7 @@ public class ToolApprovalService {
     public void clearSession(String sessionId) {
         runningCommandRegistry.clearSession(sessionId);
         runningNetworkCallRegistry.clearSession(sessionId);
+        invocationsByToolCall.values().stream().filter(item -> item.sessionId.equals(sessionId)).forEach(item -> askService.cancelTurn(sessionId, item.turnId));
         invocationsByToolCall.values().stream()
                 .filter(item -> item.sessionId.equals(sessionId))
                 .forEach(item -> {

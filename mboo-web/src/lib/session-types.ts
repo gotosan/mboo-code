@@ -16,6 +16,9 @@ export type AssistantMessageState = "streaming" | "complete" | "cancel" | "error
 
 export type ToolCallStatus = "waiting_approval" | "submitting" | "started" | "completed" | "failed";
 
+export type AskAnswerOption = { text: string; description?: string | null; recommended?: boolean };
+export type AskQuestion = { question: string; answers: AskAnswerOption[] };
+
 export type ToolApprovalDecision = "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY";
 
 export type ToolPermissionType = "NONE" | "TOOL" | "READ" | "WRITE" | "COMMAND" | "NETWORK";
@@ -167,6 +170,7 @@ export type ToolCallEndedPayload = {
   errorCode?: string;
   errorMessage?: string;
   durationMs?: number;
+  askAnswers?: string[] | null;
 };
 
 export type ToolResultDetail = {

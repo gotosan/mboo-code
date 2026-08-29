@@ -12,7 +12,11 @@ const desktopBridge: DesktopBridge = {
   getVersion: () => ipcRenderer.invoke("mboo:app:version"),
   restartApp: (): Promise<boolean> => ipcRenderer.invoke("mboo:app:restart"),
   getRuntimeState: (): Promise<DesktopRuntimeState> => ipcRenderer.invoke("mboo:runtime:get"),
-  getDiagnostics: (): Promise<DesktopDiagnostics> => ipcRenderer.invoke("mboo:diagnostics:get")
+  getDiagnostics: (): Promise<DesktopDiagnostics> => ipcRenderer.invoke("mboo:diagnostics:get"),
+  notify: (title: string, body: string, sessionId?: string): Promise<boolean> => ipcRenderer.invoke("mboo:notify", title, body, sessionId)
 };
 
 contextBridge.exposeInMainWorld("mbooDesktop", desktopBridge);
+ipcRenderer.on("mboo:notify-session", (_event, sessionId: unknown) => {
+  if (typeof sessionId === "string") window.dispatchEvent(new CustomEvent("mboo:notify-session", { detail: sessionId }));
+});

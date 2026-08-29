@@ -8,6 +8,8 @@ import lombok.Data;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * 工具调用结束事件主体。
  */
@@ -49,6 +51,9 @@ public class ToolCallEndedPayload implements SessionEventPayload {
 
     @Schema(description = "工具调用耗时，单位毫秒")
     private Long durationMs;
+
+    @Schema(description = "ask 按问题页顺序保存的最终答案")
+    private List<String> askAnswers;
 
     @AllArgsConstructor
     @Getter

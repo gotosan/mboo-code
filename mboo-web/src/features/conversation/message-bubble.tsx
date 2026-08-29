@@ -21,6 +21,7 @@ export const MessageBubble = memo(function MessageBubble({
   onRegenerate,
   onContinue,
   toErrorMessage,
+  onStop,
 }: {
   message: ChatMessage;
   sessionId: string;
@@ -28,6 +29,7 @@ export const MessageBubble = memo(function MessageBubble({
   onRegenerate?: () => void;
   onContinue?: () => void;
   toErrorMessage: (error: unknown) => string;
+  onStop?: () => void;
 }) {
   const [hasArrivalImpact, setHasArrivalImpact] = useState(false);
   const previousMessageStateRef = useRef<typeof message.state>(undefined);
@@ -80,6 +82,7 @@ export const MessageBubble = memo(function MessageBubble({
                       loadToolResult={loadToolResult}
                       isRunning={message.state === "streaming" && isToolGroupRunning(segment.toolCalls)}
                       toErrorMessage={toErrorMessage}
+                      onCancel={onStop}
                     />
                   </div>
                 );
@@ -96,6 +99,7 @@ export const MessageBubble = memo(function MessageBubble({
                     loadToolResult={loadToolResult}
                     isRunning={message.state === "streaming" && isToolGroupRunning(message.toolCalls)}
                     toErrorMessage={toErrorMessage}
+                    onCancel={onStop}
                   />
                 ) : null}
               </>

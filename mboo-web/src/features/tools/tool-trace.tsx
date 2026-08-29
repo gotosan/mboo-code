@@ -11,6 +11,7 @@ import {
 } from "@/features/tools/tool-formatters";
 import type { ToolResultDetail } from "@/lib/session-types";
 import styles from "./tool-trace.module.css";
+import { AskCard } from "./ask-card";
 
 export const PENDING_SESSION_KEY = "__pending__";
 
@@ -20,6 +21,7 @@ type ToolTraceProps = {
   sessionId: string;
   loadToolResult: ToolResultLoader;
   toErrorMessage: (error: unknown) => string;
+  onCancel?: () => void;
 };
 
 export const ToolTrace = memo(function ToolTrace({
@@ -28,7 +30,10 @@ export const ToolTrace = memo(function ToolTrace({
   sessionId,
   loadToolResult,
   toErrorMessage,
+  onCancel,
 }: ToolTraceProps) {
+  const askTool = toolCalls.find((tool) => tool.toolName === "ask");
+  if (askTool) return <AskCard toolCall={askTool} sessionId={sessionId} onCancel={onCancel ?? (() => undefined)} />;
   const [open, setOpen] = useState(false);
   const hasPendingApproval = toolCalls.some(
     (tool) => tool.status === "waiting_approval" || tool.status === "submitting",

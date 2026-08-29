@@ -11,6 +11,7 @@ import com.yu.mboocode.llm.LLMUtil;
 import com.yu.mboocode.llm.context.ContextManagementService;
 import cn.hutool.core.util.StrUtil;
 import com.yu.mboocode.agent.dto.ChatReq;
+import com.yu.mboocode.agent.dto.AskAnswerReq;
 import com.yu.mboocode.agent.dto.SessionPermissionModeReq;
 import com.yu.mboocode.agent.dto.SessionUpdateReq;
 import com.yu.mboocode.agent.model.SessionEvent;
@@ -21,6 +22,7 @@ import com.yu.mboocode.agent.service.ModelOptionService;
 import com.yu.mboocode.agent.tool.ToolApprovalService;
 import com.yu.mboocode.agent.service.TurnService;
 import com.yu.mboocode.agent.service.ToolResultStore;
+import com.yu.mboocode.agent.tool.ask.AskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
@@ -64,6 +66,8 @@ public class SessionController {
     private ToolApprovalService toolApprovalService;
     @Resource
     private ToolResultStore toolResultStore;
+    @Resource
+    private AskService askService;
     @Resource
     private ModelOptionService modelOptionService;
     @Resource
@@ -153,6 +157,13 @@ public class SessionController {
     @PostMapping("/{sessionId}/approvals/{approvalId}")
     public R<Void> resolveToolApproval(@PathVariable String sessionId, @PathVariable String approvalId, @Valid @RequestBody ToolApprovalReq req) {
         toolApprovalService.resolve(sessionId, approvalId, req.decision());
+        return R.ok();
+    }
+
+    @Operation(summary = "提交 ask 问题页答案")
+    @PostMapping("/{sessionId}/asks/{askId}/answers")
+    public R<Void> submitAskAnswer(@PathVariable String sessionId, @PathVariable String askId, @Valid @RequestBody AskAnswerReq req) {
+        askService.submit(sessionId, askId, req.pageIndex(), req.action(), req.text(), req.actionId());
         return R.ok();
     }
 

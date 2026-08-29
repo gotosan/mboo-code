@@ -24,6 +24,7 @@ export interface DesktopBridge {
   restartApp(): Promise<boolean>;
   getRuntimeState(): Promise<DesktopRuntimeState>;
   getDiagnostics(): Promise<DesktopDiagnostics>;
+  notify(title: string, body: string, sessionId?: string): Promise<boolean>;
 }
 
 export function isRevealTarget(value: unknown): value is RevealTarget {

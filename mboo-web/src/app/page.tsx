@@ -40,7 +40,12 @@ import type {
   ToolCallStatus,
   ToolPermissionType,
   ToolResultDetail,
+  AskQuestion,
 } from "@/lib/session-types";
+
+declare global {
+  interface Window { mbooDesktop?: { notify(title: string, body: string, sessionId?: string): Promise<boolean> } }
+}
 
 const STORAGE_KEYS = {
   sessionId: "mboo-web.sessionId",
@@ -63,6 +68,7 @@ const TOOL_LABELS: Record<string, string> = {
   web_fetch: "网页抓取",
   activate_skill: "激活 Skill",
   read_skill_resource: "读取 Skill 资源",
+  ask: "提问",
 };
 
 const FILE_TOOL_NAMES = new Set([
@@ -103,6 +109,8 @@ type ToolCallView = {
   grantOrigin?: string;
   approvalIndex?: number;
   approvalCount?: number;
+  askQuestions?: AskQuestion[];
+  askAnswers?: string[];
 };
 
 // 助手消息按事件序交错：text / tool，避免工具永远沉底
@@ -280,10 +288,20 @@ export default function Home() {
   const modelNameRef = useRef("");
   const contextUsageBySessionRef = useRef<Record<string, ContextUsageSnapshot | null>>({});
   const compressionAbortControllerRef = useRef<AbortController | null>(null);
+  const notifiedAskRef = useRef<Set<string>>(new Set());
+  const notifiedTurnRef = useRef<Set<string>>(new Set());
   const isRunning = runtimeStatus === "running" || (!sessionId && connectionState === "running");
   const queryClient = useQueryClient();
   const highlightedSessionId = openingSessionId || sessionId;
   const isSessionSwitching = Boolean(openingSessionId) || isLoadingHistory;
+
+  const notifyDesktopOrWeb = useCallback((title: string, body: string, targetSessionId: string) => {
+    if (typeof document !== "undefined" && document.hasFocus() && document.visibilityState === "visible" && targetSessionId === currentSessionIdRef.current) return;
+    const desktop = typeof window !== "undefined" ? window.mbooDesktop : undefined;
+    if (desktop) { void desktop.notify(title, body, targetSessionId); return; }
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    try { new Notification(title, { body }); } catch { /* 浏览器通知不可用时静默 */ }
+  }, []);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -1118,6 +1136,15 @@ export default function Home() {
       if (isToolCallEvent(event)) {
         flushPendingAssistantDeltas();
         upsertToolCall(targetKey, event);
+        if (event.type === "TOOL_CALL_STARTED" && event.payload.toolName === "ask" && !notifiedAskRef.current.has(event.payload.toolCallId)) {
+          notifiedAskRef.current.add(event.payload.toolCallId);
+          const notificationTitle = sessionTitleForNotification(targetKey, sessionsRef.current, archivedSessionsRef.current);
+          if (typeof window !== "undefined" && !window.mbooDesktop && typeof Notification !== "undefined" && Notification.permission === "default") {
+            void Notification.requestPermission().then((permission) => { if (permission === "granted") notifyDesktopOrWeb("有问题需要回答", notificationTitle, targetKey); }).catch(() => undefined);
+          } else {
+            notifyDesktopOrWeb("有问题需要回答", notificationTitle, targetKey);
+          }
+        }
         return;
       }
 
@@ -1159,6 +1186,10 @@ export default function Home() {
         });
         // 会话终态属于流本身：即使用户已切走，也必须结束对应 runtime。
         if (event.payload.state === "complete") {
+          if (event.turnId && !notifiedTurnRef.current.has(event.turnId)) {
+            notifiedTurnRef.current.add(event.turnId);
+            notifyDesktopOrWeb("任务已完成", sessionTitleForNotification(targetKey, sessionsRef.current, archivedSessionsRef.current), targetKey);
+          }
           sessionRuntimeStore.getState().setStatus(targetKey, "completed");
         } else if (event.payload.state === "cancel") {
           sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
@@ -1191,6 +1222,12 @@ export default function Home() {
 
       if (event.type === "CANCELLED") {
         markStreamingMessagesCancelled(targetKey, event.turnId);
+        commitSessionMessages(targetKey, (current) => current.map((message) => {
+          if (message.turnId !== event.turnId) return message;
+          const parts = (message.parts ?? toolCallsToParts(message.toolCalls)).map((part) => part.type === "tool" && part.toolCall.toolName === "ask" && part.toolCall.status === "started"
+            ? { ...part, toolCall: { ...part.toolCall, status: "failed" as const, errorMessage: "提问已取消" } } : part);
+          return withAssistantDerivedFields({ ...message, parts });
+        }));
         sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
         if (isViewingSessionKey(targetKey)) {
           setConnectionState("idle");
@@ -1222,6 +1259,7 @@ export default function Home() {
       markStreamingMessagesCancelled,
       handleCompressionEvent,
       rememberContextUsage,
+      notifyDesktopOrWeb,
       rememberSessionPreview,
       upsertMessage,
       upsertToolCall,
@@ -1644,6 +1682,15 @@ export default function Home() {
     },
     [applyModelName, loadSessionEvents, openingSessionId, preferredModelName, viewingSessionStatus],
   );
+
+  useEffect(() => {
+    const onNotificationSession = (event: Event) => {
+      const target = (event as CustomEvent).detail;
+      if (typeof target === "string" && target) void openSession(target, "active");
+    };
+    window.addEventListener("mboo:notify-session", onNotificationSession);
+    return () => window.removeEventListener("mboo:notify-session", onNotificationSession);
+  }, [openSession]);
 
   const beginRenameSession = useCallback((session: SessionInfo) => {
     setEditingSessionId(session.id);
@@ -2977,6 +3024,9 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
   const { payload } = event;
   const toolName = payload.toolName || "unknown_tool";
   const parsed = parseToolArguments(toolName, payload.arguments);
+  const askQuestions = toolName === "ask" && Array.isArray((parsed.parsedArguments as { questions?: unknown } | undefined)?.questions)
+    ? ((parsed.parsedArguments as { questions: AskQuestion[] }).questions)
+    : undefined;
 
   if (event.type === "TOOL_APPROVAL_REQUIRED") {
     return {
@@ -2989,6 +3039,7 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
       pathText: parsed.pathText,
       errorMessage: "",
       createdAt: event.createdAt,
+      askQuestions,
       approvalId: event.payload.approvalId,
       approvalTitle: event.payload.title,
       approvalDescription: event.payload.description,
@@ -3016,11 +3067,17 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
     errorMessage: started ? "" : event.payload.errorMessage || "",
     durationMs: started ? undefined : event.payload.durationMs,
     createdAt: event.createdAt,
+    askQuestions,
+    askAnswers: !started ? event.payload.askAnswers || undefined : undefined,
   };
 }
 
 function getToolLabel(toolName: string) {
   return TOOL_LABELS[toolName] ?? toolName;
+}
+
+function sessionTitleForNotification(sessionId: string, sessions: SessionInfo[], archived: SessionInfo[]) {
+  return sessions.find((item) => item.id === sessionId)?.title || archived.find((item) => item.id === sessionId)?.title || "Mboo Code";
 }
 
 function sessionAllowLabel(permissionType?: ToolPermissionType) {
@@ -3219,11 +3276,11 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
   // 历史回放中尚未结束的授权卡片已失效，禁止再次点击
   return messages.map((message) => {
     const invalidate = (toolCall: ToolCallView): ToolCallView =>
-      toolCall.status === "waiting_approval" || toolCall.status === "submitting"
+      toolCall.status === "waiting_approval" || toolCall.status === "submitting" || (toolCall.toolName === "ask" && toolCall.status === "started")
         ? {
             ...toolCall,
             status: "failed" as const,
-            errorMessage: toolCall.errorMessage || "授权请求已失效",
+            errorMessage: toolCall.errorMessage || (toolCall.toolName === "ask" ? "提问请求已失效" : "授权请求已失效"),
             approvalId: undefined,
           }
         : toolCall;

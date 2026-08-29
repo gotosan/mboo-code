@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, Notification } from "electron";
 import type { OpenDialogOptions } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +52,19 @@ function registerBridgeHandlers(): void {
   });
   ipcMain.handle("mboo:runtime:get", () => runtimeState);
   ipcMain.handle("mboo:diagnostics:get", () => diagnostics);
+  ipcMain.handle("mboo:notify", (_event, title: unknown, body: unknown, sessionId: unknown) => {
+    if (typeof title !== "string" || typeof body !== "string") return false;
+    const notification = new Notification({ title: title.slice(0, 120), body: body.slice(0, 240) });
+    notification.on("click", () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      if (typeof sessionId === "string" && sessionId) mainWindow.webContents.send("mboo:notify-session", sessionId);
+    });
+    notification.show();
+    return true;
+  });
 }
 
 function getDesktopAppDataDirectory(): string {

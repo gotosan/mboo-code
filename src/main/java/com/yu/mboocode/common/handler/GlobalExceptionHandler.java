@@ -2,6 +2,7 @@ package com.yu.mboocode.common.handler;
 
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import com.yu.mboocode.common.exception.ServiceException;
+import com.yu.mboocode.agent.tool.ask.AskService;
 import com.yu.mboocode.common.dto.R;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
@@ -64,6 +65,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ServiceException.class)
     public ResponseEntity<R<Void>> serviceExceptionHandler(Exception e) {
         return failedResponse(HttpStatus.BAD_REQUEST, R.failed(e.getMessage()));
+    }
+
+    @ExceptionHandler(AskService.AskRequestException.class)
+    public ResponseEntity<R<Void>> askRequestExceptionHandler(AskService.AskRequestException e) {
+        HttpStatus status = e.status() == 410 ? HttpStatus.GONE : HttpStatus.CONFLICT;
+        return failedResponse(status, R.failed(e.getMessage()));
     }
 
     @ExceptionHandler(MissingServletRequestParameterException.class)
