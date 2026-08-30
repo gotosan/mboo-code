@@ -2321,7 +2321,6 @@ export default function Home() {
       if (pending) return pending;
       const running = reversed.find((tool) => tool.status === "started");
       if (running) return running;
-      return tools[tools.length - 1];
     }
     return null;
   }, [messages]);
