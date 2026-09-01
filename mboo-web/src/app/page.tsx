@@ -22,7 +22,7 @@ import sidebarStyles from "@/features/sessions/session-sidebar.module.css";
 import type { SessionConfirmAction, SessionInfo as FeatureSessionInfo, SessionListTab as FeatureSessionListTab, WorkspaceInfo as FeatureWorkspaceInfo } from "@/features/sessions/session-types";
 import { ToolApprovalCard } from "@/features/tools/tool-approval-card";
 import { readSessionEventStream } from "@/lib/session-stream";
-import { getSessionRuntime, sessionRuntimeStore, useSessionRuntimeStore } from "@/lib/session-runtime-store";
+import { getSessionRuntime, sessionRuntimeStore, useSessionRuntimeStore, type SessionRuntime } from "@/lib/session-runtime-store";
 import { typewriterStore } from "@/features/conversation/typewriter-store";
 import { selectWorkspacePath, type DesktopWorkspaceBridge } from "@/lib/workspace-selection";
 import { getModelSettings } from "@/lib/model-settings-api";
@@ -86,6 +86,18 @@ type MessageRole = "user" | "assistant" | "system";
 type MessageState = AssistantMessageState | "info";
 type ConnectionState = "idle" | "running" | "error";
 
+type SessionStreamOwner = {
+  sessionKey: string;
+  controller: AbortController;
+  streamKind: "chat" | "compression";
+  pendingAutoTitle?: string;
+};
+
+type AskDraftProgress = {
+  answers: string[];
+  pageIndex: number;
+};
+
 type ToolCallView = {
   id: string;
   turnId?: string | null;
@@ -111,6 +123,8 @@ type ToolCallView = {
   approvalCount?: number;
   askQuestions?: AskQuestion[];
   askAnswers?: string[];
+  askDraftAnswers?: string[];
+  askDraftPage?: number;
 };
 
 // 助手消息按事件序交错：text / tool，避免工具永远沉底
@@ -201,18 +215,16 @@ export default function Home() {
   const [contextUsage, setContextUsage] = useState<ContextUsageSnapshot | null>(null);
   const [compressionState, setCompressionState] = useState<ContextCompressionState | null>(null);
   const [compressionMessage, setCompressionMessage] = useState("");
-  const [isCompressing, setIsCompressing] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("idle");
   const runtimeKey = sessionId || PENDING_SESSION_KEY;
-  const runtimeStatus = useSessionRuntimeStore((state) =>
-    state.sessions[runtimeKey]?.status ?? "idle",
-  );
+  const runtime = useSessionRuntimeStore((state) => state.sessions[runtimeKey]);
+  const runtimeStatus = runtime?.status ?? "idle";
+  const activeTurnId = runtime?.turnId ?? null;
   const [errorMessage, setErrorMessage] = useState("");
   // 列表加载失败单独成态：避免与重命名/归档提示混用，并支持就近重试
   const [sessionListError, setSessionListError] = useState("");
-  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   // 正在打开的目标会话：拉取完成前不切换主线程，只做侧栏高亮与轻量进度
@@ -256,21 +268,16 @@ export default function Home() {
   const [lastFailedInput, setLastFailedInput] = useState("");
   // 会话列表摘要：本地缓存首条用户句，缓解多条「新会话」同质
   const [sessionPreviews, setSessionPreviews] = useState<Record<string, string>>({});
-  // 新建会话首条消息：等拿到 sessionId 后再 PATCH 默认标题
-  const pendingAutoTitleRef = useRef<string | null>(null);
   // 每个会话最多自动标题一次，避免后续消息改写
   const autoTitleAttemptedRef = useRef<Set<string>>(new Set());
 
-  const abortControllerRef = useRef<AbortController | null>(null);
   const currentSessionIdRef = useRef("");
   const shouldLoadSessionRef = useRef(false);
-  const connectionStateRef = useRef<ConnectionState>("idle");
   const workspaceSelectionVersionRef = useRef(0);
   // 按会话缓存消息，避免串会话 / 切换后丢失流式结果
   const messagesBySessionRef = useRef<Record<string, ChatMessage[]>>({});
-  // 当前 SSE 归属的会话键（新建时先为 pending）
-  const streamSessionKeyRef = useRef<string>(PENDING_SESSION_KEY);
   const pendingLocalUserIdBySessionRef = useRef<Record<string, string | null>>({});
+  const streamOwnersRef = useRef(new WeakMap<AbortController, SessionStreamOwner>());
   // 会话列表最新快照：新增会话 diff 插入时避免闭包拿到旧 list
   const sessionsRef = useRef<SessionInfo[]>([]);
   const archivedSessionsRef = useRef<SessionInfo[]>([]);
@@ -287,10 +294,10 @@ export default function Home() {
   const modelOptionsRequestRef = useRef(0);
   const modelNameRef = useRef("");
   const contextUsageBySessionRef = useRef<Record<string, ContextUsageSnapshot | null>>({});
-  const compressionAbortControllerRef = useRef<AbortController | null>(null);
   const notifiedAskRef = useRef<Set<string>>(new Set());
   const notifiedTurnRef = useRef<Set<string>>(new Set());
-  const isRunning = runtimeStatus === "running" || (!sessionId && connectionState === "running");
+  const isRunning = runtimeStatus === "running" && runtime?.streamKind === "chat";
+  const isCompressing = runtimeStatus === "running" && runtime?.streamKind === "compression";
   const queryClient = useQueryClient();
   const highlightedSessionId = openingSessionId || sessionId;
   const isSessionSwitching = Boolean(openingSessionId) || isLoadingHistory;
@@ -345,10 +352,6 @@ export default function Home() {
     currentSessionIdRef.current = sessionId;
     saveLocalValue(STORAGE_KEYS.sessionId, sessionId);
   }, [sessionId]);
-
-  useEffect(() => {
-    connectionStateRef.current = connectionState;
-  }, [connectionState]);
 
   /**
    * 统一模型列表的初始化与刷新入口，确保设置保存后沿用当前选择策略更新输入器，而不是维护两套加载逻辑。
@@ -659,24 +662,9 @@ export default function Home() {
     [],
   );
 
-  // 新会话：流里回写 id 后补标题
-  useEffect(() => {
-    const pending = pendingAutoTitleRef.current;
-    if (!sessionId || !pending) {
-      return;
-    }
-    pendingAutoTitleRef.current = null;
-    void maybeAutoTitleSession(sessionId, pending, "新会话");
-  }, [maybeAutoTitleSession, sessionId]);
-
   const isViewingSessionKey = useCallback((sessionKey: string) => {
     const current = currentSessionIdRef.current;
-    if (!current) {
-      return (
-        sessionKey === PENDING_SESSION_KEY ||
-        sessionKey === streamSessionKeyRef.current
-      );
-    }
+    if (!current) return sessionKey === PENDING_SESSION_KEY;
     return sessionKey === current;
   }, []);
 
@@ -695,76 +683,69 @@ export default function Home() {
     [isViewingSessionKey],
   );
 
-  const bindStreamSessionId = useCallback((nextSessionId: string) => {
-    if (!nextSessionId) {
-      return;
+  const moveSessionClientState = useCallback((fromSessionKey: string, toSessionKey: string) => {
+    if (!fromSessionKey || !toSessionKey || fromSessionKey === toSessionKey) return;
+    sessionRuntimeStore.getState().move(fromSessionKey, toSessionKey);
+    typewriterStore.getState().moveSession(fromSessionKey, toSessionKey);
+    const pendingLocalUserId = pendingLocalUserIdBySessionRef.current[fromSessionKey];
+    if (pendingLocalUserId) pendingLocalUserIdBySessionRef.current[toSessionKey] = pendingLocalUserId;
+    delete pendingLocalUserIdBySessionRef.current[fromSessionKey];
+    const sourceMessages = messagesBySessionRef.current[fromSessionKey] ?? [];
+    if (sourceMessages.length > 0) {
+      const existing = messagesBySessionRef.current[toSessionKey] ?? [];
+      messagesBySessionRef.current[toSessionKey] = existing.length ? mergeMessagesById(existing, sourceMessages) : sourceMessages;
+    }
+    delete messagesBySessionRef.current[fromSessionKey];
+    setSessionPreviews((current) => {
+      const preview = current[fromSessionKey];
+      if (!preview) return current;
+      const next = { ...current };
+      delete next[fromSessionKey];
+      next[toSessionKey] = preview;
+      saveSessionPreviewMap(next);
+      return next;
+    });
+  }, []);
+
+  const detachPendingStream = useCallback(() => {
+    const pendingController = getSessionRuntime(PENDING_SESSION_KEY).abortController;
+    const owner = pendingController ? streamOwnersRef.current.get(pendingController) : undefined;
+    if (!owner || owner.sessionKey !== PENDING_SESSION_KEY) return;
+    const detachedSessionKey = `${PENDING_SESSION_KEY}:${crypto.randomUUID()}`;
+    moveSessionClientState(PENDING_SESSION_KEY, detachedSessionKey);
+    owner.sessionKey = detachedSessionKey;
+  }, [moveSessionClientState]);
+
+  const bindStreamSessionId = useCallback((owner: SessionStreamOwner, nextSessionId: string) => {
+    if (!nextSessionId || owner.sessionKey === nextSessionId) return;
+    if (owner.sessionKey !== PENDING_SESSION_KEY && !owner.sessionKey.startsWith(`${PENDING_SESSION_KEY}:`)) return;
+
+    const sourceSessionKey = owner.sessionKey;
+    const sourceRuntime = getSessionRuntime(sourceSessionKey);
+    if (sourceRuntime.abortController !== owner.controller) return;
+    const bindVisibleSession = sourceSessionKey === PENDING_SESSION_KEY && !currentSessionIdRef.current;
+    moveSessionClientState(sourceSessionKey, nextSessionId);
+    owner.sessionKey = nextSessionId;
+    if (owner.pendingAutoTitle) {
+      const pendingAutoTitle = owner.pendingAutoTitle;
+      owner.pendingAutoTitle = undefined;
+      void maybeAutoTitleSession(nextSessionId, pendingAutoTitle, "新会话");
     }
 
-    // 只有“当前视图正在等待的流”才允许把视图绑定到真实会话：
-    // - 正在观看已有会话：其流式事件应归属该会话；
-    // - 新建会话：流回写真实 sessionId 前，streamSessionKeyRef 仍是 PENDING；
-    // 其它后台会话的事件（如正在运行中的旧会话）不得 hijack 视图。
-    const viewingKey = currentSessionIdRef.current;
-    const streamKey = streamSessionKeyRef.current;
-    const belongsToView =
-      (viewingKey && nextSessionId === viewingKey) ||
-      (!viewingKey && streamKey === PENDING_SESSION_KEY);
-    if (!belongsToView) {
-      return;
-    }
-
-    const previousKey = streamSessionKeyRef.current;
-    const isNewSessionBind = previousKey === PENDING_SESSION_KEY;
-    if (isNewSessionBind) {
-      sessionRuntimeStore.getState().move(PENDING_SESSION_KEY, nextSessionId);
-      typewriterStore.getState().moveSession(PENDING_SESSION_KEY, nextSessionId);
-      const pendingLocalUserId = pendingLocalUserIdBySessionRef.current[PENDING_SESSION_KEY];
-      if (pendingLocalUserId) {
-        pendingLocalUserIdBySessionRef.current[nextSessionId] = pendingLocalUserId;
-        delete pendingLocalUserIdBySessionRef.current[PENDING_SESSION_KEY];
-      }
-      const pendingMessages = messagesBySessionRef.current[PENDING_SESSION_KEY] ?? [];
-      if (pendingMessages.length > 0) {
-        const existing = messagesBySessionRef.current[nextSessionId] ?? [];
-        messagesBySessionRef.current[nextSessionId] = existing.length
-          ? mergeMessagesById(existing, pendingMessages)
-          : pendingMessages;
-      }
-      delete messagesBySessionRef.current[PENDING_SESSION_KEY];
-    }
-
-    streamSessionKeyRef.current = nextSessionId;
-
-    if (!currentSessionIdRef.current) {
+    if (bindVisibleSession) {
       currentSessionIdRef.current = nextSessionId;
       setSessionId(nextSessionId);
       setMessages(messagesBySessionRef.current[nextSessionId] ?? []);
     }
 
-    setSessionPreviews((current) => {
-      const pending = current[PENDING_SESSION_KEY];
-      if (!pending) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[PENDING_SESSION_KEY];
-      next[nextSessionId] = pending;
-      saveSessionPreviewMap(next);
-      return next;
-    });
-
-    // 新建会话拿到真实 id：先拉后台最新列表，对比后插入
-    if (isNewSessionBind) {
-      syncNewSessionIntoListRef.current(nextSessionId);
-    }
-  }, []);
+    syncNewSessionIntoListRef.current(nextSessionId);
+  }, [maybeAutoTitleSession, moveSessionClientState]);
 
   const addSystemMessage = useCallback(
     (text: string, state: MessageState = "info", sessionKey?: string) => {
       const targetKey =
         sessionKey ||
         currentSessionIdRef.current ||
-        streamSessionKeyRef.current ||
         PENDING_SESSION_KEY;
       commitSessionMessages(targetKey, (current) => [
         ...current,
@@ -947,6 +928,17 @@ export default function Home() {
     [commitSessionMessages],
   );
 
+  const updateAskDraft = useCallback((sessionKey: string, toolCallId: string, progress: AskDraftProgress) => {
+    commitSessionMessages(sessionKey, (current) => current.map((message) => {
+      const parts = message.parts ?? toolCallsToParts(message.toolCalls);
+      if (!parts.some((part) => part.type === "tool" && part.toolCall.id === toolCallId)) return message;
+      const nextParts = parts.map((part) => part.type === "tool" && part.toolCall.id === toolCallId
+        ? { ...part, toolCall: { ...part.toolCall, askDraftAnswers: [...progress.answers], askDraftPage: progress.pageIndex } }
+        : part);
+      return withAssistantDerivedFields({ ...message, parts: nextParts });
+    }));
+  }, [commitSessionMessages]);
+
   // 对接后端工具权限审批：提交决策并回写工具状态
   const resolveToolApproval = useCallback(
     async (toolCall: ToolCallView, decision: ToolApprovalDecision) => {
@@ -1038,6 +1030,7 @@ export default function Home() {
   const handleCompressionEvent = useCallback((
     sessionKey: string,
     event: Extract<SessionEvent, { type: "CONTEXT_COMPRESSION" }>,
+    owner?: SessionStreamOwner,
   ) => {
     const payload = event.payload;
     if (isViewingSessionKey(sessionKey)) {
@@ -1052,14 +1045,20 @@ export default function Home() {
       turnId: event.turnId,
       createdAt: event.createdAt,
     }));
+    // 自动压缩是聊天流的前置阶段，只有独立主动压缩流才能在这里结束 runtime。
+    if (owner?.streamKind === "compression" && (payload.state === "completed" || payload.state === "skipped")) {
+      sessionRuntimeStore.getState().finish(sessionKey, owner.controller, "completed");
+    } else if (owner?.streamKind === "compression" && payload.state === "failed") {
+      sessionRuntimeStore.getState().finish(sessionKey, owner.controller, "error", payload.errorMessage || "上下文压缩失败");
+    }
   }, [commitSessionMessages, isViewingSessionKey]);
 
   const handleSessionEvent = useCallback(
-    (event: SessionEvent) => {
+    (event: SessionEvent, owner?: SessionStreamOwner) => {
       const eventSessionId = event.sessionId || "";
 
       if (eventSessionId) {
-        bindStreamSessionId(eventSessionId);
+        if (owner) bindStreamSessionId(owner, eventSessionId);
         sessionRuntimeStore.getState().ensure(eventSessionId);
         sessionRuntimeStore.getState().markEvent(eventSessionId, event.createdAt);
         if (event.turnId) {
@@ -1070,13 +1069,10 @@ export default function Home() {
       // 事件始终写入所属会话，而不是只写入“当前正在看的会话”
       const targetKey =
         eventSessionId ||
-        streamSessionKeyRef.current ||
+        owner?.sessionKey ||
         currentSessionIdRef.current ||
         PENDING_SESSION_KEY;
 
-      if (event.turnId && isViewingSessionKey(targetKey)) {
-        setActiveTurnId(event.turnId);
-      }
       if (isViewingSessionKey(targetKey)) {
         sessionRuntimeStore.getState().markRead(targetKey);
       }
@@ -1091,7 +1087,7 @@ export default function Home() {
       }
 
       if (event.type === "CONTEXT_COMPRESSION") {
-        handleCompressionEvent(targetKey, event);
+        handleCompressionEvent(targetKey, event, owner);
         return;
       }
 
@@ -1190,15 +1186,15 @@ export default function Home() {
             notifiedTurnRef.current.add(event.turnId);
             notifyDesktopOrWeb("任务已完成", sessionTitleForNotification(targetKey, sessionsRef.current, archivedSessionsRef.current), targetKey);
           }
-          sessionRuntimeStore.getState().setStatus(targetKey, "completed");
+          if (owner) sessionRuntimeStore.getState().finish(targetKey, owner.controller, "completed");
+          else sessionRuntimeStore.getState().setStatus(targetKey, "completed");
         } else if (event.payload.state === "cancel") {
-          sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
+          if (owner) sessionRuntimeStore.getState().finish(targetKey, owner.controller, "cancelled");
+          else sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
         } else if (event.payload.state === "error") {
-          sessionRuntimeStore.getState().setStatus(
-            targetKey,
-            "error",
-            event.payload.errorMessage || "本轮会话执行失败",
-          );
+          const message = event.payload.errorMessage || "本轮会话执行失败";
+          if (owner) sessionRuntimeStore.getState().finish(targetKey, owner.controller, "error", message);
+          else sessionRuntimeStore.getState().setStatus(targetKey, "error", message);
         }
 
         // 页面级连接状态只描述当前正在查看的会话。
@@ -1207,15 +1203,12 @@ export default function Home() {
         }
         if (event.payload.state === "complete") {
           setConnectionState("idle");
-          setActiveTurnId(null);
         } else if (event.payload.state === "cancel") {
           setConnectionState("idle");
-          setActiveTurnId(null);
         } else if (event.payload.state === "error") {
           const message = event.payload.errorMessage || "本轮会话执行失败";
           setConnectionState("error");
           setErrorMessage(message);
-          setActiveTurnId(null);
         }
         return;
       }
@@ -1228,10 +1221,10 @@ export default function Home() {
             ? { ...part, toolCall: { ...part.toolCall, status: "failed" as const, errorMessage: "提问已取消" } } : part);
           return withAssistantDerivedFields({ ...message, parts });
         }));
-        sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
+        if (owner) sessionRuntimeStore.getState().finish(targetKey, owner.controller, "cancelled");
+        else sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
         if (isViewingSessionKey(targetKey)) {
           setConnectionState("idle");
-          setActiveTurnId(null);
           addSystemMessage("本轮会话已取消", "info", targetKey);
         }
         return;
@@ -1239,11 +1232,11 @@ export default function Home() {
 
       if (event.type === "ERROR") {
         const message = event.payload.errorMessage || "本轮会话执行失败";
-        sessionRuntimeStore.getState().setStatus(targetKey, "error", message);
+        if (owner) sessionRuntimeStore.getState().finish(targetKey, owner.controller, "error", message);
+        else sessionRuntimeStore.getState().setStatus(targetKey, "error", message);
         if (isViewingSessionKey(targetKey)) {
           setConnectionState("error");
           setErrorMessage(message);
-          setActiveTurnId(null);
         }
         addSystemMessage(message, "error", targetKey);
       }
@@ -1267,27 +1260,19 @@ export default function Home() {
   );
 
   const clearCurrentSession = useCallback(() => {
-    pendingAutoTitleRef.current = null;
-    const visibleRuntimeKey = currentSessionIdRef.current || streamSessionKeyRef.current || PENDING_SESSION_KEY;
-    sessionRuntimeStore.getState().stop(visibleRuntimeKey);
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    compressionAbortControllerRef.current?.abort();
-    compressionAbortControllerRef.current = null;
+    const visibleSessionKey = currentSessionIdRef.current || PENDING_SESSION_KEY;
     workspaceSelectionVersionRef.current += 1;
     historyLoadVersionRef.current += 1;
     shouldLoadSessionRef.current = false;
     currentSessionIdRef.current = "";
-    streamSessionKeyRef.current = PENDING_SESSION_KEY;
-    pendingLocalUserIdBySessionRef.current = {};
-    delete messagesBySessionRef.current[PENDING_SESSION_KEY];
+    delete pendingLocalUserIdBySessionRef.current[visibleSessionKey];
+    if (visibleSessionKey === PENDING_SESSION_KEY) delete messagesBySessionRef.current[PENDING_SESSION_KEY];
     setMessages([]);
     setInput("");
     setSessionId("");
     setOpeningSessionId(null);
     setIsLoadingHistory(false);
     setErrorMessage("");
-    setActiveTurnId(null);
     setEditingSessionId(null);
     setTitleDraft("");
     setViewingSessionStatus(null);
@@ -1295,7 +1280,6 @@ export default function Home() {
     setContextUsage(null);
     setCompressionState(null);
     setCompressionMessage("");
-    setIsCompressing(false);
     setPendingWorkspacePath("");
     setIsSelectingWorkspace(false);
     setConnectionState("idle");
@@ -1520,8 +1504,9 @@ export default function Home() {
         }
       }
 
-      const streamingThisSession = getSessionRuntime(nextSessionId).status === "running";
-      const historyMessages = reduceSessionEventsToMessages(events ?? []);
+      const sessionRuntime = getSessionRuntime(nextSessionId);
+      const streamingThisSession = sessionRuntime.status === "running";
+      const historyMessages = reconcileHistoricalInteractiveState(reduceSessionEventsToMessages(events ?? []), sessionRuntime);
       const historyUsage = findLastContextUsage(events ?? []);
       contextUsageBySessionRef.current[nextSessionId] = historyUsage;
       setContextUsage(historyUsage);
@@ -1536,7 +1521,6 @@ export default function Home() {
       // 一次提交视图状态：避免“清空 → 加载态 → 内容”多次重置消息滚动槽。
       currentSessionIdRef.current = nextSessionId;
       if (!streamingThisSession) {
-        streamSessionKeyRef.current = nextSessionId;
         messagesBySessionRef.current[nextSessionId] = historyMessages;
         setMessages(historyMessages);
       } else if (!quiet) {
@@ -1556,18 +1540,9 @@ export default function Home() {
       // quiet 后台对齐只更新消息/元数据，不打断输入区
       if (!quiet) {
         setInput("");
-        setErrorMessage("");
+        setErrorMessage(sessionRuntime.status === "error" ? sessionRuntime.errorMessage : "");
         setEditingSessionId(null);
-        setConnectionState((current) =>
-          getSessionRuntime(nextSessionId).status === "running"
-            ? "running"
-            : current === "running"
-              ? current
-              : "idle",
-        );
-        if (getSessionRuntime(nextSessionId).status !== "running") {
-          setActiveTurnId(null);
-        }
+        setConnectionState(sessionRuntime.status === "running" ? "running" : sessionRuntime.status === "error" ? "error" : "idle");
       }
     } catch (error) {
       if (loadVersion !== historyLoadVersionRef.current) {
@@ -1629,6 +1604,7 @@ export default function Home() {
         return;
       }
 
+      detachPendingStream();
       shouldLoadSessionRef.current = false;
       workspaceSelectionVersionRef.current += 1;
       setPendingWorkspacePath("");
@@ -1653,6 +1629,9 @@ export default function Home() {
         setOpeningSessionId(null);
         setIsLoadingHistory(false);
         setInput("");
+        setErrorMessage("");
+        setConnectionState("running");
+        setContextUsage(contextUsageBySessionRef.current[nextSessionId] ?? null);
         return;
       }
 
@@ -1661,7 +1640,6 @@ export default function Home() {
         // 本地已有数据：一次提交后静默对齐，不先卸主线程
         historyLoadVersionRef.current += 1;
         currentSessionIdRef.current = nextSessionId;
-        streamSessionKeyRef.current = nextSessionId;
         setSessionId(nextSessionId);
         setMessages(cached);
         applyModelName(preferredModelName(cached));
@@ -1671,7 +1649,9 @@ export default function Home() {
         setOpeningSessionId(null);
         setIsLoadingHistory(false);
         setInput("");
-        setErrorMessage("");
+        const cachedRuntime = getSessionRuntime(nextSessionId);
+        setErrorMessage(cachedRuntime.status === "error" ? cachedRuntime.errorMessage : "");
+        setConnectionState(cachedRuntime.status === "error" ? "error" : "idle");
         await loadSessionEvents(nextSessionId, { quiet: true, status });
         return;
       }
@@ -1680,7 +1660,7 @@ export default function Home() {
       setOpeningSessionId(nextSessionId);
       await loadSessionEvents(nextSessionId, { quiet: false, status });
     },
-    [applyModelName, loadSessionEvents, openingSessionId, preferredModelName, viewingSessionStatus],
+    [applyModelName, detachPendingStream, loadSessionEvents, openingSessionId, preferredModelName, viewingSessionStatus],
   );
 
   useEffect(() => {
@@ -1906,11 +1886,12 @@ export default function Home() {
 
       const controller = new AbortController();
       const targetRuntimeKey = sessionId || PENDING_SESSION_KEY;
-      sessionRuntimeStore.getState().start(targetRuntimeKey, controller);
+      const streamOwner: SessionStreamOwner = { sessionKey: targetRuntimeKey, controller, streamKind: "chat", pendingAutoTitle: sessionId ? undefined : userMessage };
+      streamOwnersRef.current.set(controller, streamOwner);
+      sessionRuntimeStore.getState().start(targetRuntimeKey, controller, "chat");
       lastSentModelRef.current = selectedModelName;
       saveLocalValue(STORAGE_KEYS.modelName, selectedModelName);
       applyModelName(selectedModelName);
-      abortControllerRef.current = controller;
       setConnectionState("running");
       setErrorMessage("");
       setLastFailedInput("");
@@ -1927,8 +1908,7 @@ export default function Home() {
       } catch {
         // 忽略本地存储失败，不影响发送
       }
-      const streamKey = sessionId || PENDING_SESSION_KEY;
-      streamSessionKeyRef.current = streamKey;
+      const streamKey = targetRuntimeKey;
       // 列表扫视：有 session 直接记；新建会话先挂 pending，等事件回写 id
       if (sessionId) {
         rememberSessionPreview(sessionId, userMessage);
@@ -1937,7 +1917,6 @@ export default function Home() {
           archivedSessions.find((session) => session.id === sessionId)?.title;
         void maybeAutoTitleSession(sessionId, userMessage, existingTitle);
       } else {
-        pendingAutoTitleRef.current = userMessage;
         rememberSessionPreview(PENDING_SESSION_KEY, userMessage);
       }
 
@@ -1985,7 +1964,7 @@ export default function Home() {
             if (controller.signal.aborted) {
               return;
             }
-            handleSessionEvent(sessionEvent);
+            handleSessionEvent(sessionEvent, streamOwner);
           },
           {
             // 同一 TCP 分片内多条 DELTA 同步处理时 React 会批成一次渲染；按帧让出以保留打字机
@@ -1999,25 +1978,19 @@ export default function Home() {
         }
 
         const message = toErrorMessage(error);
-        sessionRuntimeStore.getState().setStatus(targetRuntimeKey, "error", message);
-        setConnectionState("error");
-        setErrorMessage(message);
-        setLastFailedInput(userMessage);
-        setInput((current) => current || userMessage);
-        addSystemMessage(message, "error");
+        sessionRuntimeStore.getState().finish(streamOwner.sessionKey, controller, "error", message);
+        if (isViewingSessionKey(streamOwner.sessionKey)) {
+          setConnectionState("error");
+          setErrorMessage(message);
+          setLastFailedInput(userMessage);
+          setInput((current) => current || userMessage);
+        }
+        addSystemMessage(message, "error", streamOwner.sessionKey);
       } finally {
         void refreshSessions();
-        const runtime = getSessionRuntime(targetRuntimeKey);
-        if (runtime.abortController === controller) {
-          sessionRuntimeStore.getState().setStatus(targetRuntimeKey, "idle");
-        }
-        if (abortControllerRef.current === controller) {
-          abortControllerRef.current = null;
-          setActiveTurnId(null);
-          setConnectionState((current) =>
-            current === "running" ? "idle" : current,
-          );
-        }
+        sessionRuntimeStore.getState().finish(streamOwner.sessionKey, controller);
+        streamOwnersRef.current.delete(controller);
+        if (isViewingSessionKey(streamOwner.sessionKey) && getSessionRuntime(streamOwner.sessionKey).status !== "error") setConnectionState("idle");
       }
     },
     [
@@ -2031,6 +2004,7 @@ export default function Home() {
       isCompressing,
       isRunning,
       isSelectingWorkspace,
+      isViewingSessionKey,
       maybeAutoTitleSession,
       modelName,
       pendingWorkspacePath,
@@ -2049,8 +2023,9 @@ export default function Home() {
       return;
     }
     const controller = new AbortController();
-    compressionAbortControllerRef.current = controller;
-    setIsCompressing(true);
+    const streamOwner: SessionStreamOwner = { sessionKey: targetSessionId, controller, streamKind: "compression" };
+    streamOwnersRef.current.set(controller, streamOwner);
+    sessionRuntimeStore.getState().start(targetSessionId, controller, "compression");
     setCompressionMessage("正在请求上下文压缩…");
     try {
       const response = await fetch(`/api/session/${encodeURIComponent(targetSessionId)}/context/compress`, {
@@ -2062,49 +2037,42 @@ export default function Home() {
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
-      await readSessionEventStream(response, handleSessionEvent, { signal: controller.signal });
+      await readSessionEventStream(response, (sessionEvent) => handleSessionEvent(sessionEvent, streamOwner), { signal: controller.signal });
     } catch (error) {
       if (controller.signal.aborted) {
-        if (currentSessionIdRef.current === targetSessionId) {
-          setCompressionState("failed");
-          setCompressionMessage("上下文压缩已取消");
-        }
-        addSystemMessage("上下文压缩已取消", "info", targetSessionId);
+        return;
       } else {
         const message = toErrorMessage(error);
-        setCompressionState("failed");
-        setCompressionMessage(message);
+        sessionRuntimeStore.getState().finish(targetSessionId, controller, "error", message);
+        if (isViewingSessionKey(targetSessionId)) {
+          setCompressionState("failed");
+          setCompressionMessage(message);
+        }
         addSystemMessage(`上下文压缩失败：${message}`, "error", targetSessionId);
       }
     } finally {
-      if (compressionAbortControllerRef.current === controller) {
-        compressionAbortControllerRef.current = null;
-      }
-      setIsCompressing(false);
+      sessionRuntimeStore.getState().finish(targetSessionId, controller);
+      streamOwnersRef.current.delete(controller);
     }
-  }, [addSystemMessage, handleSessionEvent, isCompressing, isRunning, modelName, viewingSessionStatus]);
+  }, [addSystemMessage, handleSessionEvent, isCompressing, isRunning, isViewingSessionKey, modelName, viewingSessionStatus]);
 
   const stopCurrentRun = useCallback(() => {
-    if (!activeTurnId && !abortControllerRef.current && !compressionAbortControllerRef.current) return;
-    const currentRuntimeKey = currentSessionIdRef.current || streamSessionKeyRef.current || PENDING_SESSION_KEY;
+    const currentRuntimeKey = currentSessionIdRef.current || PENDING_SESSION_KEY;
+    const currentRuntime = getSessionRuntime(currentRuntimeKey);
+    if (currentRuntime.status !== "running" || !currentRuntime.abortController) return;
+    const cancelledTurnId = currentRuntime.turnId;
+    const cancelledStreamKind = currentRuntime.streamKind;
     sessionRuntimeStore.getState().stop(currentRuntimeKey);
-    if (compressionAbortControllerRef.current) {
-      compressionAbortControllerRef.current.abort();
-      compressionAbortControllerRef.current = null;
-      setIsCompressing(false);
+    if (cancelledStreamKind === "compression") {
       setCompressionState("failed");
       setCompressionMessage("上下文压缩已取消");
-      addSystemMessage("上下文压缩已取消", "info", currentSessionIdRef.current);
+      addSystemMessage("上下文压缩已取消", "info", currentRuntimeKey);
       return;
     }
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    const sessionKey =
-      currentSessionIdRef.current || streamSessionKeyRef.current || "";
     handleSessionEvent({
       eventId: createLocalId("cancelled"),
-      sessionId: sessionKey === PENDING_SESSION_KEY ? "" : sessionKey,
-      turnId: activeTurnId,
+      sessionId: currentRuntimeKey === PENDING_SESSION_KEY ? "" : currentRuntimeKey,
+      turnId: cancelledTurnId,
       type: "CANCELLED",
       source: "USER",
       createdAt: new Date().toISOString(),
@@ -2112,23 +2080,21 @@ export default function Home() {
       meta: { local: true },
     });
     void refreshSessions();
-  }, [activeTurnId, addSystemMessage, handleSessionEvent, refreshSessions]);
+  }, [addSystemMessage, handleSessionEvent, refreshSessions]);
 
   const startNewSession = useCallback(() => {
     // 切换至新会话不能中断其他会话的 SSE；仅重置可见编辑上下文。
-    pendingAutoTitleRef.current = null;
+    detachPendingStream();
     workspaceSelectionVersionRef.current += 1;
     historyLoadVersionRef.current += 1;
     shouldLoadSessionRef.current = false;
     currentSessionIdRef.current = "";
-    streamSessionKeyRef.current = PENDING_SESSION_KEY;
     setMessages([]);
     setInput("");
     setSessionId("");
     setOpeningSessionId(null);
     setIsLoadingHistory(false);
     setErrorMessage("");
-    setActiveTurnId(null);
     setEditingSessionId(null);
     setTitleDraft("");
     setViewingSessionStatus(null);
@@ -2144,7 +2110,7 @@ export default function Home() {
     setSessionListTab("active");
     setIsSessionDrawerOpen(false);
     void refreshSessions();
-  }, [applyModelName, preferredModelName, refreshSessions]);
+  }, [applyModelName, detachPendingStream, preferredModelName, refreshSessions]);
 
   // 菜单"在此空间新建会话"：清当前会话并把该工作区 path 设为待用，
   // 用户发首条消息时走 /session/chat 创建并绑定
@@ -2579,6 +2545,7 @@ export default function Home() {
                         : "正在连接"
                   }
                   onStop={stopCurrentRun}
+                  onAskProgress={(toolCallId, progress) => updateAskDraft(sessionId || PENDING_SESSION_KEY, toolCallId, progress)}
                   readToolResult={async (targetSessionId, resultId) => {
                     const response = await fetch(
                       `/api/session/${encodeURIComponent(targetSessionId)}/tool-results/${encodeURIComponent(resultId)}`,
@@ -2966,6 +2933,7 @@ function upsertAssistantToolPart(
   if (existing.type !== "tool") {
     return current;
   }
+  const askTerminal = toolCall.toolName === "ask_user_question" && (toolCall.status === "completed" || toolCall.status === "failed");
   const next = current.slice();
   next[index] = {
     ...existing,
@@ -2982,6 +2950,8 @@ function upsertAssistantToolPart(
       grantOrigin: toolCall.grantOrigin ?? existing.toolCall.grantOrigin,
       approvalIndex: toolCall.approvalIndex ?? existing.toolCall.approvalIndex,
       approvalCount: toolCall.approvalCount ?? existing.toolCall.approvalCount,
+      askDraftAnswers: askTerminal ? undefined : toolCall.askDraftAnswers ?? existing.toolCall.askDraftAnswers,
+      askDraftPage: askTerminal ? undefined : toolCall.askDraftPage ?? existing.toolCall.askDraftPage,
     },
   };
   return next;
@@ -3252,11 +3222,13 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
 
     if (event.type === "CANCELLED") {
       if (event.turnId) {
-        messages = messages.map((message) =>
-          message.role === "assistant" && message.turnId === event.turnId
-            ? { ...message, state: "cancel" }
-            : message,
-        );
+        messages = messages.map((message) => {
+          if (message.role !== "assistant" || message.turnId !== event.turnId) return message;
+          const parts = (message.parts ?? toolCallsToParts(message.toolCalls)).map((part) => part.type === "tool" && part.toolCall.toolName === "ask_user_question" && part.toolCall.status === "started"
+            ? { ...part, toolCall: { ...part.toolCall, status: "failed" as const, errorMessage: "提问已取消" } }
+            : part);
+          return withAssistantDerivedFields({ ...message, state: "cancel", parts });
+        });
       }
       messages = [
         ...messages,
@@ -3271,29 +3243,28 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
       ];
     }
   }
+  return messages;
+}
 
-  // 历史回放中尚未结束的授权卡片已失效，禁止再次点击
+function reconcileHistoricalInteractiveState(messages: ChatMessage[], runtime: SessionRuntime): ChatMessage[] {
+  const liveChatTurn = runtime.status === "running" && runtime.streamKind === "chat";
+  const belongsToLiveTurn = (toolCall: ToolCallView) => liveChatTurn && (!runtime.turnId || !toolCall.turnId || runtime.turnId === toolCall.turnId);
+  const reconcile = (toolCall: ToolCallView): ToolCallView => {
+    const pendingApproval = toolCall.status === "waiting_approval" || toolCall.status === "submitting";
+    const pendingAsk = toolCall.toolName === "ask_user_question" && toolCall.status === "started";
+    if ((!pendingApproval && !pendingAsk) || belongsToLiveTurn(toolCall)) return toolCall;
+    return {
+      ...toolCall,
+      status: "failed",
+      errorMessage: toolCall.errorMessage || (pendingAsk ? "提问请求已失效" : "授权请求已失效"),
+      approvalId: undefined,
+    };
+  };
+
   return messages.map((message) => {
-    const invalidate = (toolCall: ToolCallView): ToolCallView =>
-      toolCall.status === "waiting_approval" || toolCall.status === "submitting" || (toolCall.toolName === "ask_user_question" && toolCall.status === "started")
-        ? {
-            ...toolCall,
-            status: "failed" as const,
-            errorMessage: toolCall.errorMessage || (toolCall.toolName === "ask_user_question" ? "提问请求已失效" : "授权请求已失效"),
-            approvalId: undefined,
-          }
-        : toolCall;
-
-    if (!message.parts?.length && !message.toolCalls?.length) {
-      return message;
-    }
-    const parts = (message.parts ?? toolCallsToParts(message.toolCalls)).map((part) =>
-      part.type === "tool" ? { ...part, toolCall: invalidate(part.toolCall) } : part,
-    );
-    return withAssistantDerivedFields({
-      ...message,
-      parts,
-    });
+    if (!message.parts?.length && !message.toolCalls?.length) return message;
+    const parts = (message.parts ?? toolCallsToParts(message.toolCalls)).map((part) => part.type === "tool" ? { ...part, toolCall: reconcile(part.toolCall) } : part);
+    return withAssistantDerivedFields({ ...message, parts });
   });
 }
 

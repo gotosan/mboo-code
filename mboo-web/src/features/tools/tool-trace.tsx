@@ -3,7 +3,7 @@
 import { ChevronDown, ChevronRight, Copy, LoaderCircle, RefreshCw, Wrench } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import AssistantMarkdown from "@/components/assistant-markdown";
-import type { ToolCallView, ToolResultLoader } from "@/features/agent-run/message-model";
+import type { AskDraftProgress, ToolCallView, ToolResultLoader } from "@/features/agent-run/message-model";
 import {
   getToolLabel,
   shouldShowDiff,
@@ -22,6 +22,7 @@ type ToolTraceProps = {
   loadToolResult: ToolResultLoader;
   toErrorMessage: (error: unknown) => string;
   onCancel?: () => void;
+  onAskProgress: (toolCallId: string, progress: AskDraftProgress) => void;
 };
 
 export const ToolTrace = memo(function ToolTrace({
@@ -31,9 +32,10 @@ export const ToolTrace = memo(function ToolTrace({
   loadToolResult,
   toErrorMessage,
   onCancel,
+  onAskProgress,
 }: ToolTraceProps) {
   const askTool = toolCalls.find((tool) => tool.toolName === "ask_user_question");
-  if (askTool) return <AskCard toolCall={askTool} sessionId={sessionId} onCancel={onCancel ?? (() => undefined)} />;
+  if (askTool) return <AskCard toolCall={askTool} sessionId={sessionId} onCancel={onCancel ?? (() => undefined)} onProgress={onAskProgress} />;
   const [open, setOpen] = useState(false);
   const hasPendingApproval = toolCalls.some(
     (tool) => tool.status === "waiting_approval" || tool.status === "submitting",

@@ -8,10 +8,13 @@ export type SessionRuntimeStatus =
   | "completed"
   | "cancelled";
 
+export type SessionStreamKind = "chat" | "compression";
+
 export type SessionRuntime = {
   status: SessionRuntimeStatus;
   turnId: string | null;
   abortController: AbortController | null;
+  streamKind: SessionStreamKind | null;
   errorMessage: string;
   unreadCount: number;
   lastEventAt: string | null;
@@ -20,7 +23,8 @@ export type SessionRuntime = {
 type SessionRuntimeState = {
   sessions: Record<string, SessionRuntime>;
   ensure: (sessionId: string) => void;
-  start: (sessionId: string, controller: AbortController) => void;
+  start: (sessionId: string, controller: AbortController, streamKind: SessionStreamKind) => void;
+  finish: (sessionId: string, controller: AbortController, status?: SessionRuntimeStatus, errorMessage?: string) => void;
   setTurn: (sessionId: string, turnId: string | null) => void;
   setStatus: (sessionId: string, status: SessionRuntimeStatus, errorMessage?: string) => void;
   markEvent: (sessionId: string, createdAt?: string) => void;
@@ -34,6 +38,7 @@ const EMPTY_RUNTIME: SessionRuntime = {
   status: "idle",
   turnId: null,
   abortController: null,
+  streamKind: null,
   errorMessage: "",
   unreadCount: 0,
   lastEventAt: null,
@@ -57,7 +62,7 @@ function triggerSessionPulse(sessionId: string) {
     });
 }
 
-export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set) => ({
+export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set, get) => ({
   sessions: {},
   ensure: (sessionId) => {
     if (!sessionId) return;
@@ -67,7 +72,7 @@ export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set) => (
         : { sessions: { ...state.sessions, [sessionId]: { ...EMPTY_RUNTIME } } },
     );
   },
-  start: (sessionId, controller) => {
+  start: (sessionId, controller, streamKind) => {
     if (!sessionId) return;
     set((state) => ({
       sessions: {
@@ -77,11 +82,25 @@ export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set) => (
           status: "running",
           turnId: null,
           abortController: controller,
+          streamKind,
           errorMessage: "",
           lastEventAt: new Date().toISOString(),
         },
       },
     }));
+  },
+  finish: (sessionId, controller, status = "idle", errorMessage = "") => {
+    if (!sessionId) return;
+    set((state) => {
+      const current = state.sessions[sessionId];
+      if (!current || current.abortController !== controller) return state;
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...current, status, turnId: null, abortController: null, streamKind: null, errorMessage },
+        },
+      };
+    });
   },
   setTurn: (sessionId, turnId) => {
     if (!sessionId) return;
@@ -106,6 +125,7 @@ export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set) => (
               ? state.sessions[sessionId]?.abortController ?? null
               : null,
           turnId: status === "running" ? state.sessions[sessionId]?.turnId ?? null : null,
+          streamKind: status === "running" ? state.sessions[sessionId]?.streamKind ?? null : null,
         },
       },
     }));
@@ -140,16 +160,19 @@ export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set) => (
   },
   stop: (sessionId) => {
     if (!sessionId) return;
+    const controller = get().sessions[sessionId]?.abortController;
+    if (!controller) return;
     set((state) => {
-      const current = state.sessions[sessionId] ?? EMPTY_RUNTIME;
-      current.abortController?.abort();
+      const current = state.sessions[sessionId];
+      if (!current || current.abortController !== controller) return state;
       return {
         sessions: {
           ...state.sessions,
-          [sessionId]: { ...current, status: "cancelled", abortController: null, turnId: null },
+          [sessionId]: { ...current, status: "cancelled", abortController: null, streamKind: null, turnId: null },
         },
       };
     });
+    controller.abort();
   },
   reset: (sessionId) => {
     if (!sessionId) return;
@@ -162,14 +185,11 @@ export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set) => (
     set((state) => {
       const source = state.sessions[fromSessionId];
       if (!source) return state;
-      return {
-        sessions: {
-          ...state.sessions,
-          [toSessionId]: source,
-          [fromSessionId]: { ...EMPTY_RUNTIME },
-        },
-      };
+      const sessions = { ...state.sessions, [toSessionId]: source };
+      delete sessions[fromSessionId];
+      return { sessions };
     });
+    lastPulseAt.delete(fromSessionId);
   },
 }));
 

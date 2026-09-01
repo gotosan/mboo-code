@@ -8,6 +8,7 @@ import {
   formatSessionTime,
   groupAssistantParts,
   isToolGroupRunning,
+  type AskDraftProgress,
   type ChatMessage,
   type ToolResultLoader,
 } from "@/features/agent-run/message-model";
@@ -20,6 +21,7 @@ export const MessageBubble = memo(function MessageBubble({
   loadToolResult,
   onRegenerate,
   onContinue,
+  onAskProgress,
   toErrorMessage,
   onStop,
 }: {
@@ -28,6 +30,7 @@ export const MessageBubble = memo(function MessageBubble({
   loadToolResult: ToolResultLoader;
   onRegenerate?: () => void;
   onContinue?: () => void;
+  onAskProgress: (toolCallId: string, progress: AskDraftProgress) => void;
   toErrorMessage: (error: unknown) => string;
   onStop?: () => void;
 }) {
@@ -83,6 +86,7 @@ export const MessageBubble = memo(function MessageBubble({
                       isRunning={message.state === "streaming" && isToolGroupRunning(segment.toolCalls)}
                       toErrorMessage={toErrorMessage}
                       onCancel={onStop}
+                      onAskProgress={onAskProgress}
                     />
                   </div>
                 );
@@ -100,6 +104,7 @@ export const MessageBubble = memo(function MessageBubble({
                     isRunning={message.state === "streaming" && isToolGroupRunning(message.toolCalls)}
                     toErrorMessage={toErrorMessage}
                     onCancel={onStop}
+                    onAskProgress={onAskProgress}
                   />
                 ) : null}
               </>

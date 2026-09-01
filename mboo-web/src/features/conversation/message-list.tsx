@@ -3,7 +3,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { ToolResultDetail } from "@/lib/session-types";
-import type { ChatMessage, ToolResultLoader } from "@/features/agent-run/message-model";
+import type { AskDraftProgress, ChatMessage, ToolResultLoader } from "@/features/agent-run/message-model";
 import { MessageBubble, RunningNotice } from "@/features/conversation/message-bubble";
 import TypewriterEffectCanvas from "@/features/conversation/typewriter-effect-canvas";
 import styles from "./message-list.module.css";
@@ -18,6 +18,7 @@ type MessageListProps = {
   onStop: () => void;
   onRegenerate?: () => void;
   onContinue?: () => void;
+  onAskProgress: (toolCallId: string, progress: AskDraftProgress) => void;
   readToolResult: (sessionId: string, resultId: string) => Promise<ToolResultDetail>;
   toErrorMessage: (error: unknown) => string;
 };
@@ -30,6 +31,7 @@ export const MessageList = memo(function MessageList({
   onStop,
   onRegenerate,
   onContinue,
+  onAskProgress,
   readToolResult,
   toErrorMessage,
 }: MessageListProps) {
@@ -166,6 +168,7 @@ export const MessageList = memo(function MessageList({
                   loadToolResult={loadToolResult}
                   onRegenerate={onRegenerate}
                   onContinue={onContinue}
+                  onAskProgress={onAskProgress}
                   toErrorMessage={toErrorMessage}
                   onStop={onStop}
                 />

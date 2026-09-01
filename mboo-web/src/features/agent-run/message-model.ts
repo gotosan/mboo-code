@@ -34,6 +34,13 @@ export type ToolCallView = {
   approvalCount?: number;
   askQuestions?: AskQuestion[];
   askAnswers?: string[];
+  askDraftAnswers?: string[];
+  askDraftPage?: number;
+};
+
+export type AskDraftProgress = {
+  answers: string[];
+  pageIndex: number;
 };
 
 export type ToolResultLoader = (resultId: string, force?: boolean) => Promise<ToolResultDetail>;
