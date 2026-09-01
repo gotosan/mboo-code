@@ -36,8 +36,18 @@ export const ToolTrace = memo(function ToolTrace({
   isCancelling,
   onAskProgress,
 }: ToolTraceProps) {
-  const askTool = toolCalls.find((tool) => tool.toolName === "ask_user_question");
+  const askTool = toolCalls.length === 1 && toolCalls[0]?.toolName === "ask_user_question" ? toolCalls[0] : undefined;
   if (askTool) return <AskCard toolCall={askTool} sessionId={sessionId} isCancelling={isCancelling} onCancel={onCancel ?? (() => undefined)} onProgress={onAskProgress} />;
+  return <StandardToolTrace toolCalls={toolCalls} isRunning={isRunning} sessionId={sessionId} loadToolResult={loadToolResult} toErrorMessage={toErrorMessage} isCancelling={isCancelling} onAskProgress={onAskProgress} />;
+});
+
+const StandardToolTrace = memo(function StandardToolTrace({
+  toolCalls,
+  isRunning,
+  sessionId,
+  loadToolResult,
+  toErrorMessage,
+}: ToolTraceProps) {
   const [open, setOpen] = useState(false);
   const hasPendingApproval = toolCalls.some(
     (tool) => tool.status === "waiting_approval" || tool.status === "submitting",

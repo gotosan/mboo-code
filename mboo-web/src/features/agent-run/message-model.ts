@@ -82,8 +82,13 @@ export function groupAssistantParts(parts: AssistantPart[]): AssistantRenderSegm
       segments.push({ type: "text", id: part.id, text: part.text });
       continue;
     }
+    if (part.toolCall.toolName === "ask_user_question") {
+      // 提问卡片需要独立展示，不能与普通工具或其他提问合并后遮蔽后续调用。
+      segments.push({ type: "tool_group", id: part.id, toolCalls: [part.toolCall] });
+      continue;
+    }
     const last = segments[segments.length - 1];
-    if (last?.type === "tool_group") {
+    if (last?.type === "tool_group" && last.toolCalls.every((toolCall) => toolCall.toolName !== "ask_user_question")) {
       last.toolCalls.push(part.toolCall);
       continue;
     }
