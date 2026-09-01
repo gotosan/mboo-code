@@ -217,8 +217,8 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     }
 
     // 清理当前活跃轮次
-    public void clearActiveTurn(String sessionId, String activeTurnId) {
-        lambdaUpdate()
+    public boolean clearActiveTurn(String sessionId, String activeTurnId) {
+        return lambdaUpdate()
                 .eq(Sessions::getId, sessionId)
                 .eq(Sessions::getActiveTurnId, activeTurnId)
                 .set(Sessions::getActiveTurnId, null)

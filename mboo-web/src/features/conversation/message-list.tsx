@@ -14,6 +14,8 @@ type MessageListProps = {
   sessionId: string;
   messages: ChatMessage[];
   isRunning: boolean;
+  isCancelling: boolean;
+  cancelError: string;
   activityMessage: string;
   onStop: () => void;
   onRegenerate?: () => void;
@@ -27,6 +29,8 @@ export const MessageList = memo(function MessageList({
   sessionId,
   messages,
   isRunning,
+  isCancelling,
+  cancelError,
   activityMessage,
   onStop,
   onRegenerate,
@@ -139,7 +143,7 @@ export const MessageList = memo(function MessageList({
   }, [scheduleBottomFollow, sessionId]);
 
   return (
-    <div className={`${styles.viewport} ${isRunning ? styles.isRunning : ""}`}>
+    <div className={`${styles.viewport} ${isRunning || isCancelling ? styles.isRunning : ""}`}>
       <div ref={scrollerRef} className={styles.scroller} onScroll={syncStickState}>
         <div
           className={styles.content}
@@ -171,6 +175,7 @@ export const MessageList = memo(function MessageList({
                   onAskProgress={onAskProgress}
                   toErrorMessage={toErrorMessage}
                   onStop={onStop}
+                  isCancelling={isCancelling}
                 />
               </div>
             );
@@ -182,9 +187,9 @@ export const MessageList = memo(function MessageList({
           回到底部
         </button>
       ) : null}
-      {isRunning ? (
+      {isRunning || isCancelling ? (
         <div className={styles.runningDock}>
-          <RunningNotice activityMessage={activityMessage} onStop={onStop} />
+          <RunningNotice activityMessage={activityMessage} isCancelling={isCancelling} cancelError={cancelError} onStop={onStop} />
         </div>
       ) : null}
       <TypewriterEffectCanvas

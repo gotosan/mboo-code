@@ -3,6 +3,7 @@ package com.yu.mboocode.common.handler;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import com.yu.mboocode.common.exception.ServiceException;
 import com.yu.mboocode.agent.tool.ask.AskService;
+import com.yu.mboocode.agent.service.TurnService;
 import com.yu.mboocode.common.dto.R;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -71,6 +73,17 @@ public class GlobalExceptionHandler {
     public ResponseEntity<R<Void>> askRequestExceptionHandler(AskService.AskRequestException e) {
         HttpStatus status = e.status() == 410 ? HttpStatus.GONE : HttpStatus.CONFLICT;
         return failedResponse(status, R.failed(e.getMessage()));
+    }
+
+    @ExceptionHandler(TurnService.TurnCancelException.class)
+    public ResponseEntity<R<Void>> turnCancelExceptionHandler(TurnService.TurnCancelException e) {
+        return failedResponse(HttpStatus.valueOf(e.status()), R.failed(e.getMessage()));
+    }
+
+    /** 客户端已断开时响应体不可再写入，直接结束异常处理。 */
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void disconnectedClientHandler(AsyncRequestNotUsableException e) {
+        log.debug("SSE 客户端已断开: {}", e.getMessage());
     }
 
     @ExceptionHandler(MissingServletRequestParameterException.class)

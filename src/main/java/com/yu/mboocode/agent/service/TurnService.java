@@ -45,10 +45,13 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
+import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -56,6 +59,7 @@ import java.util.function.Supplier;
 @Service
 @Slf4j
 public class TurnService {
+    private static final Duration CANCEL_CONFIRM_TIMEOUT = Duration.ofSeconds(10);
     @Resource
     private AiCodeService aiCodeService;
     @Resource
@@ -110,7 +114,7 @@ public class TurnService {
     private Flux<@NonNull SessionEvent> turn(String sessionId, String workspacePath, PermissionMode permissionMode, TurnOperationType operationType, TurnProcess turnProcess) {
         ActiveTurnRuntime runtime = startTurn(sessionId, workspacePath, permissionMode, operationType);
         SessionTurn sessionTurn = runtime.getSessionTurn();
-        return Flux.defer(() -> {
+        Flux<@NonNull SessionEvent> executionFlux = Flux.defer(() -> {
             if (!runtime.markRunning()) {
                 log.warn("忽略已失效 turn 的订阅 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId());
                 return Flux.empty();
@@ -132,24 +136,72 @@ public class TurnService {
                                         .build()
                         ));
                     })
-                    .doOnComplete(() -> runtime.acceptTerminal(TurnTerminalState.COMPLETE))
-                    .doOnCancel(() -> {
-                        if (!runtime.claimSystemTerminal(TurnTerminalState.CANCEL)) {
-                            return;
-                        }
-                        sessionEventStore.appendSession(
-                                sessionTurn.transcriptUri(),
-                                sessionTurn.sessionId(),
-                                sessionTurn.turnId(),
-                                SessionEventType.CANCELLED,
-                                SessionEventSource.SYSTEM,
-                                CancelledPayload.builder()
-                                        .durationMs(DateTimeUtil.durationMs(sessionTurn.startNano()))
-                                        .build()
-                        );
-                    })
-                    .doFinally(_ -> finishTurn(runtime));
+                    .doOnComplete(() -> runtime.acceptTerminal(TurnTerminalState.COMPLETE));
         });
+        return executionFlux
+                .takeUntilOther(runtime.cancelRequested())
+                .concatWith(Flux.defer(() -> {
+                    SessionEvent cancelledEvent = appendCancelledEvent(runtime);
+                    return cancelledEvent == null ? Flux.empty() : Flux.just(cancelledEvent);
+                }))
+                .doOnCancel(() -> cancelDisconnectedTurn(runtime))
+                .doFinally(_ -> finishTurn(runtime));
+    }
+
+    /**
+     * 显式取消匹配的 turn，并等待数据库占用和进程内 runtime 完成清理。
+     */
+    public Mono<Void> cancelTurn(String sessionId, String turnId) {
+        if (StrUtil.hasBlank(sessionId, turnId)) throw new ServiceException("取消 turn 的会话 ID 和 turn ID 不能为空");
+        Sessions session = sessionService.getActiveSession(sessionId);
+        ActiveTurnRuntime runtime = activeTurnRuntime.get(sessionId);
+        if (runtime == null) {
+            if (StrUtil.isBlank(session.getActiveTurnId())) return Mono.empty();
+            if (!turnId.equals(session.getActiveTurnId())) throw new TurnCancelException(409, "当前会话正在运行其他 turn");
+            if (sessionService.clearActiveTurn(sessionId, turnId)) return Mono.empty();
+            Sessions latestSession = sessionService.getActiveSession(sessionId);
+            if (StrUtil.isBlank(latestSession.getActiveTurnId())) return Mono.empty();
+            if (!turnId.equals(latestSession.getActiveTurnId())) throw new TurnCancelException(409, "当前会话正在运行其他 turn");
+            throw new TurnCancelException(504, "取消 turn 未完成数据库清理");
+        }
+        if (!turnId.equals(runtime.getSessionTurn().turnId())) throw new TurnCancelException(409, "当前会话正在运行其他 turn");
+        if (runtime.requestCancel()) {
+            runtime.cancelStreaming();
+            try {
+                toolApprovalService.cancelTurn(sessionId, turnId);
+            } catch (Exception e) {
+                log.error("显式取消 turn 工具执行失败 sessionId:{} turnId:{}", sessionId, turnId, e);
+            }
+        }
+        if (runtime.isCancelledBeforeRunning() && appendCancelledEvent(runtime) != null) finishTurn(runtime);
+        return runtime.finished()
+                .timeout(CANCEL_CONFIRM_TIMEOUT)
+                .onErrorMap(TimeoutException.class, _ -> new TurnCancelException(504, "取消 turn 等待清理超时"));
+    }
+
+    private void cancelDisconnectedTurn(ActiveTurnRuntime runtime) {
+        SessionTurn sessionTurn = runtime.getSessionTurn();
+        runtime.requestCancel();
+        runtime.cancelStreaming();
+        try {
+            toolApprovalService.cancelTurn(sessionTurn.sessionId(), sessionTurn.turnId());
+        } catch (Exception e) {
+            log.error("断开连接时取消 turn 工具执行失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
+        }
+        appendCancelledEvent(runtime);
+    }
+
+    private SessionEvent appendCancelledEvent(ActiveTurnRuntime runtime) {
+        if (!runtime.claimSystemTerminal(TurnTerminalState.CANCEL)) return null;
+        SessionTurn sessionTurn = runtime.getSessionTurn();
+        return sessionEventStore.appendSession(
+                sessionTurn.transcriptUri(),
+                sessionTurn.sessionId(),
+                sessionTurn.turnId(),
+                SessionEventType.CANCELLED,
+                SessionEventSource.SYSTEM,
+                CancelledPayload.builder().durationMs(DateTimeUtil.durationMs(sessionTurn.startNano())).build()
+        );
     }
 
     private ActiveTurnRuntime startTurn(String sessionId, String workspacePath, PermissionMode permissionMode, TurnOperationType operationType) {
@@ -172,6 +224,7 @@ public class TurnService {
                 throw new ServiceException("当前会话已有运行中的 turn");
             }
             if (activeTurnRuntime.remove(session.getId(), existing)) {
+                existing.finish();
                 log.warn("清理未订阅的 turn sessionId:{} turnId:{}", session.getId(), existing.getSessionTurn().turnId());
             }
         }
@@ -197,6 +250,7 @@ public class TurnService {
                 log.error("回滚启动失败的 turn 占用失败 sessionId:{} turnId:{}", session.getId(), turnId, cleanupError);
             }
             activeTurnRuntime.remove(session.getId(), runtime);
+            runtime.finish();
             throw e;
         }
     }
@@ -457,7 +511,9 @@ public class TurnService {
     }
 
     private void finishTurn(ActiveTurnRuntime runtime) {
+        if (!runtime.beginCleanup()) return;
         SessionTurn sessionTurn = runtime.getSessionTurn();
+        RuntimeException activeTurnCleanupError = null;
         modelUsageTracker.unregister(runtime);
         try {
             toolApprovalService.cancelTurn(sessionTurn.sessionId(), sessionTurn.turnId());
@@ -480,12 +536,19 @@ public class TurnService {
             persistLastUsage(runtime);
         }
         try {
-            sessionService.clearActiveTurn(sessionTurn.sessionId(), sessionTurn.turnId());
-        } catch (Exception e) {
+            boolean cleared = sessionService.clearActiveTurn(sessionTurn.sessionId(), sessionTurn.turnId());
+            if (!cleared) {
+                Sessions latestSession = sessionService.getActiveSession(sessionTurn.sessionId());
+                if (sessionTurn.turnId().equals(latestSession.getActiveTurnId())) activeTurnCleanupError = new TurnCancelException(504, "取消 turn 未完成数据库清理");
+                else if (StrUtil.isNotBlank(latestSession.getActiveTurnId())) activeTurnCleanupError = new TurnCancelException(409, "当前会话正在运行其他 turn");
+            }
+        } catch (RuntimeException e) {
+            activeTurnCleanupError = e;
             log.error("清理数据库活跃 turn 失败 sessionId:{} turnId:{}", sessionTurn.sessionId(), sessionTurn.turnId(), e);
         } finally {
-            runtime.finish();
             activeTurnRuntime.remove(sessionTurn.sessionId(), runtime);
+            if (activeTurnCleanupError == null) runtime.finish();
+            else runtime.finish(activeTurnCleanupError);
         }
     }
 
@@ -572,6 +635,19 @@ public class TurnService {
                     + descriptor.contentHash().substring(0, Math.min(12, descriptor.contentHash().length()));
         } catch (RuntimeException e) {
             return fallback;
+        }
+    }
+
+    public static class TurnCancelException extends ServiceException {
+        private final int status;
+
+        public TurnCancelException(int status, String message) {
+            super(message);
+            this.status = status;
+        }
+
+        public int status() {
+            return status;
         }
     }
 

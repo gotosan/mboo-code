@@ -84,7 +84,7 @@ const PENDING_SESSION_KEY = "__pending__";
 
 type MessageRole = "user" | "assistant" | "system";
 type MessageState = AssistantMessageState | "info";
-type ConnectionState = "idle" | "running" | "error";
+type ConnectionState = "idle" | "running" | "cancelling" | "error";
 
 type SessionStreamOwner = {
   sessionKey: string;
@@ -298,6 +298,8 @@ export default function Home() {
   const notifiedTurnRef = useRef<Set<string>>(new Set());
   const isRunning = runtimeStatus === "running" && runtime?.streamKind === "chat";
   const isCompressing = runtimeStatus === "running" && runtime?.streamKind === "compression";
+  const isCancelling = runtimeStatus === "cancelling";
+  const isRuntimeBusy = runtimeStatus === "running" || runtimeStatus === "cancelling";
   const queryClient = useQueryClient();
   const highlightedSessionId = openingSessionId || sessionId;
   const isSessionSwitching = Boolean(openingSessionId) || isLoadingHistory;
@@ -944,7 +946,7 @@ export default function Home() {
     async (toolCall: ToolCallView, decision: ToolApprovalDecision) => {
       const approvalId = toolCall.approvalId;
       const targetSessionId = currentSessionIdRef.current;
-      if (!approvalId || !targetSessionId) {
+      if (!approvalId || !targetSessionId || getSessionRuntime(targetSessionId).status === "cancelling") {
         return;
       }
 
@@ -1225,7 +1227,13 @@ export default function Home() {
         else sessionRuntimeStore.getState().setStatus(targetKey, "cancelled");
         if (isViewingSessionKey(targetKey)) {
           setConnectionState("idle");
-          addSystemMessage("本轮会话已取消", "info", targetKey);
+          if (owner?.streamKind === "compression") {
+            setCompressionState("failed");
+            setCompressionMessage("上下文压缩已取消");
+            addSystemMessage("上下文压缩已取消", "info", targetKey);
+          } else {
+            addSystemMessage("本轮会话已取消", "info", targetKey);
+          }
         }
         return;
       }
@@ -1338,7 +1346,8 @@ export default function Home() {
 
       // 会话已被硬删除或不存在时，切回未选中。
       // 流式进行中列表可能短暂不一致，避免清空正在渲染的会话。
-      if (getSessionRuntime(currentId).status === "running") {
+      const currentRuntimeStatus = getSessionRuntime(currentId).status;
+      if (currentRuntimeStatus === "running" || currentRuntimeStatus === "cancelling") {
         return;
       }
       clearCurrentSession();
@@ -1505,7 +1514,7 @@ export default function Home() {
       }
 
       const sessionRuntime = getSessionRuntime(nextSessionId);
-      const streamingThisSession = sessionRuntime.status === "running";
+      const streamingThisSession = sessionRuntime.status === "running" || sessionRuntime.status === "cancelling";
       const historyMessages = reconcileHistoricalInteractiveState(reduceSessionEventsToMessages(events ?? []), sessionRuntime);
       const historyUsage = findLastContextUsage(events ?? []);
       contextUsageBySessionRef.current[nextSessionId] = historyUsage;
@@ -1542,7 +1551,7 @@ export default function Home() {
         setInput("");
         setErrorMessage(sessionRuntime.status === "error" ? sessionRuntime.errorMessage : "");
         setEditingSessionId(null);
-        setConnectionState(sessionRuntime.status === "running" ? "running" : sessionRuntime.status === "error" ? "error" : "idle");
+        setConnectionState(sessionRuntime.status === "cancelling" ? "cancelling" : sessionRuntime.status === "running" ? "running" : sessionRuntime.status === "error" ? "error" : "idle");
       }
     } catch (error) {
       if (loadVersion !== historyLoadVersionRef.current) {
@@ -1616,7 +1625,8 @@ export default function Home() {
       setEditingSessionId(null);
 
       // 该会话正在流式输出：直接展示本地流式缓存，避免历史快照盖掉未落盘 delta
-      if (getSessionRuntime(nextSessionId).status === "running") {
+      const nextRuntime = getSessionRuntime(nextSessionId);
+      if (nextRuntime.status === "running" || nextRuntime.status === "cancelling") {
         historyLoadVersionRef.current += 1;
         currentSessionIdRef.current = nextSessionId;
         setSessionId(nextSessionId);
@@ -1629,8 +1639,8 @@ export default function Home() {
         setOpeningSessionId(null);
         setIsLoadingHistory(false);
         setInput("");
-        setErrorMessage("");
-        setConnectionState("running");
+        setErrorMessage(nextRuntime.errorMessage);
+        setConnectionState(nextRuntime.status === "cancelling" ? "cancelling" : "running");
         setContextUsage(contextUsageBySessionRef.current[nextSessionId] ?? null);
         return;
       }
@@ -1650,8 +1660,8 @@ export default function Home() {
         setIsLoadingHistory(false);
         setInput("");
         const cachedRuntime = getSessionRuntime(nextSessionId);
-        setErrorMessage(cachedRuntime.status === "error" ? cachedRuntime.errorMessage : "");
-        setConnectionState(cachedRuntime.status === "error" ? "error" : "idle");
+        setErrorMessage(cachedRuntime.status === "error" || cachedRuntime.status === "cancelling" ? cachedRuntime.errorMessage : "");
+        setConnectionState(cachedRuntime.status === "cancelling" ? "cancelling" : cachedRuntime.status === "error" ? "error" : "idle");
         await loadSessionEvents(nextSessionId, { quiet: true, status });
         return;
       }
@@ -1870,7 +1880,7 @@ export default function Home() {
       const userMessage = input.trim();
       const selectedModelName = modelName.trim();
 
-      if (!userMessage || isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace) {
+      if (!userMessage || isRunning || isCompressing || isCancelling || isSessionSwitching || isSelectingWorkspace) {
         return;
       }
 
@@ -1988,7 +1998,7 @@ export default function Home() {
         addSystemMessage(message, "error", streamOwner.sessionKey);
       } finally {
         void refreshSessions();
-        sessionRuntimeStore.getState().finish(streamOwner.sessionKey, controller);
+        if (getSessionRuntime(streamOwner.sessionKey).status !== "cancelling") sessionRuntimeStore.getState().finish(streamOwner.sessionKey, controller);
         streamOwnersRef.current.delete(controller);
         if (isViewingSessionKey(streamOwner.sessionKey) && getSessionRuntime(streamOwner.sessionKey).status !== "error") setConnectionState("idle");
       }
@@ -2002,6 +2012,7 @@ export default function Home() {
       input,
       isLoadingHistory,
       isCompressing,
+      isCancelling,
       isRunning,
       isSelectingWorkspace,
       isViewingSessionKey,
@@ -2019,7 +2030,7 @@ export default function Home() {
 
   const compressContext = useCallback(async () => {
     const targetSessionId = currentSessionIdRef.current;
-    if (!targetSessionId || isRunning || isCompressing || viewingSessionStatus === "archived") {
+    if (!targetSessionId || isRunning || isCompressing || isCancelling || viewingSessionStatus === "archived") {
       return;
     }
     const controller = new AbortController();
@@ -2051,36 +2062,95 @@ export default function Home() {
         addSystemMessage(`上下文压缩失败：${message}`, "error", targetSessionId);
       }
     } finally {
-      sessionRuntimeStore.getState().finish(targetSessionId, controller);
+      if (getSessionRuntime(targetSessionId).status !== "cancelling") sessionRuntimeStore.getState().finish(targetSessionId, controller);
       streamOwnersRef.current.delete(controller);
     }
-  }, [addSystemMessage, handleSessionEvent, isCompressing, isRunning, isViewingSessionKey, modelName, viewingSessionStatus]);
+  }, [addSystemMessage, handleSessionEvent, isCancelling, isCompressing, isRunning, isViewingSessionKey, modelName, viewingSessionStatus]);
 
-  const stopCurrentRun = useCallback(() => {
+  const stopCurrentRun = useCallback(async () => {
     const currentRuntimeKey = currentSessionIdRef.current || PENDING_SESSION_KEY;
     const currentRuntime = getSessionRuntime(currentRuntimeKey);
-    if (currentRuntime.status !== "running" || !currentRuntime.abortController) return;
-    const cancelledTurnId = currentRuntime.turnId;
-    const cancelledStreamKind = currentRuntime.streamKind;
-    sessionRuntimeStore.getState().stop(currentRuntimeKey);
-    if (cancelledStreamKind === "compression") {
-      setCompressionState("failed");
-      setCompressionMessage("上下文压缩已取消");
-      addSystemMessage("上下文压缩已取消", "info", currentRuntimeKey);
+    if (currentRuntime.status === "cancelling" && !currentRuntime.errorMessage) {
+      for (let attempt = 0; attempt < 350; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+        const latestRuntime = getSessionRuntime(currentRuntimeKey);
+        if (latestRuntime.status !== "cancelling") return;
+        if (latestRuntime.errorMessage) throw new Error(latestRuntime.errorMessage);
+      }
+      throw new Error("取消 turn 等待清理超时");
+    }
+    const retryingCancellation = currentRuntime.status === "cancelling" && Boolean(currentRuntime.errorMessage);
+    if ((currentRuntime.status !== "running" && !retryingCancellation) || !currentRuntime.abortController || !currentRuntime.streamKind) return;
+    const controller = currentRuntime.abortController;
+    const streamOwner = streamOwnersRef.current.get(controller) ?? { sessionKey: currentRuntimeKey, controller, streamKind: currentRuntime.streamKind };
+    const actualSessionId = currentRuntimeKey === PENDING_SESSION_KEY || currentRuntimeKey.startsWith(`${PENDING_SESSION_KEY}:`) ? "" : currentRuntimeKey;
+    let cancelledTurnId = currentRuntime.turnId;
+    sessionRuntimeStore.getState().beginCancel(currentRuntimeKey, controller);
+    setErrorMessage("");
+    if (currentRuntime.streamKind === "compression") setCompressionMessage("正在取消上下文压缩…");
+
+    const completeLocalCancellation = () => {
+      const latest = getSessionRuntime(currentRuntimeKey);
+      if (latest.abortController === controller && latest.status !== "cancelled") {
+        handleSessionEvent({
+          eventId: createLocalId("cancelled"),
+          sessionId: actualSessionId,
+          turnId: cancelledTurnId,
+          type: "CANCELLED",
+          source: "USER",
+          createdAt: new Date().toISOString(),
+          payload: {},
+          meta: { local: true },
+        }, streamOwner);
+      }
+      controller.abort();
+      void refreshSessions();
+    };
+
+    if (!actualSessionId) {
+      completeLocalCancellation();
       return;
     }
-    handleSessionEvent({
-      eventId: createLocalId("cancelled"),
-      sessionId: currentRuntimeKey === PENDING_SESSION_KEY ? "" : currentRuntimeKey,
-      turnId: cancelledTurnId,
-      type: "CANCELLED",
-      source: "USER",
-      createdAt: new Date().toISOString(),
-      payload: {},
-      meta: { local: true },
-    });
-    void refreshSessions();
-  }, [addSystemMessage, handleSessionEvent, refreshSessions]);
+
+    try {
+      if (!cancelledTurnId) throw new Error("尚未取得当前 turnId，已改用 SSE 断开取消");
+      const response = await fetch(`/api/session/${encodeURIComponent(actualSessionId)}/turns/${encodeURIComponent(cancelledTurnId)}/cancel`, { method: "POST" });
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      completeLocalCancellation();
+      return;
+    } catch (error) {
+      controller.abort();
+      const cancelError = toErrorMessage(error);
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        try {
+          const detailResponse = await fetch(`/api/session/${encodeURIComponent(actualSessionId)}`, { cache: "no-store" });
+          const detail = await readApiData<SessionInfo>(detailResponse);
+          if (detail.activeTurnId === cancelledTurnId) continue;
+          if (!cancelledTurnId && detail.activeTurnId) continue;
+          if (detail.activeTurnId) {
+            const message = "会话已切换到其他运行中的 turn，请等待其结束";
+            sessionRuntimeStore.getState().setCancelError(currentRuntimeKey, controller, message);
+            if (isViewingSessionKey(currentRuntimeKey)) {
+              setConnectionState("error");
+              setErrorMessage(message);
+            }
+            return;
+          }
+          completeLocalCancellation();
+          return;
+        } catch {
+          // 本地服务可能正在恢复，继续等待到 30 秒上限。
+        }
+      }
+      const message = `${cancelError}；后端仍未确认清理，可重试取消`;
+      sessionRuntimeStore.getState().setCancelError(currentRuntimeKey, controller, message);
+      if (isViewingSessionKey(currentRuntimeKey)) {
+        setConnectionState("error");
+        setErrorMessage(message);
+      }
+    }
+  }, [handleSessionEvent, isViewingSessionKey, refreshSessions]);
 
   const startNewSession = useCallback(() => {
     // 切换至新会话不能中断其他会话的 SSE；仅重置可见编辑上下文。
@@ -2148,7 +2218,7 @@ export default function Home() {
   }, [isSessionDrawerOpen, sendMessage, stopCurrentRun]);
 
   const status = useMemo(
-    () => getStatusView(runtimeStatus === "running" ? "running" : connectionState, activeTurnId),
+    () => getStatusView(runtimeStatus === "cancelling" ? "cancelling" : runtimeStatus === "running" ? "running" : connectionState, activeTurnId),
     [activeTurnId, connectionState, runtimeStatus],
   );
   const currentSession = useMemo(() => {
@@ -2323,7 +2393,7 @@ export default function Home() {
       deletingWorkspaceId={deletingWorkspaceId}
       workspaceError={workspaceError}
       isSessionSwitching={isSessionSwitching}
-      isCurrentSessionRunning={isRunning && sessionId === highlightedSessionId}
+      isCurrentSessionRunning={isRuntimeBusy && sessionId === highlightedSessionId}
       editingSessionId={editingSessionId}
       titleDraft={titleDraft}
       confirmingAction={confirmingAction as SessionConfirmAction}
@@ -2529,6 +2599,8 @@ export default function Home() {
                   sessionId={sessionId || PENDING_SESSION_KEY}
                   messages={messages}
                   isRunning={isRunning}
+                  isCancelling={isCancelling}
+                  cancelError={runtime?.errorMessage ?? ""}
                   activityMessage={
                     activeTool
                       ? `工具：${getToolLabel(activeTool.toolName)}${
@@ -2594,6 +2666,7 @@ export default function Home() {
                         <ToolApprovalCard
                           key={toolCall.approvalId || toolCall.id}
                           toolCall={toolCall}
+                          disabled={isCancelling}
                           onResolveApproval={resolveToolApproval}
                         />
                       ))}
@@ -2605,6 +2678,8 @@ export default function Home() {
                       onInputChange={setInput}
                       isRunning={isRunning}
                       isCompressing={isCompressing}
+                      isCancelling={isCancelling}
+                      cancelError={runtime?.errorMessage ?? ""}
                       contextUsage={contextUsage}
                       compressionState={compressionState}
                       compressionMessage={compressionMessage}
@@ -2657,7 +2732,7 @@ export default function Home() {
             sessionId={highlightedSessionId}
             pendingApprovalCount={pendingApprovalCount}
             errorMessage={errorMessage}
-            isRunning={isRunning}
+            isRunning={isRuntimeBusy}
             onOpenSession={(id) => void openSession(id, "active")}
           />
         </div>
@@ -2667,7 +2742,7 @@ export default function Home() {
       open={isModelSettingsOpen}
       onClose={() => setIsModelSettingsOpen(false)}
       onModelsRefreshed={refreshModelOptions}
-      hasRunningTask={isRunning}
+      hasRunningTask={isRuntimeBusy}
       onCancelRunningTask={stopCurrentRun}
     />
     </>
@@ -2688,6 +2763,13 @@ function extractReasoningEffortOptions(options: Record<string, unknown>[]) {
 }
 
 function getStatusView(state: ConnectionState, activeTurnId: string | null) {
+  if (state === "cancelling") {
+    return {
+      label: "取消中",
+      className: "border-running/35 bg-running-soft text-running",
+      running: true,
+    };
+  }
   if (state === "running") {
     return {
       label: activeTurnId ? "运行中" : "连接中",
@@ -3247,7 +3329,7 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
 }
 
 function reconcileHistoricalInteractiveState(messages: ChatMessage[], runtime: SessionRuntime): ChatMessage[] {
-  const liveChatTurn = runtime.status === "running" && runtime.streamKind === "chat";
+  const liveChatTurn = (runtime.status === "running" || runtime.status === "cancelling") && runtime.streamKind === "chat";
   const belongsToLiveTurn = (toolCall: ToolCallView) => liveChatTurn && (!runtime.turnId || !toolCall.turnId || runtime.turnId === toolCall.turnId);
   const reconcile = (toolCall: ToolCallView): ToolCallView => {
     const pendingApproval = toolCall.status === "waiting_approval" || toolCall.status === "submitting";

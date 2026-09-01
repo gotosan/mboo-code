@@ -22,6 +22,7 @@ type ToolTraceProps = {
   loadToolResult: ToolResultLoader;
   toErrorMessage: (error: unknown) => string;
   onCancel?: () => void;
+  isCancelling: boolean;
   onAskProgress: (toolCallId: string, progress: AskDraftProgress) => void;
 };
 
@@ -32,10 +33,11 @@ export const ToolTrace = memo(function ToolTrace({
   loadToolResult,
   toErrorMessage,
   onCancel,
+  isCancelling,
   onAskProgress,
 }: ToolTraceProps) {
   const askTool = toolCalls.find((tool) => tool.toolName === "ask_user_question");
-  if (askTool) return <AskCard toolCall={askTool} sessionId={sessionId} onCancel={onCancel ?? (() => undefined)} onProgress={onAskProgress} />;
+  if (askTool) return <AskCard toolCall={askTool} sessionId={sessionId} isCancelling={isCancelling} onCancel={onCancel ?? (() => undefined)} onProgress={onAskProgress} />;
   const [open, setOpen] = useState(false);
   const hasPendingApproval = toolCalls.some(
     (tool) => tool.status === "waiting_approval" || tool.status === "submitting",

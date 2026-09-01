@@ -4,6 +4,8 @@ import com.yu.mboocode.agent.model.SessionTurn;
 import com.yu.mboocode.agent.model.ContextUsageSnapshot;
 import dev.langchain4j.model.chat.response.StreamingHandle;
 import io.swagger.v3.oas.annotations.media.Schema;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -36,6 +38,12 @@ public class ActiveTurnRuntime {
     @Schema(description = "外层系统终态事件是否已处理", hidden = true)
     private final AtomicBoolean systemTerminalHandled = new AtomicBoolean();
 
+    @Schema(description = "取消是否先于 Flux 订阅取得执行权", hidden = true)
+    private final AtomicBoolean cancelledBeforeRunning = new AtomicBoolean();
+
+    @Schema(description = "最终清理是否已开始", hidden = true)
+    private final AtomicBoolean cleanupStarted = new AtomicBoolean();
+
     @Schema(description = "当前模型流取消句柄", hidden = true)
     private final AtomicReference<StreamingHandle> streamingHandle = new AtomicReference<>();
 
@@ -56,6 +64,12 @@ public class ActiveTurnRuntime {
 
     @Schema(description = "上下文用量 SSE 发送器", hidden = true)
     private final AtomicReference<Consumer<ContextUsageSnapshot>> contextUsageEmitter = new AtomicReference<>();
+
+    @Schema(description = "显式取消信号", hidden = true)
+    private final Sinks.One<Void> cancelRequested = Sinks.one();
+
+    @Schema(description = "turn 清理完成信号", hidden = true)
+    private final Sinks.One<Void> finished = Sinks.one();
 
     public ActiveTurnRuntime(SessionTurn sessionTurn) {
         this.sessionTurn = sessionTurn;
@@ -90,6 +104,34 @@ public class ActiveTurnRuntime {
         }
         phase.updateAndGet(currentPhase -> currentPhase == TurnPhase.TERMINATED ? TurnPhase.TERMINATED : TurnPhase.TERMINATING);
         return true;
+    }
+
+    /**
+     * 请求取消当前 turn。信号可以先于 Flux 订阅到达，订阅建立后仍能立即终止执行。
+     */
+    public boolean requestCancel() {
+        TurnTerminalState currentState = terminalState.compareAndExchange(null, TurnTerminalState.CANCEL);
+        if (currentState != null && currentState != TurnTerminalState.CANCEL) return false;
+        if (phase.compareAndSet(TurnPhase.STARTING, TurnPhase.TERMINATING)) cancelledBeforeRunning.set(true);
+        else phase.updateAndGet(currentPhase -> currentPhase == TurnPhase.TERMINATED ? TurnPhase.TERMINATED : TurnPhase.TERMINATING);
+        Sinks.EmitResult result = cancelRequested.tryEmitEmpty();
+        return result.isSuccess() || result == Sinks.EmitResult.FAIL_TERMINATED;
+    }
+
+    public boolean isCancelledBeforeRunning() {
+        return cancelledBeforeRunning.get();
+    }
+
+    public boolean beginCleanup() {
+        return cleanupStarted.compareAndSet(false, true);
+    }
+
+    public Mono<Void> cancelRequested() {
+        return cancelRequested.asMono();
+    }
+
+    public Mono<Void> finished() {
+        return finished.asMono();
     }
 
     /**
@@ -172,6 +214,14 @@ public class ActiveTurnRuntime {
 
     public void finish() {
         phase.set(TurnPhase.TERMINATED);
+        contextUsageEmitter.set(null);
+        finished.tryEmitEmpty();
+    }
+
+    public void finish(Throwable error) {
+        phase.set(TurnPhase.TERMINATED);
+        contextUsageEmitter.set(null);
+        finished.tryEmitError(error);
     }
 
     @Schema(description = "turn 运行阶段")

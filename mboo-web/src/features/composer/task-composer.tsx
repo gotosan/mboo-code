@@ -38,6 +38,8 @@ export type TaskComposerProps = {
   onInputChange: (value: string) => void;
   isRunning: boolean;
   isCompressing: boolean;
+  isCancelling: boolean;
+  cancelError: string;
   contextUsage: ContextUsageSnapshot | null;
   compressionState: ContextCompressionState | null;
   compressionMessage: string;
@@ -81,6 +83,8 @@ export const TaskComposer = memo(function TaskComposer({
   onInputChange,
   isRunning,
   isCompressing,
+  isCancelling,
+  cancelError,
   contextUsage,
   compressionState,
   compressionMessage,
@@ -190,8 +194,8 @@ export const TaskComposer = memo(function TaskComposer({
     }
   }, [contextOpen, modelContextLimit]);
 
-  const controlsDisabled = isRunning || isCompressing || isSessionSwitching || isSelectingWorkspace;
-  const permissionControlsDisabled = isSessionSwitching || isSelectingWorkspace || isSavingPermissionMode;
+  const controlsDisabled = isRunning || isCompressing || isCancelling || isSessionSwitching || isSelectingWorkspace;
+  const permissionControlsDisabled = isCancelling || isSessionSwitching || isSelectingWorkspace || isSavingPermissionMode;
 
   useEffect(() => {
     if (controlsDisabled) {
@@ -266,7 +270,7 @@ export const TaskComposer = memo(function TaskComposer({
       <div className={styles.composer}>
         <div className={styles.toolbar}>
           <button className={`${styles.composerButton} ${styles.toolbarButton}`} type="button" disabled={!input.trim() || controlsDisabled} onClick={() => onInputChange("")}>清空</button>
-          <span className={styles.toolbarHint}>{isRunning ? "生成中，Esc 可停止" : isCompressing ? "上下文压缩中" : "Enter 发送 · Shift+Enter 换行"}</span>
+          <span className={styles.toolbarHint}>{isCancelling ? (cancelError ? "取消失败，可重试" : "正在等待后端确认取消") : isRunning ? "生成中，Esc 可停止" : isCompressing ? "上下文压缩中" : "Enter 发送 · Shift+Enter 换行"}</span>
         </div>
         <label className="sr-only" htmlFor="task-input">任务输入</label>
         <ComposerTokenEditor id="task-input" value={input} disabled={controlsDisabled} workspaceId={workspaceId} placeholder="写下任务目标… 输入 / 选择 Skill" onChange={onInputChange} onSubmit={submit} />
@@ -400,18 +404,18 @@ export const TaskComposer = memo(function TaskComposer({
                         {isCompressing ? "压缩中…" : compressionMessage || "自动压缩：系统处理"}
                       </span>
                       {canCompress ? (
-                        <button className={styles.contextCompressButton} disabled={isRunning} type="button" onClick={isCompressing ? onStop : onCompress}>
-                          {isCompressing ? <LoaderCircle className={styles.contextSpinner} aria-hidden /> : null}
-                          {isCompressing ? "停止" : "压缩上下文"}
+                        <button className={styles.contextCompressButton} disabled={isRunning || isCancelling} type="button" onClick={isCompressing ? onStop : onCompress}>
+                          {isCompressing || isCancelling ? <LoaderCircle className={styles.contextSpinner} aria-hidden /> : null}
+                          {isCancelling ? "正在取消" : isCompressing ? "停止" : "压缩上下文"}
                         </button>
                       ) : null}
                     </div>
                   </div>,
                   document.body,
                 ) : null}
-                {isRunning ? (
-                  <button className={`${styles.primaryButton} ${styles.stopButton}`} type="button" onClick={onStop} title="停止生成">
-                    <Square className={styles.icon} aria-hidden />停止
+                {isRunning || isCancelling ? (
+                  <button className={`${styles.primaryButton} ${styles.stopButton}`} disabled={isCancelling && !cancelError} type="button" onClick={onStop} title={isCancelling ? "等待取消完成" : "停止生成"}>
+                    {isCancelling ? <LoaderCircle className={styles.icon} aria-hidden /> : <Square className={styles.icon} aria-hidden />}{isCancelling ? (cancelError ? "重试取消" : "正在取消") : "停止"}
                   </button>
                 ) : (
                   <button className={`${styles.primaryButton} ${!canSend ? styles.lockedButton : ""}`} disabled={!canSend} type="submit" title={!modelName.trim() ? "请先填写模型名称" : !input.trim() ? "请先输入任务" : "发送（Enter）"}>

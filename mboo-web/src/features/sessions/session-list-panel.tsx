@@ -104,7 +104,7 @@ export const SessionListPanel = memo(function SessionListPanel({
   const sessionRuntimes = useSessionRuntimeStore((state) => state.sessions);
   const runningSessionIds = new Set(
     Object.entries(sessionRuntimes)
-      .filter(([, runtime]) => runtime.status === "running")
+      .filter(([, runtime]) => runtime.status === "running" || runtime.status === "cancelling")
       .map(([sessionId]) => sessionId),
   );
   const visibleRunningSessionIds = new Set(

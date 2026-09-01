@@ -4,6 +4,7 @@ import { createStore } from "zustand/vanilla";
 export type SessionRuntimeStatus =
   | "idle"
   | "running"
+  | "cancelling"
   | "error"
   | "completed"
   | "cancelled";
@@ -24,12 +25,13 @@ type SessionRuntimeState = {
   sessions: Record<string, SessionRuntime>;
   ensure: (sessionId: string) => void;
   start: (sessionId: string, controller: AbortController, streamKind: SessionStreamKind) => void;
+  beginCancel: (sessionId: string, controller: AbortController) => void;
+  setCancelError: (sessionId: string, controller: AbortController, errorMessage: string) => void;
   finish: (sessionId: string, controller: AbortController, status?: SessionRuntimeStatus, errorMessage?: string) => void;
   setTurn: (sessionId: string, turnId: string | null) => void;
   setStatus: (sessionId: string, status: SessionRuntimeStatus, errorMessage?: string) => void;
   markEvent: (sessionId: string, createdAt?: string) => void;
   markRead: (sessionId: string) => void;
-  stop: (sessionId: string) => void;
   reset: (sessionId: string) => void;
   move: (fromSessionId: string, toSessionId: string) => void;
 };
@@ -62,7 +64,7 @@ function triggerSessionPulse(sessionId: string) {
     });
 }
 
-export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set, get) => ({
+export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set) => ({
   sessions: {},
   ensure: (sessionId) => {
     if (!sessionId) return;
@@ -88,6 +90,22 @@ export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set, get)
         },
       },
     }));
+  },
+  beginCancel: (sessionId, controller) => {
+    if (!sessionId) return;
+    set((state) => {
+      const current = state.sessions[sessionId];
+      if (!current || current.abortController !== controller || (current.status !== "running" && current.status !== "cancelling")) return state;
+      return { sessions: { ...state.sessions, [sessionId]: { ...current, status: "cancelling", errorMessage: "" } } };
+    });
+  },
+  setCancelError: (sessionId, controller, errorMessage) => {
+    if (!sessionId) return;
+    set((state) => {
+      const current = state.sessions[sessionId];
+      if (!current || current.abortController !== controller) return state;
+      return { sessions: { ...state.sessions, [sessionId]: { ...current, status: "cancelling", errorMessage } } };
+    });
   },
   finish: (sessionId, controller, status = "idle", errorMessage = "") => {
     if (!sessionId) return;
@@ -121,11 +139,11 @@ export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set, get)
           status,
           errorMessage,
           abortController:
-            status === "running"
+            status === "running" || status === "cancelling"
               ? state.sessions[sessionId]?.abortController ?? null
               : null,
-          turnId: status === "running" ? state.sessions[sessionId]?.turnId ?? null : null,
-          streamKind: status === "running" ? state.sessions[sessionId]?.streamKind ?? null : null,
+          turnId: status === "running" || status === "cancelling" ? state.sessions[sessionId]?.turnId ?? null : null,
+          streamKind: status === "running" || status === "cancelling" ? state.sessions[sessionId]?.streamKind ?? null : null,
         },
       },
     }));
@@ -134,7 +152,7 @@ export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set, get)
     if (!sessionId) return;
     set((state) => {
       const current = state.sessions[sessionId] ?? EMPTY_RUNTIME;
-      if (current.status === "running") {
+      if (current.status === "running" || current.status === "cancelling") {
         triggerSessionPulse(sessionId);
       }
       return {
@@ -157,22 +175,6 @@ export const sessionRuntimeStore = createStore<SessionRuntimeState>()((set, get)
         [sessionId]: { ...(state.sessions[sessionId] ?? EMPTY_RUNTIME), unreadCount: 0 },
       },
     }));
-  },
-  stop: (sessionId) => {
-    if (!sessionId) return;
-    const controller = get().sessions[sessionId]?.abortController;
-    if (!controller) return;
-    set((state) => {
-      const current = state.sessions[sessionId];
-      if (!current || current.abortController !== controller) return state;
-      return {
-        sessions: {
-          ...state.sessions,
-          [sessionId]: { ...current, status: "cancelled", abortController: null, streamKind: null, turnId: null },
-        },
-      };
-    });
-    controller.abort();
   },
   reset: (sessionId) => {
     if (!sessionId) return;

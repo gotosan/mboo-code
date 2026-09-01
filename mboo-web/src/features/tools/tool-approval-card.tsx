@@ -11,6 +11,7 @@ import styles from "./tool-approval-card.module.css";
 
 type ToolApprovalCardProps = {
   toolCall: ToolCallView;
+  disabled?: boolean;
   onResolveApproval: (
     toolCall: ToolCallView,
     decision: ToolApprovalDecision,
@@ -19,6 +20,7 @@ type ToolApprovalCardProps = {
 
 export const ToolApprovalCard = memo(function ToolApprovalCard({
   toolCall,
+  disabled = false,
   onResolveApproval,
 }: ToolApprovalCardProps) {
   const submitting = toolCall.status === "submitting";
@@ -82,7 +84,7 @@ export const ToolApprovalCard = memo(function ToolApprovalCard({
       <div className={styles.actions}>
         <button
           className={`${styles.action} ${styles.allowOnce}`}
-          disabled={submitting}
+          disabled={submitting || disabled}
           type="button"
           onClick={() => void onResolveApproval(toolCall, "ALLOW_ONCE")}
         >
@@ -90,7 +92,7 @@ export const ToolApprovalCard = memo(function ToolApprovalCard({
         </button>
         <button
           className={`${styles.action} ${styles.allowSession}`}
-          disabled={submitting}
+          disabled={submitting || disabled}
           type="button"
           onClick={() => void onResolveApproval(toolCall, "ALLOW_SESSION")}
         >
@@ -98,7 +100,7 @@ export const ToolApprovalCard = memo(function ToolApprovalCard({
         </button>
         <button
           className={`${styles.action} ${styles.deny}`}
-          disabled={submitting}
+          disabled={submitting || disabled}
           type="button"
           onClick={() => void onResolveApproval(toolCall, "DENY")}
         >

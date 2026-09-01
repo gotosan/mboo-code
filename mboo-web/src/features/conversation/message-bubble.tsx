@@ -1,6 +1,6 @@
 "use client";
 
-import { Forward, RotateCcw, Square, ThumbsUp } from "lucide-react";
+import { Forward, LoaderCircle, RotateCcw, Square, ThumbsUp } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import AssistantMarkdown from "@/components/assistant-markdown";
 import {
@@ -24,6 +24,7 @@ export const MessageBubble = memo(function MessageBubble({
   onAskProgress,
   toErrorMessage,
   onStop,
+  isCancelling,
 }: {
   message: ChatMessage;
   sessionId: string;
@@ -33,6 +34,7 @@ export const MessageBubble = memo(function MessageBubble({
   onAskProgress: (toolCallId: string, progress: AskDraftProgress) => void;
   toErrorMessage: (error: unknown) => string;
   onStop?: () => void;
+  isCancelling: boolean;
 }) {
   const [hasArrivalImpact, setHasArrivalImpact] = useState(false);
   const previousMessageStateRef = useRef<typeof message.state>(undefined);
@@ -87,6 +89,7 @@ export const MessageBubble = memo(function MessageBubble({
                       toErrorMessage={toErrorMessage}
                       onCancel={onStop}
                       onAskProgress={onAskProgress}
+                      isCancelling={isCancelling}
                     />
                   </div>
                 );
@@ -105,6 +108,7 @@ export const MessageBubble = memo(function MessageBubble({
                     toErrorMessage={toErrorMessage}
                     onCancel={onStop}
                     onAskProgress={onAskProgress}
+                    isCancelling={isCancelling}
                   />
                 ) : null}
               </>
@@ -139,18 +143,18 @@ export const MessageBubble = memo(function MessageBubble({
   );
 });
 
-export const RunningNotice = memo(function RunningNotice({ activityMessage, onStop }: { activityMessage: string; onStop: () => void }) {
+export const RunningNotice = memo(function RunningNotice({ activityMessage, isCancelling, cancelError, onStop }: { activityMessage: string; isCancelling: boolean; cancelError: string; onStop: () => void }) {
   return (
     <div className={styles.runningNotice} role="status" aria-live="polite">
       <div className={styles.runningContent}>
         <span aria-hidden className={styles.runningDot} />
         {/* 活动文案只服务视觉；稳定的屏幕阅读器文案避免每个阶段变化都重复播报。 */}
-        <span aria-hidden className={styles.runningMessage}>正在生成回复 · {activityMessage}</span>
-        <span className="sr-only">正在生成回复</span>
+        <span aria-hidden className={styles.runningMessage}>{isCancelling ? (cancelError ? "取消失败，可重试" : "正在等待后端确认取消") : `正在生成回复 · ${activityMessage}`}</span>
+        <span className="sr-only">{isCancelling ? "正在取消任务" : "正在生成回复"}</span>
       </div>
-      <button className={styles.stopButton} type="button" onClick={onStop}>
-        <Square className={styles.stopIcon} aria-hidden />
-        停止
+      <button className={styles.stopButton} disabled={isCancelling && !cancelError} type="button" onClick={onStop}>
+        {isCancelling ? <LoaderCircle className={styles.stopIcon} aria-hidden /> : <Square className={styles.stopIcon} aria-hidden />}
+        {isCancelling ? (cancelError ? "重试取消" : "正在取消") : "停止"}
       </button>
     </div>
   );

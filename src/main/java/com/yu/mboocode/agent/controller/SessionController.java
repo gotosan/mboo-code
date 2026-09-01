@@ -46,6 +46,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 
@@ -165,6 +166,12 @@ public class SessionController {
     public R<Void> submitAskAnswer(@PathVariable String sessionId, @PathVariable String askId, @Valid @RequestBody AskAnswerReq req) {
         askService.submit(sessionId, askId, req.pageIndex(), req.action(), req.text(), req.actionId());
         return R.ok();
+    }
+
+    @Operation(summary = "取消当前 turn")
+    @PostMapping("/{sessionId}/turns/{turnId}/cancel")
+    public Mono<R<Void>> cancelTurn(@PathVariable String sessionId, @PathVariable String turnId) {
+        return turnService.cancelTurn(sessionId, turnId).thenReturn(R.ok());
     }
 
     @Operation(summary = "聊天")
