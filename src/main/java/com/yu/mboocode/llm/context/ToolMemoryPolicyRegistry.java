@@ -11,10 +11,11 @@ import java.util.Map;
 public class ToolMemoryPolicyRegistry {
     private static final ToolMemoryPolicy DEFAULT_POLICY = new FixedPolicy(true, true, false);
     private static final ToolMemoryPolicy ACTIVATE_SKILL_POLICY = new FixedPolicy(false, false, true);
-    private static final ToolMemoryPolicy READ_SKILL_RESOURCE_POLICY = new FixedPolicy(false, true, false);
+    private static final ToolMemoryPolicy PRESERVE_RAW_POLICY = new FixedPolicy(false, true, false);
     private static final Map<String, ToolMemoryPolicy> POLICIES = Map.of(
             "activate_skill", ACTIVATE_SKILL_POLICY,
-            "read_skill_resource", READ_SKILL_RESOURCE_POLICY
+            "read_skill_resource", PRESERVE_RAW_POLICY,
+            "ask_user_question", PRESERVE_RAW_POLICY
     );
 
     public ToolMemoryPolicy policy(String toolName) {
