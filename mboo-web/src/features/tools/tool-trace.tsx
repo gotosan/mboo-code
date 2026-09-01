@@ -32,7 +32,7 @@ export const ToolTrace = memo(function ToolTrace({
   toErrorMessage,
   onCancel,
 }: ToolTraceProps) {
-  const askTool = toolCalls.find((tool) => tool.toolName === "ask");
+  const askTool = toolCalls.find((tool) => tool.toolName === "ask_user_question");
   if (askTool) return <AskCard toolCall={askTool} sessionId={sessionId} onCancel={onCancel ?? (() => undefined)} />;
   const [open, setOpen] = useState(false);
   const hasPendingApproval = toolCalls.some(

@@ -350,7 +350,7 @@ public class TurnService {
                         ToolExecutionRequest request = toolExecution.request();
                         boolean failed = toolExecution.hasFailed();
                         String resultText = toolResultText(toolExecution);
-                        if ("ask".equals(request.name()) && failed && resultText.contains("ASK_CANCELLED")) return;
+                        if ("ask_user_question".equals(request.name()) && failed && resultText.contains("ASK_CANCELLED")) return;
                         ToolEventFormatterRegistry.EndedFormat endedFormat = toolEventFormatterRegistry.formatEnded(request.name(), resultText, failed);
                         String resultPreview = skillResultPreview(sessionTurn.sessionId(), request, failed, endedFormat.resultPreview());
                         ToolCallEndedPayload.ToolCallStatus status = failed ? ToolCallEndedPayload.ToolCallStatus.FAILED : ToolCallEndedPayload.ToolCallStatus.COMPLETED;
@@ -368,7 +368,7 @@ public class TurnService {
                                 .errorCode(failed ? StrUtil.blankToDefault(endedFormat.errorCode(), "TOOL_EXECUTION_FAILED") : null)
                                 .errorMessage(failed ? StrUtil.blankToDefault(endedFormat.errorMessage(), endedFormat.resultPreview()) : null)
                                 .durationMs(toolExecution.duration().toMillis())
-                                .askAnswers("ask".equals(request.name()) && !failed ? parseAskAnswers(resultText) : null)
+                                .askAnswers("ask_user_question".equals(request.name()) && !failed ? parseAskAnswers(resultText) : null)
                                 .build();
 
                         emitEvent(sink, () -> sessionEventStore.appendSession(

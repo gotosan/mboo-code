@@ -24,7 +24,7 @@ public class ToolEventFormatterRegistry {
     private UrlRedactor urlRedactor;
 
     public String formatArguments(String toolName, String argumentsJson) {
-        if ("ask".equals(toolName)) return argumentsJson == null ? "{}" : argumentsJson;
+        if ("ask_user_question".equals(toolName)) return argumentsJson == null ? "{}" : argumentsJson;
         if ("run_command".equals(toolName)) {
             JSONObject arguments = parseObject(argumentsJson);
             if (arguments == null) return truncate(argumentsJson, 16_500);

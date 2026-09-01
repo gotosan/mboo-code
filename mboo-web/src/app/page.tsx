@@ -68,7 +68,7 @@ const TOOL_LABELS: Record<string, string> = {
   web_fetch: "网页抓取",
   activate_skill: "激活 Skill",
   read_skill_resource: "读取 Skill 资源",
-  ask: "提问",
+  ask_user_question: "提问",
 };
 
 const FILE_TOOL_NAMES = new Set([
@@ -1136,7 +1136,7 @@ export default function Home() {
       if (isToolCallEvent(event)) {
         flushPendingAssistantDeltas();
         upsertToolCall(targetKey, event);
-        if (event.type === "TOOL_CALL_STARTED" && event.payload.toolName === "ask" && !notifiedAskRef.current.has(event.payload.toolCallId)) {
+        if (event.type === "TOOL_CALL_STARTED" && event.payload.toolName === "ask_user_question" && !notifiedAskRef.current.has(event.payload.toolCallId)) {
           notifiedAskRef.current.add(event.payload.toolCallId);
           const notificationTitle = sessionTitleForNotification(targetKey, sessionsRef.current, archivedSessionsRef.current);
           if (typeof window !== "undefined" && !window.mbooDesktop && typeof Notification !== "undefined" && Notification.permission === "default") {
@@ -1224,7 +1224,7 @@ export default function Home() {
         markStreamingMessagesCancelled(targetKey, event.turnId);
         commitSessionMessages(targetKey, (current) => current.map((message) => {
           if (message.turnId !== event.turnId) return message;
-          const parts = (message.parts ?? toolCallsToParts(message.toolCalls)).map((part) => part.type === "tool" && part.toolCall.toolName === "ask" && part.toolCall.status === "started"
+          const parts = (message.parts ?? toolCallsToParts(message.toolCalls)).map((part) => part.type === "tool" && part.toolCall.toolName === "ask_user_question" && part.toolCall.status === "started"
             ? { ...part, toolCall: { ...part.toolCall, status: "failed" as const, errorMessage: "提问已取消" } } : part);
           return withAssistantDerivedFields({ ...message, parts });
         }));
@@ -3023,7 +3023,7 @@ function toToolCallView(event: ToolCallEvent): ToolCallView {
   const { payload } = event;
   const toolName = payload.toolName || "unknown_tool";
   const parsed = parseToolArguments(toolName, payload.arguments);
-  const askQuestions = toolName === "ask" && Array.isArray((parsed.parsedArguments as { questions?: unknown } | undefined)?.questions)
+  const askQuestions = toolName === "ask_user_question" && Array.isArray((parsed.parsedArguments as { questions?: unknown } | undefined)?.questions)
     ? ((parsed.parsedArguments as { questions: AskQuestion[] }).questions)
     : undefined;
 
@@ -3275,11 +3275,11 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
   // 历史回放中尚未结束的授权卡片已失效，禁止再次点击
   return messages.map((message) => {
     const invalidate = (toolCall: ToolCallView): ToolCallView =>
-      toolCall.status === "waiting_approval" || toolCall.status === "submitting" || (toolCall.toolName === "ask" && toolCall.status === "started")
+      toolCall.status === "waiting_approval" || toolCall.status === "submitting" || (toolCall.toolName === "ask_user_question" && toolCall.status === "started")
         ? {
             ...toolCall,
             status: "failed" as const,
-            errorMessage: toolCall.errorMessage || (toolCall.toolName === "ask" ? "提问请求已失效" : "授权请求已失效"),
+            errorMessage: toolCall.errorMessage || (toolCall.toolName === "ask_user_question" ? "提问请求已失效" : "授权请求已失效"),
             approvalId: undefined,
           }
         : toolCall;
