@@ -24,7 +24,7 @@ public class AskService {
     private final Map<String, PendingAsk> active = new ConcurrentHashMap<>();
 
     public static List<AskQuestion> validateAndNormalize(List<AskQuestion> questions) {
-        if (questions == null || questions.isEmpty() || questions.size() > 3) throw new AskTool.AskToolException("ASK_INVALID_ARGUMENT", "questions 必须包含 1 到 3 个问题页");
+        if (questions == null || questions.isEmpty() || questions.size() > 6) throw new AskTool.AskToolException("ASK_INVALID_ARGUMENT", "questions 必须包含 1 到 6 个问题页");
         List<AskQuestion> normalized = new ArrayList<>();
         for (AskQuestion page : questions) {
             if (page == null || StrUtil.isBlank(page.question()) || page.question().length() > 200) throw new AskTool.AskToolException("ASK_INVALID_ARGUMENT", "问题不能为空且不能超过 200 个字符");

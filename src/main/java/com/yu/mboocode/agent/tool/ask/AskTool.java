@@ -21,7 +21,7 @@ public class AskTool {
     @Resource
     private AskService askService;
 
-    @Tool(name = "ask_user_question", value = "当存在会影响结果、范围、验收或风险的关键歧义，且无法从上下文、工具或合理默认值可靠确定时，主动向用户提问并提供最多三个推荐回答；最多一次性提出 3 个问题。")
+    @Tool(name = "ask_user_question", value = "当存在会影响结果、范围、验收或风险的关键歧义，且无法从上下文、工具或合理默认值可靠确定时，主动向用户提问并提供最多三个推荐回答；最多一次性提出 6 个问题。")
     @ToolPermission(ToolPermissionType.NONE)
     public String ask(@P(name = "questions", value = "问题页数组，每页包含 question 和 answers；每页恰有一个 recommended=true") List<AskQuestion> questions,
                       @ToolMemoryId String sessionId) {
