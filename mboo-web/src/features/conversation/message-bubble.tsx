@@ -13,6 +13,7 @@ import {
   type ToolResultLoader,
 } from "@/features/agent-run/message-model";
 import { ToolTrace } from "@/features/tools/tool-trace";
+import { parseUserMessageContent } from "@/lib/user-message-content";
 import styles from "./message-bubble.module.css";
 
 export const MessageBubble = memo(function MessageBubble({
@@ -121,13 +122,26 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   if (message.role === "user") {
+    const contentSegments = parseUserMessageContent(message.text || " ");
     return (
       <article className="rounded-[var(--radius-sm)] border border-line bg-panel-muted/70 px-3 py-2">
         <div className="mb-1 flex items-center gap-2">
           <span className="text-xs font-semibold text-text-2">我</span>
           {message.createdAt ? <span className="text-[11px] text-text-3">{formatSessionTime(message.createdAt)}</span> : null}
         </div>
-        <p className="whitespace-pre-wrap break-words text-sm leading-7 text-text-1">{message.text || " "}</p>
+        <p className="whitespace-pre-wrap break-words text-sm leading-7 text-text-1">
+          {contentSegments.map((segment, index) => segment.type === "skill" ? (
+            <span
+              key={`skill-${segment.name}-${index}`}
+              className="mr-1.5 inline-flex max-w-full translate-y-px items-center gap-1 rounded-[4px] border border-accent/25 bg-panel px-1.5 py-0.5 align-baseline text-[11px] font-medium leading-4 text-accent shadow-[inset_0_1px_0_rgb(255_255_255/0.7)]"
+              aria-label={`Skill：${segment.name}`}
+              title={`Skill：${segment.name}`}
+            >
+              <span aria-hidden className="text-[10px] text-text-3">/</span>
+              <span className="truncate">{segment.name}</span>
+            </span>
+          ) : <span key={`text-${index}`}>{segment.text}</span>)}
+        </p>
       </article>
     );
   }

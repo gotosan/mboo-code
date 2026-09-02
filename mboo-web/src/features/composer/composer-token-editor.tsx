@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { SkillSuggestion } from "@/lib/skill-types";
+import { getNextSkillSuggestionIndex } from "./composer-token-navigation";
 import styles from "./composer-token-editor.module.css";
 
 const SKILL_TAG_PATTERN = /<skill>([a-z0-9]+(?:-[a-z0-9]+)*)<\/skill>/g;
@@ -20,11 +21,13 @@ type ComposerTokenEditorProps = {
 
 export function ComposerTokenEditor({ id, value, disabled, workspaceId, placeholder, onChange, onSubmit }: ComposerTokenEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const activeSuggestionRef = useRef<HTMLButtonElement>(null);
   const [suggestions, setSuggestions] = useState<SkillSuggestion[]>([]);
   const [suggestionOpen, setSuggestionOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [knownSkillNames, setKnownSkillNames] = useState<Set<string>>(new Set());
   const parsed = useMemo(() => parseSerializedValue(value, knownSkillNames), [knownSkillNames, value]);
+  const suggestionListId = `${id}-skill-suggestions`;
 
   const closeSuggestions = useCallback(() => { setSuggestionOpen(false); setSuggestions([]); setActiveIndex(0); }, []);
 
@@ -63,6 +66,11 @@ export function ComposerTokenEditor({ id, value, disabled, workspaceId, placehol
 
   useEffect(() => { if (disabled) closeSuggestions(); }, [closeSuggestions, disabled]);
 
+  useEffect(() => {
+    // 键盘焦点留在输入框内时，浏览器不会替 listbox 自动滚动当前选项。
+    if (suggestionOpen) activeSuggestionRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, suggestionOpen]);
+
   const updateText = (text: string, selectionStart: number) => {
     onChange(serialize(parsed.skillNames, text));
     void search(text, selectionStart);
@@ -99,6 +107,9 @@ export function ComposerTokenEditor({ id, value, disabled, workspaceId, placehol
       disabled={disabled}
       placeholder={placeholder}
       value={parsed.text}
+      aria-controls={suggestionOpen ? suggestionListId : undefined}
+      aria-activedescendant={suggestionOpen && suggestions.length ? `${suggestionListId}-${activeIndex}` : undefined}
+      aria-expanded={suggestionOpen}
       onBlur={() => window.setTimeout(closeSuggestions, 120)}
       onChange={(event) => updateText(event.target.value, event.target.selectionStart)}
       onClick={(event) => void search(event.currentTarget.value, event.currentTarget.selectionStart)}
@@ -106,7 +117,7 @@ export function ComposerTokenEditor({ id, value, disabled, workspaceId, placehol
         if (suggestionOpen && suggestions.length) {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
-            setActiveIndex((current) => (current + (event.key === "ArrowDown" ? 1 : -1) + suggestions.length) % suggestions.length);
+            setActiveIndex((current) => getNextSkillSuggestionIndex(current, suggestions.length, event.key === "ArrowDown" ? "down" : "up"));
             return;
           }
           if (event.key === "Escape") { event.preventDefault(); closeSuggestions(); return; }
@@ -118,7 +129,7 @@ export function ComposerTokenEditor({ id, value, disabled, workspaceId, placehol
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); onSubmit(); }
       }}
     />
-    {suggestionOpen ? <div className={styles.menu} role="listbox" aria-label="Skill 联想">{suggestions.map((suggestion, index) => <button key={suggestion.name} className={index === activeIndex ? styles.optionActive : styles.option} type="button" role="option" aria-selected={index === activeIndex} onMouseDown={(event) => { event.preventDefault(); selectSuggestion(suggestion); }}><strong>/{suggestion.name}</strong><span>{suggestion.description}</span><small>{sourceLabel(suggestion.source)}</small></button>)}</div> : null}
+    {suggestionOpen ? <div className={styles.menu} id={suggestionListId} role="listbox" aria-label="Skill 联想">{suggestions.map((suggestion, index) => <button ref={index === activeIndex ? activeSuggestionRef : null} id={`${suggestionListId}-${index}`} key={suggestion.name} className={index === activeIndex ? styles.optionActive : styles.option} type="button" role="option" aria-selected={index === activeIndex} onMouseDown={(event) => { event.preventDefault(); selectSuggestion(suggestion); }}><strong>/{suggestion.name}</strong><span>{suggestion.description}</span><small>{sourceLabel(suggestion.source)}</small></button>)}</div> : null}
   </div>;
 }
 
