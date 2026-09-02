@@ -274,6 +274,7 @@ export default function Home() {
   const currentSessionIdRef = useRef("");
   const shouldLoadSessionRef = useRef(false);
   const workspaceSelectionVersionRef = useRef(0);
+  const workspaceRefreshVersionRef = useRef(0);
   // 按会话缓存消息，避免串会话 / 切换后丢失流式结果
   const messagesBySessionRef = useRef<Record<string, ChatMessage[]>>({});
   const pendingLocalUserIdBySessionRef = useRef<Record<string, string | null>>({});
@@ -1381,8 +1382,41 @@ export default function Home() {
     }
   }, [applySessionListSnapshot]);
 
+  const refreshWorkspaces = useCallback(async (options?: { quiet?: boolean }) => {
+    const quiet = options?.quiet === true;
+    const requestVersion = workspaceRefreshVersionRef.current + 1;
+    workspaceRefreshVersionRef.current = requestVersion;
+    if (!quiet) setIsLoadingWorkspaces(true);
+    try {
+      const response = await fetch("/api/workspace/list", { cache: "no-store" });
+      const data = await readApiData<FeatureWorkspaceInfo[]>(response);
+      if (workspaceRefreshVersionRef.current !== requestVersion) return;
+      setWorkspaces(data ?? []);
+      queryClient.setQueryData(["workspaces"], data ?? []);
+      setWorkspaceError("");
+    } catch (error) {
+      if (workspaceRefreshVersionRef.current === requestVersion) setWorkspaceError(toErrorMessage(error));
+    } finally {
+      if (workspaceRefreshVersionRef.current === requestVersion) setIsLoadingWorkspaces(false);
+    }
+  }, [queryClient]);
+
+  const refreshSidebarData = useCallback(async (options?: {
+    mode?: "replace" | "diff-insert";
+    quiet?: boolean;
+  }) => {
+    await Promise.all([
+      refreshSessions(options),
+      refreshWorkspaces({ quiet: options?.quiet }),
+    ]);
+  }, [refreshSessions, refreshWorkspaces]);
+
+  const refreshSidebar = useCallback(() => {
+    void refreshSidebarData();
+  }, [refreshSidebarData]);
+
   /**
-   * 新增会话落库后：先拉后台最新列表，与本地对比后插入新项；
+   * 新增会话落库后：同步工作区和最新列表，与本地对比后插入新项；
    * 若竞态下远端尚无该 id，再拉详情补插。
    */
   const syncNewSessionIntoList = useCallback(
@@ -1391,7 +1425,7 @@ export default function Home() {
         return;
       }
       try {
-        await refreshSessions({ mode: "diff-insert", quiet: true });
+        await refreshSidebarData({ mode: "diff-insert", quiet: true });
         if (sessionsRef.current.some((session) => session.id === nextSessionId)) {
           return;
         }
@@ -1437,26 +1471,11 @@ export default function Home() {
         // 列表同步失败不打断主对话流
       }
     },
-    [queryClient, refreshSessions],
+    [queryClient, refreshSidebarData],
   );
 
   // 解耦 bindStreamSessionId 与 syncNewSessionIntoList 的定义顺序
   syncNewSessionIntoListRef.current = syncNewSessionIntoList;
-
-  const refreshWorkspaces = useCallback(async () => {
-    setIsLoadingWorkspaces(true);
-    try {
-      const response = await fetch("/api/workspace/list", { cache: "no-store" });
-      const data = await readApiData<FeatureWorkspaceInfo[]>(response);
-      setWorkspaces(data ?? []);
-      queryClient.setQueryData(["workspaces"], data ?? []);
-      setWorkspaceError("");
-    } catch (error) {
-      setWorkspaceError(toErrorMessage(error));
-    } finally {
-      setIsLoadingWorkspaces(false);
-    }
-  }, [queryClient]);
 
   const loadSessionEvents = useCallback(async (
     nextSessionId: string,
@@ -1567,12 +1586,8 @@ export default function Home() {
   }, [applyModelName, preferredModelName, queryClient, rememberSessionPreview]);
 
   useEffect(() => {
-    void refreshSessions();
-  }, [refreshSessions]);
-
-  useEffect(() => {
-    void refreshWorkspaces();
-  }, [refreshWorkspaces]);
+    void refreshSidebarData();
+  }, [refreshSidebarData]);
 
   useEffect(() => {
     if (!sessionId || !shouldLoadSessionRef.current || isLoadingSessions) {
@@ -1997,7 +2012,7 @@ export default function Home() {
         }
         addSystemMessage(message, "error", streamOwner.sessionKey);
       } finally {
-        void refreshSessions();
+        void refreshSidebarData();
         if (getSessionRuntime(streamOwner.sessionKey).status !== "cancelling") sessionRuntimeStore.getState().finish(streamOwner.sessionKey, controller);
         streamOwnersRef.current.delete(controller);
         if (isViewingSessionKey(streamOwner.sessionKey) && getSessionRuntime(streamOwner.sessionKey).status !== "error") setConnectionState("idle");
@@ -2021,7 +2036,7 @@ export default function Home() {
       pendingWorkspacePath,
       permissionMode,
       reasoningEffort,
-      refreshSessions,
+      refreshSidebarData,
       rememberSessionPreview,
       sessionId,
       sessions,
@@ -2404,7 +2419,7 @@ export default function Home() {
       onRefreshWorkspaces={() => void refreshWorkspaces()}
       onSelectWorkspace={selectSavedWorkspace}
       onDeleteWorkspace={(workspace) => void deleteWorkspace(workspace)}
-      onRefresh={() => void refreshSessions()}
+      onRefresh={refreshSidebar}
       onTabChange={(tab) => {
         setSessionListTab(tab);
         setEditingSessionId(null);

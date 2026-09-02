@@ -117,6 +117,7 @@ export const SessionListPanel = memo(function SessionListPanel({
   const [confirmingWorkspaceId, setConfirmingWorkspaceId] = useState<string | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>({});
   const sessionScrollerRef = useRef<HTMLDivElement>(null);
+  const refreshedUnknownWorkspaceKeyRef = useRef("");
   const normalizedQuery = sessionQuery.trim().toLocaleLowerCase();
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
   const workspaceGroups = workspaces.map((workspace) => {
@@ -127,10 +128,26 @@ export const SessionListPanel = memo(function SessionListPanel({
     });
     return { workspace, sessions };
   }).filter(({ workspace, sessions }) => !normalizedQuery || sessions.length > 0 || workspace.name.toLocaleLowerCase().includes(normalizedQuery));
-  const unassignedSessions = visibleSessions.filter((session) => {
-    if (session.workspaceId && workspaceIds.has(session.workspaceId)) return false;
+  const defaultWorkspaceSessions = visibleSessions.filter((session) => {
+    if (session.workspaceId) return false;
     return !normalizedQuery || sessionListTitle(session, sessionPreviews[session.id]).toLocaleLowerCase().includes(normalizedQuery);
   });
+  const unknownWorkspaceSessions = visibleSessions.filter((session) => {
+    if (!session.workspaceId || workspaceIds.has(session.workspaceId)) return false;
+    return !normalizedQuery || sessionListTitle(session, sessionPreviews[session.id]).toLocaleLowerCase().includes(normalizedQuery);
+  });
+  const unknownWorkspaceKey = Array.from(new Set(unknownWorkspaceSessions.map((session) => session.workspaceId))).sort().join("|");
+
+  useEffect(() => {
+    if (!unknownWorkspaceKey) {
+      refreshedUnknownWorkspaceKeyRef.current = "";
+      return;
+    }
+    if (isLoadingSessions || isLoadingWorkspaces || refreshedUnknownWorkspaceKeyRef.current === unknownWorkspaceKey) return;
+    refreshedUnknownWorkspaceKeyRef.current = unknownWorkspaceKey;
+    onRefresh();
+  }, [isLoadingSessions, isLoadingWorkspaces, onRefresh, unknownWorkspaceKey]);
+
   const toggleWorkspace = (workspaceId: string) => {
     setExpandedWorkspaceIds((current) => ({ ...current, [workspaceId]: !(current[workspaceId] ?? true) }));
   };
@@ -244,7 +261,7 @@ export const SessionListPanel = memo(function SessionListPanel({
         <div className={styles.workspaceListHeader}>
           <div className={styles.workspaceListTitle}>
             <Folder className={styles.workspaceListIcon} aria-hidden />
-            <span>空间（{workspaceGroups.length + (unassignedSessions.length > 0 ? 1 : 0)}）</span>
+            <span>空间（{workspaceGroups.length + (defaultWorkspaceSessions.length > 0 ? 1 : 0) + (unknownWorkspaceSessions.length > 0 ? 1 : 0)}）</span>
           </div>
           <button aria-label="刷新工作区列表" className={styles.workspaceRefresh} disabled={isLoadingWorkspaces} type="button" onClick={onRefreshWorkspaces}>
             <RefreshCw className={`size-3 ${isLoadingWorkspaces ? "motion-safe:animate-spin" : ""}`} aria-hidden />
@@ -311,16 +328,33 @@ export const SessionListPanel = memo(function SessionListPanel({
           );
         }) : null}
 
-        {!isLoadingWorkspaces && unassignedSessions.length > 0 ? (
+        {!isLoadingWorkspaces && unknownWorkspaceSessions.length > 0 ? (
+          <div className={styles.workspaceTree}>
+            <div className={styles.workspaceError} role="alert">
+              <span>部分会话的工作区信息尚未同步</span>
+              <button type="button" onClick={onRefresh}>重试</button>
+            </div>
+            <div className={styles.workspaceItem}>
+              <span className={styles.workspaceTogglePlaceholder} aria-hidden />
+              <div className={styles.workspaceOpenStatic}>
+                <Folder className={styles.workspaceFolderIcon} aria-hidden />
+                <span className={styles.workspaceCopy}><span className={styles.workspaceName}>工作区信息待同步</span><span className={styles.workspaceMeta}>{unknownWorkspaceSessions.length} 个会话</span></span>
+              </div>
+            </div>
+            <div className={styles.workspaceChildren}>{unknownWorkspaceSessions.map((session) => renderSessionRow(session, true))}</div>
+          </div>
+        ) : null}
+
+        {!isLoadingWorkspaces && defaultWorkspaceSessions.length > 0 ? (
           <div className={styles.workspaceTree}>
             <div className={styles.workspaceItem}>
               <span className={styles.workspaceTogglePlaceholder} aria-hidden />
               <div className={styles.workspaceOpenStatic}>
                 <Folder className={styles.workspaceFolderIcon} aria-hidden />
-                <span className={styles.workspaceCopy}><span className={styles.workspaceName}>默认工作区</span><span className={styles.workspaceMeta}>{unassignedSessions.length} 个会话</span></span>
+                <span className={styles.workspaceCopy}><span className={styles.workspaceName}>默认工作区</span><span className={styles.workspaceMeta}>{defaultWorkspaceSessions.length} 个会话</span></span>
               </div>
             </div>
-            <div className={styles.workspaceChildren}>{unassignedSessions.map((session) => renderSessionRow(session, true))}</div>
+            <div className={styles.workspaceChildren}>{defaultWorkspaceSessions.map((session) => renderSessionRow(session, true))}</div>
           </div>
         ) : null}
 
