@@ -61,6 +61,11 @@ public class AiCodeServiceFactory {
     @Resource
     private SkillChatRequestTransformer skillChatRequestTransformer;
 
+    @Resource
+    private com.yu.mboocode.agent.subagent.AgentModelCoordinator agentModelCoordinator;
+    @Resource
+    private com.yu.mboocode.agent.subagent.AgentExecutionRegistry executionRegistry;
+
     @Bean
     public ChatMemoryProvider chatMemoryProvider() {
         return memoryId -> MessageWindowChatMemory.builder()
@@ -92,18 +97,24 @@ public class AiCodeServiceFactory {
         return AiServices
                 .builder(AiCodeService.class)
                 .chatModel(chatModel)
-                .streamingChatModel(streamingChatModel)
+                .streamingChatModel(agentModelCoordinator.wrap(streamingChatModel))
                 .chatMemoryProvider(chatMemoryProvider)
-                .systemMessageTransformer((systemMessage, invocationContext) -> {
-                    // 在基础组合系统提示词后追加会话摘要；不新增第二条系统消息。
-                    Object memoryId = invocationContext == null ? null : invocationContext.chatMemoryId();
-                    com.yu.mboocode.llm.model.ChatMemory memory = memoryId == null ? null : chatMemoryService.getById(String.valueOf(memoryId));
-                    return systemPromptService.appendConversationState(systemMessage, memory == null ? null : memory.getSummaryText(),
-                            memory == null ? null : memory.getRetainedToolResultsJson());
+                .chatRequestTransformer(agentModelCoordinator::transform)
+                .maxToolCallingRoundTrips(100)
+                .toolProvider(request -> {
+                    String sessionId = String.valueOf(request.chatMemoryId());
+                    List<AiServiceTool> available = new ArrayList<>(tools);
+                    available.addAll(compositeToolProvider.toolProvider().provideTools(request).aiServiceTools());
+                    var execution = executionRegistry.require(sessionId);
+                    var selected = available.stream().filter(tool -> executionRegistry.allows(sessionId, tool.name())).toList();
+                    if (execution.child()) {
+                        var parent = executionRegistry.require(execution.identity.parentSessionId());
+                        selected = selected.stream().filter(tool -> parent.toolNames != null && parent.toolNames.contains(tool.name())).toList();
+                    }
+                    execution.toolNames = selected.stream().map(AiServiceTool::name).collect(java.util.stream.Collectors.toUnmodifiableSet());
+                    return dev.langchain4j.service.tool.ToolProviderResult.builder().addAll(selected.stream().map(tool -> AiServiceTool.builder()
+                            .toolSpecification(tool.toolSpecification()).toolExecutor(new com.yu.mboocode.agent.subagent.RoleToolExecutor(tool.toolExecutor(), executionRegistry)).build()).toList()).build();
                 })
-                .chatRequestTransformer(skillChatRequestTransformer::transform)
-                .tools(tools)
-                .toolProvider(compositeToolProvider.toolProvider())
                 .registerListeners(modelUsageRequestListener, modelUsageResponseListener)
                 .build();
     }

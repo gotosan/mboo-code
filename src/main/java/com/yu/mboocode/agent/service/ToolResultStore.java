@@ -99,6 +99,11 @@ public class ToolResultStore {
                 artifact.getRawOutputSizeBytes(), artifact.getCreatedAt());
     }
 
+    public Path resultFilePath(String sessionId, String resultId) {
+        getArtifact(sessionId, resultId);
+        return artifactPath(resultDirectory(getSession(sessionId).getTranscriptUri()), resultId);
+    }
+
     public String getResultContent(String sessionId, String resultId) {
         return getArtifact(sessionId, resultId).getResultText();
     }

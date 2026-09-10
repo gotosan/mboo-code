@@ -71,13 +71,18 @@ public class ToolApprovalService {
     private McpServerRuntime mcpServerRuntime;
     @Resource
     private SkillRuntime skillRuntime;
+    @Resource
+    private com.yu.mboocode.agent.subagent.AgentExecutionRegistry executionRegistry;
+    @Resource
+    private com.yu.mboocode.agent.subagent.SubagentService subagentService;
     private final Map<String, PendingApprovalStage> pendingByApprovalId = new ConcurrentHashMap<>();
     private final Map<String, PendingToolInvocation> invocationsByToolCall = new ConcurrentHashMap<>();
 
     public ApprovalRequestStatus requestIfNeeded(SessionTurn sessionTurn, String messageId, ToolExecutionRequest request,
                                                   Consumer<SessionEvent> eventEmitter, Runnable toolStartedEmitter) {
+        if (!executionRegistry.allows(sessionTurn.sessionId(), request.name())) return ApprovalRequestStatus.INVALID;
         if (mcpServerRuntime.isMcpTool(request.name()) || skillRuntime.isSkillTool(request.name())) return ApprovalRequestStatus.ALLOWED;
-        String key = toolCallKey(sessionTurn.sessionId(), request.id());
+        String key = sessionTurn.sessionId() + ":" + sessionTurn.turnId() + ":" + request.id();
         ToolPermissionChain chain;
         try {
             validatorRegistry.validate(sessionTurn.sessionId(), request);
@@ -149,9 +154,31 @@ public class ToolApprovalService {
 
     public void resolve(String sessionId, String approvalId, ToolApprovalDecision decision) {
         PendingApprovalStage pending = pendingByApprovalId.get(approvalId);
-        if (pending == null || !pending.invocation.sessionId.equals(sessionId)) throw new ServiceException("工具授权请求不存在或已失效");
-        if (decision == ToolApprovalDecision.ALLOW_SESSION) persistSessionGrant(sessionId, pending);
-        if (!pending.future().complete(decision)) throw new ServiceException("工具授权请求已处理");
+        if (pending == null || !sessionService.permissionOwner(pending.invocation.sessionId).equals(sessionId)) throw new ServiceException("工具授权请求不存在或已失效");
+        synchronized (pending.invocation) {
+            var execution = executionRegistry.get(pending.invocation.sessionId);
+            var owner = executionRegistry.get(sessionId);
+            if (pending.invocation.cancelled.get() || execution == null || execution.cancelled.get() || owner == null || owner.cancelled.get() || pending.future().isDone()) throw new ServiceException("工具授权请求已处理或执行已取消");
+            if (decision == ToolApprovalDecision.ALLOW_SESSION) persistSessionGrant(sessionId, pending);
+            if (!pending.future().complete(decision)) throw new ServiceException("工具授权请求已处理");
+        }
+        if (decision == ToolApprovalDecision.ALLOW_SESSION) reevaluateOwner(sessionId);
+    }
+
+    public void reevaluateOwner(String ownerSessionId) {
+        for (PendingApprovalStage pending : pendingByApprovalId.values()) {
+            var invocation = pending.invocation;
+            if (!sessionService.permissionOwner(invocation.sessionId).equals(ownerSessionId)) continue;
+            synchronized (invocation) {
+                var execution = executionRegistry.get(invocation.sessionId);
+                if (invocation.cancelled.get() || execution == null || execution.cancelled.get() || pending.future().isDone()) continue;
+                try {
+                    ToolPermissionChain current = evaluate(invocation.sessionId, invocation.request);
+                    boolean satisfied = current.requirements().stream().anyMatch(requirement -> pending.requirement.sameScope(requirement) && requirement.check().status() == PermissionCheck.CheckStatus.ALLOWED);
+                    if (satisfied) pending.future().complete(ToolApprovalDecision.ALLOW_SESSION);
+                } catch (RuntimeException ignored) { /* 复核失败保持原审批，不扩大授权。 */ }
+            }
+        }
     }
 
     public void cancelTurn(String sessionId, String turnId) {
@@ -161,9 +188,11 @@ public class ToolApprovalService {
         invocationsByToolCall.values().stream()
                 .filter(item -> item.sessionId.equals(sessionId) && item.turnId.equals(turnId))
                 .forEach(item -> {
-                    item.cancelled.set(true);
-                    PendingApprovalStage pending = item.currentApproval;
-                    if (pending != null) pending.future().complete(ToolApprovalDecision.DENY);
+                    synchronized (item) {
+                        item.cancelled.set(true);
+                        PendingApprovalStage pending = item.currentApproval;
+                        if (pending != null) pending.future().complete(ToolApprovalDecision.DENY);
+                    }
                 });
     }
 
@@ -174,9 +203,11 @@ public class ToolApprovalService {
         invocationsByToolCall.values().stream()
                 .filter(item -> item.sessionId.equals(sessionId))
                 .forEach(item -> {
-                    item.cancelled.set(true);
-                    PendingApprovalStage pending = item.currentApproval;
-                    if (pending != null) pending.future().complete(ToolApprovalDecision.DENY);
+                    synchronized (item) {
+                        item.cancelled.set(true);
+                        PendingApprovalStage pending = item.currentApproval;
+                        if (pending != null) pending.future().complete(ToolApprovalDecision.DENY);
+                    }
                 });
     }
 
@@ -196,7 +227,8 @@ public class ToolApprovalService {
     }
 
     public void completeInvocation(String sessionId, String toolCallId) {
-        invocationsByToolCall.remove(toolCallKey(sessionId, toolCallId));
+        PendingToolInvocation invocation = invocationsByToolCall.remove(toolCallKey(sessionId, toolCallId));
+        if (invocation != null && invocation.currentApproval != null) cleanupApproval(invocation.currentApproval);
     }
 
     private ToolAuthorizationResult evaluateImmediate(String sessionId, ToolExecutionRequest request) {
@@ -274,11 +306,12 @@ public class ToolApprovalService {
                         .approvalCount(approvalCount)
                         .build());
         invocation.eventEmitter.accept(event);
+        reevaluateOwner(sessionService.permissionOwner(invocation.sessionId));
         return pending;
     }
 
     private void cleanupApproval(PendingApprovalStage pending) {
-        pendingByApprovalId.remove(pending.approvalId(), pending);
+        if (pendingByApprovalId.remove(pending.approvalId(), pending)) subagentService.approvalUpdated(pending.invocation.sessionId, pending.invocation.turnId, pending.invocation.request.id(), pending.approvalId());
     }
 
     private int firstApprovalIndex(ToolPermissionChain chain, int start) {
@@ -303,6 +336,7 @@ public class ToolApprovalService {
     }
 
     private ToolPermissionChain evaluate(String sessionId, ToolExecutionRequest request) {
+        executionRegistry.checkTool(sessionId, request.name());
         ToolPermissionSpec spec = toolPermissionRegistry.get(request.name());
         ToolPermissionChain chain = evaluatorRegistry.evaluate(sessionId, request, spec);
         return applyPermissionMode(sessionId, chain);
@@ -363,7 +397,9 @@ public class ToolApprovalService {
 
     private String toolCallKey(String sessionId, String toolCallId) {
         if (StrUtil.isBlank(toolCallId)) throw new ServiceException("工具调用 ID 不能为空");
-        return sessionId + ":" + toolCallId;
+        var execution = executionRegistry.get(sessionId);
+        String turnId = execution == null ? sessionService.getSession(sessionId).getActiveTurnId() : execution.turn.turnId();
+        return sessionId + ":" + turnId + ":" + toolCallId;
     }
 
     private static final class PendingToolInvocation {

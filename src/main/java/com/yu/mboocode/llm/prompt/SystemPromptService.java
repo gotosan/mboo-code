@@ -26,11 +26,16 @@ public class SystemPromptService {
     @Resource
     private SkillRuntime skillRuntime;
 
+    @Resource
+    private com.yu.mboocode.agent.subagent.AgentExecutionRegistry executionRegistry;
     private volatile String templateText;
 
     public SystemPromptSnapshot capture(String sessionId, String workspacePath) {
         String workspaceInstructions = workspaceInstructionLoader.load(sessionId, workspacePath);
         String runtimeEnvironment = runtimeEnvironmentProvider.capture(workspacePath);
+        var execution = executionRegistry.get(sessionId);
+        if (execution != null && execution.child()) runtimeEnvironment += com.yu.mboocode.agent.subagent.AgentDefinition.require(execution.identity.agentRole()).instructions();
+        else runtimeEnvironment += "\n子 Agent 协作：委派时在 message 中说明目标、职责和修改范围，要求保留已有修改、冲突或扩围时返回原因。可能修改同一文件或共享资源时顺序委派。explorer 可后台探索，worker 固定前台。父轮次内收齐全部子执行结果，汇总并负责整体验证后再最终回复。";
         return new SystemPromptSnapshot(runtimeEnvironment, workspaceInstructions, skillRuntime.availableSkills(sessionId));
     }
 

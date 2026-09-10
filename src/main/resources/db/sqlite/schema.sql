@@ -64,3 +64,14 @@ CREATE TABLE IF NOT EXISTS mboo_mcp_servers (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_name
     ON mboo_mcp_servers(name COLLATE NOCASE);
+
+-- 子执行独立持久化；幂等及容量由编排服务原子受理。
+CREATE TABLE IF NOT EXISTS mboo_subagent_runs (
+    run_id TEXT PRIMARY KEY, agent_id TEXT, parent_session_id TEXT NOT NULL, parent_turn_id TEXT NOT NULL,
+    parent_message_id TEXT NOT NULL, parent_tool_call_id TEXT NOT NULL, invocation_key TEXT NOT NULL UNIQUE,
+    child_turn_id TEXT, role TEXT NOT NULL, mode TEXT NOT NULL, model_id TEXT NOT NULL, reasoning_effort TEXT,
+    status TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT,
+    result_id TEXT, final_text TEXT, error_code TEXT, error_message TEXT, usage TEXT, delivery_tool_call_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_subagent_parent_turn ON mboo_subagent_runs(parent_session_id, parent_turn_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_agent ON mboo_subagent_runs(agent_id, created_at);

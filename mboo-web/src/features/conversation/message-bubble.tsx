@@ -14,6 +14,7 @@ import {
 } from "@/features/agent-run/message-model";
 import { ToolTrace } from "@/features/tools/tool-trace";
 import { parseUserMessageContent } from "@/lib/user-message-content";
+import { SubagentCards } from "@/features/subagents/subagent-cards";
 import styles from "./message-bubble.module.css";
 
 export const MessageBubble = memo(function MessageBubble({
@@ -115,6 +116,7 @@ export const MessageBubble = memo(function MessageBubble({
               </>
             )}
           </div>
+          <SubagentCards sessionId={sessionId} messageId={message.id} />
           {message.state !== "streaming" ? <MessageActionBar onRegenerate={onRegenerate} onContinue={onContinue} /> : null}
         </div>
       </article>

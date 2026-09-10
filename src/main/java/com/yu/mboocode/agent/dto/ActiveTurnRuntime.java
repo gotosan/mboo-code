@@ -12,6 +12,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
+import java.util.List;
+import java.util.ArrayList;
+import com.yu.mboocode.agent.model.SessionEvent;
 
 /**
  * 当前进程内活跃 turn 的运行时状态。
@@ -43,6 +47,32 @@ public class ActiveTurnRuntime {
 
     @Schema(description = "最终清理是否已开始", hidden = true)
     private final AtomicBoolean cleanupStarted = new AtomicBoolean();
+
+    @Schema(description = "资源清理后才落盘和发布的终态事实", hidden = true)
+    private final List<Supplier<SessionEvent>> pendingTerminalEvents = new ArrayList<>();
+
+    @Schema(description = "清理后已持久化的终态事件", hidden = true)
+    private final List<SessionEvent> terminalEvents = new ArrayList<>();
+
+    @Schema(description = "模型流关闭后清理期间的子执行更新", hidden = true)
+    private final List<SessionEvent> cleanupEvents = new ArrayList<>();
+
+    public synchronized void bufferCleanupEvent(SessionEvent event) { cleanupEvents.add(event); }
+
+    public synchronized void deferTerminalEvent(Supplier<SessionEvent> event) { pendingTerminalEvents.add(event); }
+
+    public synchronized void persistTerminalEvents() {
+        while (!pendingTerminalEvents.isEmpty()) {
+            terminalEvents.add(pendingTerminalEvents.getFirst().get());
+            pendingTerminalEvents.removeFirst();
+        }
+    }
+
+    public synchronized List<SessionEvent> terminalEvents() {
+        List<SessionEvent> events = new ArrayList<>(cleanupEvents);
+        events.addAll(terminalEvents);
+        return events;
+    }
 
     @Schema(description = "当前模型流取消句柄", hidden = true)
     private final AtomicReference<StreamingHandle> streamingHandle = new AtomicReference<>();
@@ -193,6 +223,8 @@ public class ActiveTurnRuntime {
         UUID existing = invocationId.get();
         return existing != null && existing.equals(currentInvocationId);
     }
+
+    public UUID getInvocationId() { return invocationId.get(); }
 
     public void updateContextUsage(ContextUsageSnapshot snapshot) {
         latestContextUsage.set(snapshot);

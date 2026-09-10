@@ -61,6 +61,18 @@ public class ModelUsageTracker {
         }
     }
 
+    public void onDirectResponse(String sessionId, String turnId, TokenUsage usage) {
+        ActiveTurnRuntime runtime = runtimes.get(sessionId);
+        if (runtime == null || !runtime.isUsageTrackingActive() || !runtime.getSessionTurn().turnId().equals(turnId)) return;
+        ContextUsageSnapshot snapshot = normalize(runtime.getModelId(), usage);
+        if (snapshot != null) runtime.updateContextUsage(snapshot);
+    }
+
+    public UUID invocationId(String sessionId) {
+        ActiveTurnRuntime runtime = runtimes.get(sessionId);
+        return runtime == null ? null : runtime.getInvocationId();
+    }
+
     private boolean matches(ActiveTurnRuntime runtime, InvocationContext context, ChatRequest request) {
         if (runtime == null || context == null || context.invocationId() == null || request == null || !runtime.isUsageTrackingActive()) return false;
         return runtime.getModelId() != null && runtime.getModelId().equals(request.modelName());
@@ -72,7 +84,7 @@ public class ModelUsageTracker {
         return sessionId.isBlank() ? null : sessionId;
     }
 
-    private ContextUsageSnapshot normalize(String modelId, TokenUsage usage) {
+    public ContextUsageSnapshot normalize(String modelId, TokenUsage usage) {
         if (usage == null) return null;
         Integer rawInput = usage.inputTokenCount();
         Integer rawOutput = usage.outputTokenCount();

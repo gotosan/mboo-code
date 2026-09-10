@@ -74,6 +74,11 @@ public class SessionController {
     @Resource
     private ContextManagementService contextManagementService;
 
+    private void requireAccess(String sessionId, String parentSessionId) {
+        if (StrUtil.isBlank(parentSessionId)) sessionService.requireMainSession(sessionId);
+        else sessionService.requireManagedChild(parentSessionId, sessionId);
+    }
+
     @Operation(summary = "活跃会话列表")
     @GetMapping("/list")
     public R<List<Sessions>> list() {
@@ -88,26 +93,30 @@ public class SessionController {
 
     @Operation(summary = "会话详情")
     @GetMapping("/{sessionId}")
-    public R<Sessions> detail(@PathVariable String sessionId) {
+    public R<Sessions> detail(@PathVariable String sessionId, @RequestParam(required = false) String parentSessionId) {
+        requireAccess(sessionId, parentSessionId);
         return R.ok(sessionService.getSession(sessionId));
     }
 
     @Operation(summary = "会话事件回显")
     @GetMapping("/{sessionId}/events")
-    public R<List<SessionEvent>> events(@PathVariable String sessionId) {
+    public R<List<SessionEvent>> events(@PathVariable String sessionId, @RequestParam(required = false) String parentSessionId) {
+        requireAccess(sessionId, parentSessionId);
         return R.ok(sessionService.readSessionEvents(sessionId));
     }
 
     @Operation(summary = "工具结果详情")
     @GetMapping("/{sessionId}/tool-results/{resultId}")
-    public R<ToolResultDetailResp> toolResult(@PathVariable String sessionId, @PathVariable String resultId) {
+    public R<ToolResultDetailResp> toolResult(@PathVariable String sessionId, @PathVariable String resultId, @RequestParam(required = false) String parentSessionId) {
+        requireAccess(sessionId, parentSessionId);
         return R.ok(toolResultStore.getDetail(sessionId, resultId));
     }
 
     @Operation(summary = "工具结果完整内容")
     @GetMapping("/{sessionId}/tool-results/{resultId}/content")
     public ResponseEntity<?> toolResultContent(@PathVariable String sessionId, @PathVariable String resultId,
-                                               @RequestParam(defaultValue = "result") String source) {
+                                               @RequestParam(defaultValue = "result") String source, @RequestParam(required = false) String parentSessionId) {
+        requireAccess(sessionId, parentSessionId);
         HttpHeaders headers = new HttpHeaders();
         headers.setCacheControl(CacheControl.noStore());
         headers.setContentDisposition(ContentDisposition.inline().filename("tool-result-" + resultId + ".txt").build());
@@ -125,24 +134,28 @@ public class SessionController {
     @Operation(summary = "更新会话")
     @PatchMapping("/{sessionId}")
     public R<Sessions> update(@PathVariable String sessionId, @Valid @RequestBody SessionUpdateReq req) {
+        sessionService.requireMainSession(sessionId);
         return R.ok(sessionService.updateTitle(sessionId, req.title()));
     }
 
     @Operation(summary = "归档会话")
     @PostMapping("/{sessionId}/archive")
     public R<Sessions> archive(@PathVariable String sessionId) {
+        sessionService.requireMainSession(sessionId);
         return R.ok(sessionService.archiveSession(sessionId));
     }
 
     @Operation(summary = "取消归档会话")
     @PostMapping("/{sessionId}/unarchive")
     public R<Sessions> unarchive(@PathVariable String sessionId) {
+        sessionService.requireMainSession(sessionId);
         return R.ok(sessionService.unarchiveSession(sessionId));
     }
 
     @Operation(summary = "删除会话")
     @DeleteMapping("/{sessionId}")
     public R<Void> delete(@PathVariable String sessionId) {
+        sessionService.requireMainSession(sessionId);
         toolApprovalService.clearSession(sessionId);
         sessionService.deleteSession(sessionId);
         return R.ok();
@@ -151,7 +164,10 @@ public class SessionController {
     @Operation(summary = "修改会话权限模式")
     @PutMapping("/{sessionId}/permission-mode")
     public R<Sessions> updatePermissionMode(@PathVariable String sessionId, @Valid @RequestBody SessionPermissionModeReq req) {
-        return R.ok(sessionService.updatePermissionMode(sessionId, req.mode()));
+        sessionService.requireMainSession(sessionId);
+        Sessions updated = sessionService.updatePermissionMode(sessionId, req.mode());
+        toolApprovalService.reevaluateOwner(sessionId);
+        return R.ok(updated);
     }
 
     @Operation(summary = "处理工具授权")
@@ -170,7 +186,8 @@ public class SessionController {
 
     @Operation(summary = "取消当前 turn")
     @PostMapping("/{sessionId}/turns/{turnId}/cancel")
-    public Mono<R<Void>> cancelTurn(@PathVariable String sessionId, @PathVariable String turnId) {
+    public Mono<R<Void>> cancelTurn(@PathVariable String sessionId, @PathVariable String turnId, @RequestParam(required = false) String parentSessionId) {
+        requireAccess(sessionId, parentSessionId);
         return turnService.cancelTurn(sessionId, turnId).thenReturn(R.ok());
     }
 
@@ -195,6 +212,7 @@ public class SessionController {
     @PostMapping(value = "/{sessionId}/context/compress", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<@NonNull ServerSentEvent<@NonNull SessionEvent>> compressContext(@PathVariable String sessionId, @RequestBody(required = false) ContextCompressReq req) {
         // 只允许已存在且活跃的会话；不存在或已归档时在创建执行 turn 前拒绝
+        sessionService.requireMainSession(sessionId);
         sessionService.getActiveSession(sessionId);
         String modelName = req == null ? null : StrUtil.trimToNull(req.modelName());
         if (modelName != null) {

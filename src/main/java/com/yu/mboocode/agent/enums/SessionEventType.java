@@ -11,6 +11,7 @@ import com.yu.mboocode.agent.model.payload.ToolApprovalRequiredPayload;
 import com.yu.mboocode.agent.model.payload.ToolCallEndedPayload;
 import com.yu.mboocode.agent.model.payload.ToolCallStartedPayload;
 import com.yu.mboocode.agent.model.payload.UserMessagePayload;
+import com.yu.mboocode.agent.model.payload.*;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
@@ -20,6 +21,9 @@ import lombok.Getter;
 @Getter
 @AllArgsConstructor
 public enum SessionEventType {
+    SUBAGENT_RUN_UPDATED(SubagentRunUpdatedPayload.class, true), //子执行持久状态
+    SUBAGENT_EVENT(SubagentEventPayload.class, false), //原始子事件运行时转发
+    SUBAGENT_APPROVAL_UPDATED(SubagentApprovalUpdatedPayload.class, false), //子审批阶段收起
     USER_MESSAGE(UserMessagePayload.class, true), //用户消息
     ASSISTANT_MESSAGE(AssistantMessagePayload.class, true), //助手消息
 

@@ -37,6 +37,15 @@ public class SkillRuntime {
                 skillRegistry.formatAvailableSkills(skills), provider, Instant.now()));
     }
 
+    public void deriveTurnSnapshot(String sessionId, String turnId, String parentSessionId, String parentTurnId, com.yu.mboocode.agent.subagent.AgentDefinition role) {
+        var parent = requireSnapshot(parentSessionId, parentTurnId);
+        var skills = parent.effectiveSkills().stream().filter(skill -> role.allowedSkills().contains("*") || role.allowedSkills().contains(skill.name())).toList();
+        Map<String, SkillDescriptor> byName = new LinkedHashMap<>();
+        skills.forEach(skill -> byName.put(skill.name(), skill));
+        ToolProvider provider = skills.isEmpty() ? request -> ToolProviderResult.builder().build() : new GuardedSkillToolProvider(sessionId, skills, activationStateService, skillScriptCache);
+        snapshots.put(sessionId, new SkillTurnSnapshot(sessionId, turnId, parent.workspaceId(), parent.workspacePath(), skills, byName, skillRegistry.formatAvailableSkills(skills), provider, Instant.now()));
+    }
+
     public SkillTurnSnapshot requireSnapshot(String sessionId, String turnId) {
         SkillTurnSnapshot snapshot = snapshots.get(sessionId);
         if (snapshot == null || !snapshot.turnId().equals(turnId)) throw new IllegalStateException("当前 turn 的 Skill 快照不存在");

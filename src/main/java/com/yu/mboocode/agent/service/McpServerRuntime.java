@@ -79,6 +79,16 @@ public class McpServerRuntime {
         closeCandidates.forEach(this::closeRetiredConnection);
     }
 
+    public void deriveTurnSnapshot(String sessionId, String turnId, String parentSessionId, String parentTurnId, boolean allowMcp) {
+        synchronized (connectionLock) {
+            TurnSnapshot parent = turnSnapshots.get(parentSessionId);
+            if (parent == null || !parent.turnId().equals(parentTurnId)) throw new IllegalStateException("父 MCP 快照已失效");
+            List<Connection> selected = allowMcp ? parent.connections() : List.of();
+            selected.forEach(connection -> connection.references++);
+            turnSnapshots.put(sessionId, new TurnSnapshot(turnId, selected));
+        }
+    }
+
     public void releaseTurnSnapshot(String sessionId, String turnId) {
         List<Connection> closeCandidates = new ArrayList<>();
         synchronized (connectionLock) {

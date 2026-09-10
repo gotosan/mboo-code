@@ -12,6 +12,17 @@ public class RunningCommand {
     private final AtomicBoolean terminating = new AtomicBoolean();
     private final AtomicReference<CancelReason> cancelReason = new AtomicReference<>();
     private final CompletableFuture<Boolean> terminationResult = new CompletableFuture<>();
+    private final java.util.Map<Long, ProcessHandle> trackedProcesses = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean executionFinished;
+    public boolean executionFinished() { return executionFinished; }
+    public void executionFinished(boolean finished) { executionFinished = finished; }
+    public java.util.Collection<ProcessHandle> trackedProcesses() { return trackedProcesses.values(); }
+    public void captureProcesses() {
+        Process root = process;
+        if (root == null) return;
+        trackedProcesses.put(root.pid(), root.toHandle());
+        root.descendants().forEach(handle -> trackedProcesses.put(handle.pid(), handle));
+    }
     private volatile Process process;
     private volatile boolean terminationComplete = true;
 
@@ -27,7 +38,7 @@ public class RunningCommand {
     public String toolCallId() { return toolCallId; }
     public Thread executionThread() { return executionThread; }
     public Process process() { return process; }
-    public void process(Process process) { this.process = process; }
+    public void process(Process process) { this.process = process; captureProcesses(); }
     public CancelReason cancelReason() { return cancelReason.get(); }
     public CancelReason markCancelled(CancelReason reason) {
         cancelReason.compareAndSet(null, reason);

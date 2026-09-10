@@ -1,6 +1,10 @@
 import type { ToolCallStatus } from "@/lib/session-types";
 
 const TOOL_LABELS: Record<string, string> = {
+  spawn_agent: "创建子 Agent",
+  send_agent_message: "继续子任务",
+  wait_agents: "等待子任务",
+  cancel_agent: "取消子任务",
   glob_files: "查找文件",
   search_text: "搜索文本",
   read_file: "读取文件",

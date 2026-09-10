@@ -1,5 +1,7 @@
 "use client";
 
+import { useSubagentStore, type SubagentRun } from "@/features/subagents/subagent-store";
+
 import type { FormEvent } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -1084,6 +1086,14 @@ export default function Home() {
         setErrorMessage("");
       }
 
+      if (event.type === "SUBAGENT_RUN_UPDATED" || event.type === "SUBAGENT_EVENT" || event.type === "SUBAGENT_APPROVAL_UPDATED") {
+        useSubagentStore.getState().ingest(event);
+        if (event.type === "SUBAGENT_RUN_UPDATED") commitSessionMessages(targetKey, (current) => current.some((message) => message.id === event.payload.messageId) ? current : [...current, {
+          id: event.payload.messageId, role: "assistant", text: "", state: "streaming", turnId: event.turnId, createdAt: event.createdAt,
+        }]);
+        return;
+      }
+
       if (event.type === "CONTEXT_USAGE_UPDATED") {
         rememberContextUsage(targetKey, event.payload);
         return;
@@ -1496,16 +1506,22 @@ export default function Home() {
 
     try {
       // 并行拉详情+事件：详情补齐 workspace/status，避免仅依赖列表缓存
-      const [detailResponse, eventsResponse] = await Promise.all([
+      const [detailResponse, eventsResponse, runsResponse] = await Promise.all([
         fetch(`/api/session/${encodeURIComponent(nextSessionId)}`, {
           cache: "no-store",
         }),
         fetch(`/api/session/${encodeURIComponent(nextSessionId)}/events`, {
           cache: "no-store",
         }),
+        fetch(`/api/session/${encodeURIComponent(nextSessionId)}/subagent-runs`, { cache: "no-store" }),
       ]);
       const detail = await readApiData<SessionInfo>(detailResponse);
       const events = await readApiData<SessionEvent[]>(eventsResponse);
+      const runs = await readApiData<SubagentRun[]>(runsResponse);
+      for (const run of runs ?? []) {
+        useSubagentStore.getState().update(run);
+        events?.push({ eventId: `subagent-recovery-${run.runId}-${run.version}`, sessionId: nextSessionId, turnId: run.parentTurnId, type: "SUBAGENT_RUN_UPDATED", source: "SYSTEM", createdAt: run.createdAt, payload: { messageId: run.parentMessageId, run }, meta: {} });
+      }
       if (detail) queryClient.setQueryData(["session", nextSessionId], detail);
       queryClient.setQueryData(["session-events", nextSessionId], events ?? []);
 
@@ -3203,6 +3219,11 @@ function reduceSessionEventsToMessages(events: SessionEvent[]) {
       continue;
     }
     seenEventIds.add(event.eventId);
+    if (event.type === "SUBAGENT_RUN_UPDATED") {
+      useSubagentStore.getState().ingest(event);
+      if (!messages.some((message) => message.id === event.payload.messageId)) messages.push({ id: event.payload.messageId, role: "assistant", text: "", state: "complete", turnId: event.turnId, createdAt: event.createdAt });
+      continue;
+    }
 
     if (event.type === "USER_MESSAGE") {
       messages = upsertMessageSnapshot(messages, {

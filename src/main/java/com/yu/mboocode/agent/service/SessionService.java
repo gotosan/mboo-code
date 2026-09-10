@@ -1,5 +1,8 @@
 package com.yu.mboocode.agent.service;
 
+import com.yu.mboocode.agent.subagent.AgentIdentity;
+import com.yu.mboocode.agent.subagent.SubagentRunStore;
+import com.yu.mboocode.agent.subagent.SubagentRun;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.thread.lock.LockUtil;
 import cn.hutool.core.thread.lock.SegmentLock;
@@ -43,6 +46,46 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     private ToolResultStore toolResultStore;
     @Resource
     private WorkspaceService workspaceService;
+
+    @Resource
+    private SubagentRunStore subagentRunStore;
+
+    public Sessions requireMainSession(String sessionId) {
+        Sessions session = getSession(sessionId);
+        if (AgentIdentity.isChild(session)) throw new ServiceException("子会话只能由管理父会话操作");
+        return session;
+    }
+
+    public String permissionOwner(String sessionId) {
+        Sessions session = getSession(sessionId);
+        AgentIdentity identity = AgentIdentity.from(session);
+        return AgentIdentity.isChild(session) ? identity.parentSessionId() : sessionId;
+    }
+
+    public List<Sessions> childSessions(String parentSessionId) {
+        requireMainSession(parentSessionId);
+        return lambdaQuery().apply("json_extract(metadata_json, '$.agent.sessionKind') = 'subagent'")
+                .apply("json_extract(metadata_json, '$.agent.parentSessionId') = {0}", parentSessionId).list();
+    }
+
+    public void requireManagedChild(String parentSessionId, String agentId) {
+        requireMainSession(parentSessionId);
+        AgentIdentity identity = AgentIdentity.from(getSession(agentId));
+        if (identity == null || !"subagent".equals(identity.sessionKind()) || !parentSessionId.equals(identity.parentSessionId())) throw new ServiceException("无权访问该子会话");
+    }
+
+    public Sessions createChildSession(String agentId, Sessions parent, String role, String forkPointId) {
+        Sessions child = new Sessions();
+        child.setId(agentId);
+        child.setTitle(role + " 子任务");
+        child.setStatus(Sessions.StatusEnum.ACTIVE.getCode());
+        child.setWorkspaceId(parent.getWorkspaceId());
+        child.setWorkspacePath(parent.getWorkspacePath());
+        child.setTranscriptUri(sessionEventStore.newTranscriptUri(agentId));
+        child.setMetadataJson(JSON.toJSONString(Map.of("agent", new AgentIdentity("subagent", role, parent.getId(), forkPointId == null ? null : parent.getId(), forkPointId))));
+        save(child);
+        return child;
+    }
 
     @Transactional
     public Sessions getActiveOrCreateSession(String sessionId, String workspacePath, PermissionMode permissionMode) {
@@ -98,6 +141,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     public List<Sessions> listActiveSessions() {
         return lambdaQuery()
                 .eq(Sessions::getStatus, Sessions.StatusEnum.ACTIVE.getCode())
+                .apply("COALESCE(json_extract(metadata_json, '$.agent.sessionKind'), 'chat') <> 'subagent'")
                 .orderByDesc(Sessions::getUpdatedAt)
                 .list();
     }
@@ -105,6 +149,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
     public List<Sessions> listArchivedSessions() {
         return lambdaQuery()
                 .eq(Sessions::getStatus, Sessions.StatusEnum.ARCHIVED.getCode())
+                .apply("COALESCE(json_extract(metadata_json, '$.agent.sessionKind'), 'chat') <> 'subagent'")
                 .orderByDesc(Sessions::getArchivedAt)
                 .list();
     }
@@ -119,6 +164,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
 
     @Transactional
     public Sessions updateTitle(String sessionId, String title) {
+        requireMainSession(sessionId);
         Sessions session = getActiveSession(sessionId);
         String trimmedTitle = StrUtil.trim(title);
         if (StrUtil.isBlank(trimmedTitle)) {
@@ -135,6 +181,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
 
     @Transactional
     public Sessions archiveSession(String sessionId) {
+        requireMainSession(sessionId);
         Sessions session = getSession(sessionId);
         if (!Objects.equals(session.getStatus(), Sessions.StatusEnum.ACTIVE.getCode())) {
             throw new ServiceException("仅活跃会话可归档");
@@ -164,6 +211,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
 
     @Transactional
     public Sessions unarchiveSession(String sessionId) {
+        requireMainSession(sessionId);
         Sessions session = getSession(sessionId);
         if (!Objects.equals(session.getStatus(), Sessions.StatusEnum.ARCHIVED.getCode())) {
             throw new ServiceException("仅已归档会话可取消归档");
@@ -185,11 +233,20 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
 
     @Transactional
     public void deleteSession(String sessionId) {
+        requireMainSession(sessionId);
         Sessions session = getSession(sessionId);
         if (!Objects.equals(session.getStatus(), Sessions.StatusEnum.ARCHIVED.getCode())) {
             throw new ServiceException("仅已归档会话可删除");
         }
 
+        for (Sessions child : childSessions(sessionId)) {
+            if (StrUtil.isNotBlank(child.getActiveTurnId())) throw new ServiceException("子执行尚未完成清理，不能删除");
+            toolResultStore.deleteResults(child.getTranscriptUri());
+            sessionEventStore.deleteTranscript(child.getTranscriptUri());
+            persistentChatMemoryStore.deleteMessages(child.getId());
+            removeById(child.getId());
+        }
+        subagentRunStore.lambdaUpdate().eq(SubagentRun::getParentSessionId, sessionId).remove();
         if (StrUtil.isNotBlank(session.getTranscriptUri())) {
             toolResultStore.deleteResults(session.getTranscriptUri());
             sessionEventStore.deleteTranscript(session.getTranscriptUri());
@@ -238,7 +295,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
      * 读取会话权限；工作区默认读权限由 workspacePath 动态派生，不写入 metadataJson。
      */
     public SessionPermissions getSessionPermissions(Sessions session) {
-        return parsePermissions(session.getMetadataJson());
+        return parsePermissions(getSession(permissionOwner(session.getId())).getMetadataJson());
     }
 
     /**
@@ -252,7 +309,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
      * 读取会话权限模式；字段缺失或非法时按默认权限处理，兼容历史会话。
      */
     public PermissionMode getPermissionMode(Sessions session) {
-        return PermissionMode.fromCode(parseMetadata(session.getMetadataJson()).getString(PERMISSION_MODE_KEY));
+        return PermissionMode.fromCode(parseMetadata(getSession(permissionOwner(session.getId())).getMetadataJson()).getString(PERMISSION_MODE_KEY));
     }
 
     /**
@@ -260,6 +317,7 @@ public class SessionService extends ServiceImpl<SessionsMapper, Sessions> {
      */
     @Transactional
     public Sessions updatePermissionMode(String sessionId, PermissionMode mode) {
+        requireMainSession(sessionId);
         if (mode == null) {
             throw new ServiceException("权限模式不能为空");
         }

@@ -8,7 +8,9 @@ type RouteContext = {
   }>;
 };
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
   const { sessionId } = await context.params;
-  return proxyBackendJson(`/session/${encodeURIComponent(sessionId)}/events`);
+  const parent = new URL(request.url).searchParams.get("parentSessionId");
+  const query = parent ? `?parentSessionId=${encodeURIComponent(parent)}` : "";
+  return proxyBackendJson(`/session/${encodeURIComponent(sessionId)}/events${query}`);
 }

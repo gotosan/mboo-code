@@ -1,4 +1,8 @@
+import type { SubagentRun } from "@/features/subagents/subagent-store";
 export type SessionEventType =
+  | "SUBAGENT_RUN_UPDATED"
+  | "SUBAGENT_EVENT"
+  | "SUBAGENT_APPROVAL_UPDATED"
   | "USER_MESSAGE"
   | "ASSISTANT_MESSAGE"
   | "TOOL_CALL_STARTED"
@@ -200,6 +204,9 @@ export type SessionEventPayload =
   | CancelledPayload;
 
 export type SessionEvent =
+  | SessionEventBase<"SUBAGENT_RUN_UPDATED", { messageId: string; run: SubagentRun }>
+  | SessionEventBase<"SUBAGENT_EVENT", { agentId: string; runId: string; childEvent: SessionEvent }>
+  | SessionEventBase<"SUBAGENT_APPROVAL_UPDATED", { agentId: string; runId: string; approvalId: string; turnId: string; toolCallId: string; pending: boolean }>
   | SessionEventBase<"USER_MESSAGE", UserMessagePayload>
   | SessionEventBase<"ASSISTANT_MESSAGE", AssistantMessagePayload>
   | SessionEventBase<"TOOL_CALL_STARTED", ToolCallStartedPayload>
