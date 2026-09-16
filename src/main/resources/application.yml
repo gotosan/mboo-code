@@ -16,6 +16,7 @@ spring:
     timeout-per-shutdown-phase: 20s
 
 server:
+  port: 8899
   tomcat:
     max-part-count: 300
   shutdown: graceful
