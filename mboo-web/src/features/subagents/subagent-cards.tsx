@@ -235,7 +235,7 @@ function SubagentCard({ run }: { run: SubagentRun }) {
             <p className="truncate text-[11px] text-text-3">{identifiers}</p>
           </div>
 
-          {/* Footer：收起 + 完整结果 */}
+          {/* 底部收起操作 */}
           <footer className="flex items-center gap-3 border-t border-line px-3 py-1.5">
             <button
               type="button"
@@ -244,16 +244,6 @@ function SubagentCard({ run }: { run: SubagentRun }) {
             >
               收起子日志
             </button>
-            {run.resultId && (
-              <a
-                className="text-xs text-text-3 transition-colors hover:text-accent"
-                target="_blank"
-                rel="noreferrer"
-                href={`${childBase}/tool-results/${encodeURIComponent(run.resultId)}/content?${query}`}
-              >
-                完整结果
-              </a>
-            )}
           </footer>
         </>
       )}
