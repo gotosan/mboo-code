@@ -101,11 +101,24 @@
 
 .chevron,
 .traceIcon,
-.loadingIcon,
-.retryIcon,
-.copyIcon {
+.loadingIcon {
   width: 14px;
   height: 14px;
+  flex: 0 0 auto;
+}
+
+/* 整组工具存在失败项时，头部图标直接换成告警色，不必展开才能发现失败。 */
+.failedIcon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: #eb5656;
+}
+
+.retryIcon,
+.copyIcon {
+  width: 12px;
+  height: 12px;
   flex: 0 0 auto;
 }
 
@@ -260,21 +273,23 @@
 
 .iconButton {
   display: inline-flex;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: 1px solid #e1e1dc;
+  border: 1px solid transparent;
   border-radius: 6px;
-  background: #fff;
-  color: #575547;
+  background: transparent;
+  color: #8b8b86;
   cursor: pointer;
 }
 
 .iconButton:hover {
-  background: #f4f4f5;
+  border-color: #e1e1dc;
+  background: #fff;
+  color: #35352c;
 }
 
 .detailError {
@@ -315,13 +330,13 @@
   right: 6px;
   z-index: 1;
   display: inline-flex;
-  min-height: 36px;
+  height: 28px;
   align-items: center;
   gap: 4px;
-  padding: 8px 10px;
-  border: 1px solid #e1e1dc;
-  border-radius: 5px;
-  background: #fff;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
   color: #8b8b86;
   font-size: 11px;
   line-height: 14px;
@@ -329,15 +344,17 @@
 }
 
 .copyButton:hover {
+  border-color: #e1e1dc;
+  background: #fff;
   color: #35352c;
-  background: #f4f4f5;
 }
 
 .code {
   max-height: 160px;
   margin: 0;
   overflow: auto;
-  padding: 8px 48px 8px 8px;
+  /* 右侧留出幽灵复制按钮的最宽状态（“复制失败”），避免文字钻到按钮下面。 */
+  padding: 8px 76px 8px 8px;
   color: #35352c;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
@@ -351,7 +368,7 @@
 .diffCode {
   max-height: 224px;
   overflow: auto;
-  padding: 8px 48px 8px 0;
+  padding: 8px 76px 8px 0;
   color: #35352c;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
@@ -480,5 +497,17 @@
 
   .itemTrigger {
     padding-block: 8px;
+  }
+
+  /* 触屏上把幽灵按钮放宽到 36px，保住点击精度，同时不回到过去 44px 的松散密度。 */
+  .copyButton {
+    height: 36px;
+    padding-inline: 10px;
+  }
+
+  .iconButton {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
   }
 }

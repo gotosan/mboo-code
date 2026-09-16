@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE_URL = "http://localhost:8080";
+const DEFAULT_API_BASE_URL = "http://localhost:8899";
 
 export function getApiBaseUrl() {
   return (process.env.MBOO_API_BASE_URL || DEFAULT_API_BASE_URL).replace(

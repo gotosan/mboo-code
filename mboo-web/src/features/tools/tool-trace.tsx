@@ -1,11 +1,13 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Copy, LoaderCircle, RefreshCw, Wrench } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleAlert, Copy, LoaderCircle, RefreshCw, Wrench } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import AssistantMarkdown from "@/components/assistant-markdown";
 import type { AskDraftProgress, ToolCallView, ToolResultLoader } from "@/features/agent-run/message-model";
 import {
   getToolLabel,
+  getToolPhaseLabel,
+  isActiveToolStatus,
   shouldShowDiff,
   toolStatusLabel,
 } from "@/features/tools/tool-formatters";
@@ -52,16 +54,9 @@ const StandardToolTrace = memo(function StandardToolTrace({
   const hasPendingApproval = toolCalls.some(
     (tool) => tool.status === "waiting_approval" || tool.status === "submitting",
   );
-  const runningCount = toolCalls.filter(
-    (tool) => tool.status === "started" || tool.status === "waiting_approval" || tool.status === "submitting",
-  ).length;
-  const summaryText = isRunning || runningCount > 0
-    ? toolCalls.length > 1
-      ? `调用工具中 · ${runningCount}/${toolCalls.length}`
-      : "调用工具中"
-    : toolCalls.length > 1
-      ? `调用了 ${toolCalls.length} 个工具`
-      : "调用了一个工具";
+  const activeCount = toolCalls.filter((tool) => isActiveToolStatus(tool.status)).length;
+  const summaryText = buildTraceSummary(toolCalls, isRunning);
+  const failedCount = toolCalls.filter((tool) => tool.status === "failed").length;
 
   return (
     <section className={styles.trace} aria-label="工具调用">
@@ -72,10 +67,16 @@ const StandardToolTrace = memo(function StandardToolTrace({
         onClick={() => setOpen((current) => !current)}
       >
         {open ? <ChevronDown className={styles.chevron} aria-hidden /> : <ChevronRight className={styles.chevron} aria-hidden />}
-        {isRunning ? <LoaderCircle className={styles.loadingIcon} aria-hidden /> : <Wrench className={styles.traceIcon} aria-hidden />}
+        {activeCount > 0 ? (
+          <LoaderCircle className={styles.loadingIcon} aria-hidden />
+        ) : failedCount > 0 ? (
+          <CircleAlert className={styles.failedIcon} aria-hidden />
+        ) : (
+          <Wrench className={styles.traceIcon} aria-hidden />
+        )}
         <span className={styles.summary}>{summaryText}</span>
         {hasPendingApproval ? <span className={styles.waitingBadge}>等待授权</span> : null}
-        <span className={styles.count}>{toolCalls.length}</span>
+        {toolCalls.length > 1 ? <span className={styles.count}>{toolCalls.length}</span> : null}
       </button>
       {open ? (
         <div className={styles.traceBody}>
@@ -114,6 +115,7 @@ const ToolTraceItem = memo(function ToolTraceItem({
   const previousStatusRef = useRef(toolCall.status);
   const [hasCompletionImpact, setHasCompletionImpact] = useState(false);
   const toolLabel = getToolLabel(toolCall.toolName);
+  const phaseLabel = getToolPhaseLabel(toolCall.toolName, toolCall.status);
 
   useEffect(() => {
     // 工具从执行态进入完成态时只播放一次，避免父级刷新导致重复闪烁。
@@ -160,16 +162,16 @@ const ToolTraceItem = memo(function ToolTraceItem({
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <span className={styles.itemTitle}>{toolLabel}</span>
+        <span className={styles.itemTitle}>{phaseLabel}</span>
         {toolCall.pathText ? <span className={styles.path} title={toolCall.pathText}>· {toolCall.pathText}</span> : <span className={styles.spacer} />}
         <span className={`${styles.status} ${statusClassName(toolCall.status)}`}>{toolStatusLabel(toolCall.status)}</span>
         <span className={styles.duration} aria-label={typeof toolCall.durationMs === "number" ? `耗时 ${toolCall.durationMs} 毫秒` : undefined}>
-          {typeof toolCall.durationMs === "number" ? `${toolCall.durationMs}ms` : "—"}
+          {formatDuration(toolCall)}
         </span>
       </button>
       {open ? (
         <div className={styles.itemBody}>
-          {toolLabel !== toolCall.toolName ? <p className={styles.toolName}>{toolCall.toolName}</p> : null}
+          {toolLabel !== toolCall.toolName ? <p className={styles.toolName}>工具标识 {toolCall.toolName}</p> : null}
           {toolCall.argumentsText ? <CopyableToolText ariaLabel="复制工具参数" text={toolCall.argumentsText} /> : null}
           {resultState === "loading" ? (
             <p className={styles.resultLoading} role="status"><LoaderCircle className={styles.loadingIcon} aria-hidden />加载工具结果</p>
@@ -278,6 +280,29 @@ const DiffCopyButton = memo(function DiffCopyButton({ text }: { text: string }) 
     </button>
   );
 });
+
+/**
+ * 折叠标题由条目自身状态推导，而不是固定文案：单条工具时直接复用该工具的阶段结论，
+ * 多条工具时用「已完成 / 执行中 / 失败」三元计数收束，避免标题与行内状态重复表达。
+ */
+function buildTraceSummary(toolCalls: ToolCallView[], isRunning: boolean) {
+  const total = toolCalls.length;
+  if (total === 0) return "工具调用";
+  if (total === 1) return getToolPhaseLabel(toolCalls[0].toolName, toolCalls[0].status);
+
+  const activeCount = toolCalls.filter((tool) => isActiveToolStatus(tool.status)).length;
+  const failedCount = toolCalls.filter((tool) => tool.status === "failed").length;
+  if (isRunning || activeCount > 0) return `正在执行工具 · ${activeCount}/${total}`;
+  if (failedCount === 0) return `${total} 个工具已完成`;
+  if (failedCount === total) return `${total} 个工具执行失败`;
+  return `${total - failedCount} 个工具已完成 · ${failedCount} 项失败`;
+}
+
+/** 运行中的工具耗时未知，留空比占位符更少噪音；已结束但无耗时数据才用占位符。 */
+function formatDuration(toolCall: ToolCallView) {
+  if (typeof toolCall.durationMs === "number") return `${toolCall.durationMs}ms`;
+  return isActiveToolStatus(toolCall.status) ? "" : "—";
+}
 
 function statusClassName(status: ToolCallView["status"]) {
   if (status === "waiting_approval") return styles.statusWaiting;

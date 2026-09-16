@@ -92,7 +92,7 @@ git clone https://github.com/yuhhhong/mboo-code.git
 cd mboo-code
 ```
 
-启动后端，默认 `http://localhost:8080`，Swagger UI 在 `/doc.html`：
+启动后端，默认 `http://localhost:8899`，Swagger UI 在 `/doc.html`：
 
 ```bash
 ./gradlew bootRun
@@ -100,7 +100,7 @@ cd mboo-code
 
 Windows 用 `.\gradlew.bat bootRun`。
 
-启动前端，打开 `http://localhost:3000`：
+启动前端，打开 `http://localhost:3333`：
 
 ```bash
 cd mboo-web && npm ci && npm run dev

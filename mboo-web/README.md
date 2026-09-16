@@ -58,21 +58,21 @@ npm install
 npm run dev
 ```
 
-打开 [http://localhost:3000](http://localhost:3000) 使用工作台。
+打开 [http://localhost:3333](http://localhost:3333) 使用工作台。
 
-默认后端地址为 `http://localhost:8080`。后端不在默认地址时，在启动前端前设置服务端环境变量：
+默认后端地址为 `http://localhost:8899`。后端不在默认地址时，在启动前端前设置服务端环境变量：
 
 Windows PowerShell：
 
 ```powershell
-$env:MBOO_API_BASE_URL="http://localhost:8080"
+$env:MBOO_API_BASE_URL="http://localhost:8899"
 npm run dev
 ```
 
 macOS / Linux：
 
 ```bash
-MBOO_API_BASE_URL="http://localhost:8080" npm run dev
+MBOO_API_BASE_URL="http://localhost:8899" npm run dev
 ```
 
 当前版本仅支持 OpenAI Responses API 接口，不支持 Chat Completions API，也不支持通过 `provider` 切换其他模型供应商。后端 `.mboo/setting.json` 使用 `api_key` 和 `base_url` 配置模型服务。
@@ -134,7 +134,7 @@ mboo-web/
 
 ## 6. 前端运行行为
 
-- 前端通过同源 `/api` 路由代理后端请求，默认代理目标为 `http://localhost:8080`。
+- 前端通过同源 `/api` 路由代理后端请求，默认代理目标为 `http://localhost:8899`。
 - 聊天与上下文压缩使用 SSE 实时更新；页面刷新或重新打开会话时，从后端历史事件恢复界面状态。
 - 模型候选和能力在后端启动时加载。模型服务设置页可管理 `.mboo/setting.json` 的全部已知字段；配置保存后提示“配置更新重启后生效”，桌面端可直接重启应用刷新候选与能力信息。
 - 接口字段与事件载荷说明见根目录 [README](../README.md) 和 [Session Event Payload 字段说明](../docs/会话事件Payload字段说明.md)。

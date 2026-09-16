@@ -2,7 +2,9 @@
 
 import { Copy, LoaderCircle, Menu, RotateCcw } from "lucide-react";
 import { memo, type RefObject } from "react";
+import { SkillBadge } from "@/components/skill-badge";
 import { StatusPill } from "@/features/workbench/workbench-header";
+import { parseUserMessageContent } from "@/lib/user-message-content";
 import styles from "./conversation-status-panel.module.css";
 
 type ConversationStatus = {
@@ -39,6 +41,7 @@ export const ConversationStatusPanel = memo(function ConversationStatusPanel({
   onClearError,
 }: ConversationStatusPanelProps) {
   const showStatus = status.running || status.label === "异常" || status.label === "连接中";
+  const titleSegments = parseUserMessageContent(title);
 
   return (
     <section className={styles.panel} aria-label="当前会话状态">
@@ -56,7 +59,11 @@ export const ConversationStatusPanel = memo(function ConversationStatusPanel({
         </button>
         <div className={styles.titleContent}>
           <div className={styles.titleRow}>
-            <h1 className={styles.title}>{title}</h1>
+            <h1 className={styles.title}>
+              {titleSegments.map((segment, index) => segment.type === "skill" ? (
+                <SkillBadge key={`skill-${segment.name}-${index}`} name={segment.name} />
+              ) : <span key={`text-${index}`}>{segment.text}</span>)}
+            </h1>
             {archived ? <span className={styles.archiveBadge}>归档只读</span> : null}
             {showStatus ? <StatusPill status={status} /> : null}
           </div>
